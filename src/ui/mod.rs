@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use iced::widget::{
     button, column, container, horizontal_rule, pick_list, row, scrollable, slider, text,
@@ -22,8 +22,22 @@ fn ui_font() -> iced::Font {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Games,
+    Add,
     Settings,
 }
+
+/// A game found by a directory scan (preview only, not added yet).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScanCandidate {
+    pub id: String,
+    pub name: String,
+    pub exe: String,
+    pub is_new: bool,
+}
+
+/// Maximum number of automatic reconnect attempts before giving up (a manual
+/// "重连" always works, and resets the counter).
+const MAX_AUTO_RETRIES: u32 = 5;
 
 #[derive(Debug, Clone)]
 pub struct UiGame {
@@ -55,6 +69,11 @@ struct Draft {
     game_id: String,
     game_name: String,
     profile_name: String,
+    /// Editable exe path, plus the stored value so an unchanged path is not
+    /// re-sent (the daemon rejects a path whose file is missing, e.g. when the
+    /// game lives on a drive that is not mounted right now).
+    exe: String,
+    exe_original: String,
     algo: String,
     sharpness: u32,
     internal_w: String,
@@ -73,6 +92,8 @@ impl Draft {
             game_id: game.id.clone(),
             game_name: game.name.clone(),
             profile_name: game.profile_name.clone(),
+            exe: game.exe.clone(),
+            exe_original: game.exe.clone(),
             algo: if ScaleAlgorithm::ALL.contains(&game.algo.as_str()) {
                 game.algo.clone()
             } else {
@@ -91,6 +112,11 @@ impl Draft {
             framerate: game.framerate.map(|f| f.to_string()).unwrap_or_default(),
         }
     }
+
+    /// Has the user changed the exe path?
+    fn exe_changed(&self) -> bool {
+        self.exe.trim() != self.exe_original
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -102,6 +128,7 @@ pub enum Message {
     LaunchDone(Result<Value, String>),
     GameSelected(String),
     BackToList,
+    SearchChanged(String),
     AlgoChanged(String),
     SharpnessChanged(f32),
     InternalWChanged(String),
@@ -110,8 +137,18 @@ pub enum Message {
     OutputHChanged(String),
     FullscreenToggled(bool),
     FramerateChanged(String),
+    ExePathChanged(String),
     SaveProfile,
     ProfileSaved(Result<(), String>),
+    DeleteRequested,
+    DeleteCancelled,
+    DeleteConfirmed,
+    Deleted(Result<(), String>),
+    ScanDirChanged(String),
+    ScanRequested,
+    ScanFinished(Result<Vec<ScanCandidate>, String>),
+    AddRequested,
+    AddFinished(Result<String, String>),
 }
 
 pub struct App {
@@ -126,6 +163,17 @@ pub struct App {
     draft: Option<Draft>,
     saving: bool,
     saved_msg: Option<String>,
+    /// Library search query (matches name or exe path).
+    search: String,
+    confirm_delete: bool,
+    /// "Add games" tab state.
+    add_dir: String,
+    scan_results: Option<Vec<ScanCandidate>>,
+    scanning: bool,
+    adding: bool,
+    add_msg: Option<String>,
+    /// Automatic reconnect bookkeeping.
+    retry_attempts: u32,
 }
 
 impl App {
@@ -145,8 +193,16 @@ impl App {
                 draft: None,
                 saving: false,
                 saved_msg: None,
+                search: String::new(),
+                confirm_delete: false,
+                add_dir: String::new(),
+                scan_results: None,
+                scanning: false,
+                adding: false,
+                add_msg: None,
+                retry_attempts: 0,
             },
-            Task::perform(async { load_games().await }, Message::GamesLoaded),
+            Task::perform(async { connect_and_load().await }, Message::GamesLoaded),
         )
     }
 
@@ -156,24 +212,36 @@ impl App {
                 self.tab = tab;
                 self.selected = None;
                 self.draft = None;
+                self.confirm_delete = false;
                 self.error = None;
                 Task::none()
             }
             Message::Refresh => {
                 self.error = None;
-                Task::perform(async { load_games().await }, Message::GamesLoaded)
+                self.loading = true;
+                Task::perform(async { connect_and_load().await }, Message::GamesLoaded)
             }
             Message::GamesLoaded(Ok(games)) => {
                 self.games = games;
                 self.loading = false;
                 self.daemon_connected = Some(true);
                 self.error = None;
+                self.retry_attempts = 0;
                 Task::none()
             }
             Message::GamesLoaded(Err(e)) => {
                 self.loading = false;
                 self.daemon_connected = Some(false);
                 self.error = Some(e);
+                // Self-heal: keep retrying with backoff, so the UI recovers on
+                // its own once the daemon is back.
+                self.retry_attempts = self.retry_attempts.saturating_add(1);
+                if self.retry_attempts <= MAX_AUTO_RETRIES {
+                    let delay = retry_delay(self.retry_attempts);
+                    return Task::perform(async move { tokio::time::sleep(delay).await }, |_| {
+                        Message::Refresh
+                    });
+                }
                 Task::none()
             }
             Message::Launch(id) => {
@@ -207,6 +275,7 @@ impl App {
                 if let Some(g) = self.games.iter().find(|g| g.id == id) {
                     self.selected = Some(g.id.clone());
                     self.saved_msg = None;
+                    self.confirm_delete = false;
                     // Seed the form from the *stored* profile. Anything else
                     // means a plain "open + save" silently rewrites settings.
                     self.draft = Some(Draft::from_game(g));
@@ -217,6 +286,11 @@ impl App {
                 self.selected = None;
                 self.draft = None;
                 self.saved_msg = None;
+                self.confirm_delete = false;
+                Task::none()
+            }
+            Message::SearchChanged(query) => {
+                self.search = query;
                 Task::none()
             }
             Message::AlgoChanged(algo) => {
@@ -267,6 +341,114 @@ impl App {
                 }
                 Task::none()
             }
+            Message::ExePathChanged(v) => {
+                if let Some(d) = &mut self.draft {
+                    d.exe = v;
+                }
+                Task::none()
+            }
+            Message::DeleteRequested => {
+                self.confirm_delete = true;
+                Task::none()
+            }
+            Message::DeleteCancelled => {
+                self.confirm_delete = false;
+                Task::none()
+            }
+            Message::DeleteConfirmed => {
+                let Some(game_id) = self.selected.clone() else {
+                    return Task::none();
+                };
+                self.confirm_delete = false;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { remove_game(&socket, &game_id).await },
+                    Message::Deleted,
+                )
+            }
+            Message::Deleted(result) => {
+                match result {
+                    Ok(()) => {
+                        self.selected = None;
+                        self.draft = None;
+                        self.error = None;
+                        return Task::perform(async { connect_and_load().await }, |r| {
+                            Message::GamesLoaded(r)
+                        });
+                    }
+                    Err(e) => self.error = Some(e),
+                }
+                Task::none()
+            }
+            Message::ScanDirChanged(dir) => {
+                self.add_dir = dir;
+                Task::none()
+            }
+            Message::ScanRequested => {
+                let dir = self.add_dir.trim().to_string();
+                if dir.is_empty() {
+                    self.add_msg = Some("请先填写要扫描的目录".to_string());
+                    return Task::none();
+                }
+                self.scanning = true;
+                self.add_msg = None;
+                self.error = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { scan_directory(&socket, &dir).await },
+                    Message::ScanFinished,
+                )
+            }
+            Message::ScanFinished(result) => {
+                self.scanning = false;
+                match result {
+                    Ok(found) => {
+                        self.add_msg = Some(format!(
+                            "发现 {} 个游戏目录（其中 {} 个尚未添加）",
+                            found.len(),
+                            found.iter().filter(|c| c.is_new).count()
+                        ));
+                        self.scan_results = Some(found);
+                    }
+                    Err(e) => self.error = Some(e),
+                }
+                Task::none()
+            }
+            Message::AddRequested => {
+                let dir = self.add_dir.trim().to_string();
+                if dir.is_empty() {
+                    self.add_msg = Some("请先填写要扫描的目录".to_string());
+                    return Task::none();
+                }
+                self.adding = true;
+                self.add_msg = None;
+                self.error = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { add_directory(&socket, &dir).await },
+                    Message::AddFinished,
+                )
+            }
+            Message::AddFinished(result) => {
+                self.adding = false;
+                match result {
+                    Ok(msg) => {
+                        self.add_msg = Some(msg);
+                        // Re-scan so the "new" badges and the library refresh.
+                        let dir = self.add_dir.trim().to_string();
+                        let socket = self.daemon_socket.clone();
+                        return Task::batch([
+                            Task::perform(
+                                async move { scan_directory(&socket, &dir).await },
+                                Message::ScanFinished,
+                            ),
+                            Task::perform(async { connect_and_load().await }, Message::GamesLoaded),
+                        ]);
+                    }
+                    Err(e) => self.error = Some(e),
+                }
+                Task::none()
+            }
             Message::SaveProfile => {
                 let Some(draft) = self.draft.clone() else {
                     return Task::none();
@@ -288,7 +470,7 @@ impl App {
                     self.error = Some(e.clone());
                 } else {
                     // Refresh the library so the new scale shows up.
-                    return Task::perform(async { load_games().await }, |r| {
+                    return Task::perform(async { connect_and_load().await }, |r| {
                         Message::GamesLoaded(r)
                     });
                 }
@@ -307,6 +489,7 @@ impl App {
                 }
             }
             Tab::Settings => self.settings_view(),
+            Tab::Add => self.add_view(),
         };
 
         row![
@@ -323,25 +506,39 @@ impl App {
     fn sidebar(&self) -> Element<'_, Message> {
         let daemon_status = match self.daemon_connected {
             Some(true) => ("已连接", Color::from_rgb8(0x4c, 0xaf, 0x50)),
+            Some(false) if self.retry_attempts <= MAX_AUTO_RETRIES && self.retry_attempts > 0 => {
+                ("未连接（重试中…）", Color::from_rgb8(0xe5, 0x39, 0x35))
+            }
             Some(false) => ("未连接", Color::from_rgb8(0xe5, 0x39, 0x35)),
             None => ("检测中...", Color::from_rgb8(0x9e, 0x9e, 0x9e)),
         };
+
+        let mut status_row = row![
+            text("\u{25CF}").size(12).color(daemon_status.1),
+            text(daemon_status.0)
+                .size(11)
+                .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
+        ]
+        .spacing(6)
+        .align_y(iced::Alignment::Center);
+
+        if self.daemon_connected == Some(false) {
+            status_row = status_row.push(
+                button(text("重连").size(11))
+                    .padding([3, 8])
+                    .on_press(Message::Refresh),
+            );
+        }
 
         container(
             column![
                 text("Kotori").size(20).font(ui_font()),
                 horizontal_rule(1),
                 self.nav_item(Tab::Games, "游戏库"),
+                self.nav_item(Tab::Add, "添加游戏"),
                 self.nav_item(Tab::Settings, "设置"),
                 iced::widget::Space::with_height(Length::Fill),
-                row![
-                    text("\u{25CF}").size(12).color(daemon_status.1),
-                    text(daemon_status.0)
-                        .size(12)
-                        .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
-                ]
-                .spacing(6)
-                .align_y(iced::Alignment::Center),
+                status_row,
             ]
             .spacing(4)
             .padding(16),
@@ -383,13 +580,27 @@ impl App {
     }
 
     fn games_view(&self) -> Element<'_, Message> {
-        let count = format!("游戏库 ({})", self.games.len());
+        let visible: Vec<&UiGame> = self
+            .games
+            .iter()
+            .filter(|g| matches_query(g, &self.search))
+            .collect();
+
+        let count = if self.search.trim().is_empty() {
+            format!("游戏库 ({})", self.games.len())
+        } else {
+            format!("游戏库 ({} / {})", visible.len(), self.games.len())
+        };
         let refresh_btn = button(text(if self.loading {
             "加载中..."
         } else {
             "刷新"
         }))
         .on_press(Message::Refresh);
+
+        let search_input = text_input("搜索游戏名或路径…", &self.search)
+            .on_input(Message::SearchChanged)
+            .padding([7, 10]);
 
         let mut list = column![
             row![
@@ -398,6 +609,7 @@ impl App {
                 refresh_btn,
             ]
             .align_y(iced::Alignment::Center),
+            search_input,
         ]
         .spacing(8);
 
@@ -423,10 +635,16 @@ impl App {
                 text(if self.loading {
                     "正在从守护进程加载游戏列表..."
                 } else {
-                    "没有已配置的游戏。可在终端执行 `kotori scan <目录>` 添加。"
+                    "还没有游戏。切到「添加游戏」扫描一个目录，或执行 `kotori scan <目录>`。"
                 })
                 .size(13)
                 .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
+            );
+        } else if visible.is_empty() {
+            list = list.push(
+                text(format!("没有匹配「{}」的游戏", self.search.trim()))
+                    .size(13)
+                    .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
             );
         }
 
@@ -436,7 +654,7 @@ impl App {
             scrollable(
                 list.push(
                     column(
-                        self.games
+                        visible
                             .iter()
                             .map(|g| self.game_card(g))
                             .collect::<Vec<_>>(),
@@ -446,6 +664,123 @@ impl App {
             )
             .into()
         }
+    }
+
+    /// Directory scan / add page.
+    fn add_view(&self) -> Element<'_, Message> {
+        let dir_input = text_input("例如 /run/media/<盘>/BTL", &self.add_dir)
+            .on_input(Message::ScanDirChanged)
+            .on_submit(Message::ScanRequested)
+            .padding([8, 10])
+            .width(Length::Fill);
+
+        let scan_btn = button(text(if self.scanning {
+            "扫描中…"
+        } else {
+            "扫描"
+        }))
+        .padding([8, 18])
+        .on_press(Message::ScanRequested);
+
+        let add_btn = button(text(if self.adding {
+            "添加中…"
+        } else {
+            "添加新游戏"
+        }))
+        .padding([8, 18])
+        .on_press(Message::AddRequested);
+
+        let mut body = column![
+            text("添加游戏").size(18).font(ui_font()),
+            horizontal_rule(1),
+            text("填写「装着多款游戏子目录」的父目录（例如外置盘上的 BTL），先扫描预览，再一次性添加。已存在的游戏不会被覆盖。")
+                .size(12)
+                .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
+            row![dir_input, scan_btn]
+                .spacing(8)
+                .align_y(iced::Alignment::Center),
+            {
+                let status: Element<'_, Message> = match &self.add_msg {
+                    Some(msg) => text(msg)
+                        .size(12)
+                        .color(Color::from_rgb8(0x9e, 0xda, 0xa5))
+                        .into(),
+                    None => iced::widget::Space::new(0, 0).into(),
+                };
+                row![add_btn, status]
+                    .spacing(12)
+                    .align_y(iced::Alignment::Center)
+            },
+        ]
+        .spacing(10);
+
+        if let Some(err) = &self.error {
+            body = body.push(
+                text(format!("\u{26A0} {err}"))
+                    .size(12)
+                    .color(Color::from_rgb8(0xef, 0x9a, 0x9a)),
+            );
+        }
+
+        match &self.scan_results {
+            None => body.into(),
+            Some(found) if found.is_empty() => body
+                .push(
+                    text("该目录下没有发现可识别的游戏（需要「子目录里含 .exe」的结构）。")
+                        .size(13)
+                        .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
+                )
+                .into(),
+            Some(found) => scrollable(
+                body.push(
+                    column(
+                        found
+                            .iter()
+                            .map(|c| self.candidate_row(c))
+                            .collect::<Vec<_>>(),
+                    )
+                    .spacing(6),
+                ),
+            )
+            .into(),
+        }
+    }
+
+    fn candidate_row(&self, candidate: &ScanCandidate) -> Element<'_, Message> {
+        let badge = if candidate.is_new {
+            text("新")
+                .size(11)
+                .color(Color::from_rgb8(0x7a, 0xaa, 0x7f))
+        } else {
+            text("已存在")
+                .size(11)
+                .color(Color::from_rgb8(0x8a, 0x8a, 0x8a))
+        };
+
+        container(
+            row![
+                column![
+                    text(candidate.name.clone()).size(14).font(ui_font()),
+                    text(candidate.exe.clone())
+                        .size(11)
+                        .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
+                ]
+                .spacing(3)
+                .align_x(iced::Alignment::Start),
+                iced::widget::horizontal_space(),
+                badge,
+            ]
+            .align_y(iced::Alignment::Center)
+            .padding([10, 12])
+            .spacing(8),
+        )
+        .width(Length::Fill)
+        .style(|_theme: &Theme| iced::widget::container::Style {
+            background: Some(Color::from_rgb8(0x22, 0x27, 0x2e).into()),
+            border: iced::border::Border::default().rounded(6),
+            ..Default::default()
+        })
+        .into()
     }
 
     fn game_card(&self, game: &UiGame) -> Element<'_, Message> {
@@ -575,6 +910,17 @@ impl App {
         .spacing(8)
         .into();
 
+        let exe_row: Element<'_, Message> = row![
+            text("可执行文件").size(13).width(120),
+            text_input("/path/to/game.exe", &draft.exe)
+                .on_input(Message::ExePathChanged)
+                .padding([6, 8])
+                .width(Length::Fill),
+        ]
+        .align_y(iced::Alignment::Center)
+        .spacing(8)
+        .into();
+
         let save_btn = button(text(if self.saving {
             "保存中..."
         } else {
@@ -599,6 +945,7 @@ impl App {
                 .size(12)
                 .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
             horizontal_rule(1),
+            exe_row,
             algo_row,
             sharpness_row,
             num_input("游戏分辨率宽", draft.internal_w.clone(), Message::InternalWChanged),
@@ -625,6 +972,32 @@ impl App {
             text("提示：游戏窗口聚焦时，可用 gamescope 快捷键实时切换：Super+U FSR、Super+Y NIS、Super+N 最近邻、Super+I/O 锐度增/减。")
                 .size(11)
                 .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
+            horizontal_rule(1),
+            {
+                // Deleting only drops the library entry, never the game files.
+                let delete_area: Element<'_, Message> = if self.confirm_delete {
+                    row![
+                        text("删除这个条目？（不会删除游戏文件）")
+                            .size(12)
+                            .color(Color::from_rgb8(0xef, 0x9a, 0x9a)),
+                        button(text("确认删除"))
+                            .padding([6, 14])
+                            .on_press(Message::DeleteConfirmed),
+                        button(text("取消"))
+                            .padding([6, 14])
+                            .on_press(Message::DeleteCancelled),
+                    ]
+                    .spacing(10)
+                    .align_y(iced::Alignment::Center)
+                    .into()
+                } else {
+                    button(text("删除条目"))
+                        .padding([6, 14])
+                        .on_press(Message::DeleteRequested)
+                        .into()
+                };
+                delete_area
+            },
         ]
         .spacing(10);
 
@@ -652,27 +1025,134 @@ impl App {
     }
 }
 
-async fn load_games() -> Result<Vec<UiGame>, String> {
+/// Load the library, booting the daemon first if it is not running. Used for
+/// both the initial load and automatic reconnect.
+async fn connect_and_load() -> Result<Vec<UiGame>, String> {
     let socket = crate::config::socket_path();
-    let value = crate::rpc::call(&socket, "game.list", None).await?;
+    match load_games_from(&socket).await {
+        Ok(games) => Ok(games),
+        Err(first) => {
+            let boot = socket.clone();
+            let booted = tokio::task::spawn_blocking(move || crate::daemon::ensure_running(&boot))
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("启动守护进程的任务失败: {e}")));
+            match booted {
+                Ok(()) => load_games_from(&socket).await,
+                Err(_) => Err(first),
+            }
+        }
+    }
+}
+
+async fn load_games_from(socket: &Path) -> Result<Vec<UiGame>, String> {
+    let value = crate::rpc::call(socket, "game.list", None).await?;
     parse_games(&value)
 }
 
+/// Backoff for automatic reconnect attempts: 2s, 4s, 8s, 16s, capped at 30s.
+fn retry_delay(attempt: u32) -> std::time::Duration {
+    std::time::Duration::from_secs(2u64.pow(attempt.min(4)).min(30))
+}
+
+/// Case-insensitive match against a game's name or exe path; an empty query
+/// matches everything.
+fn matches_query(game: &UiGame, query: &str) -> bool {
+    let query = query.trim().to_lowercase();
+    if query.is_empty() {
+        return true;
+    }
+    game.name.to_lowercase().contains(&query) || game.exe.to_lowercase().contains(&query)
+}
+
+async fn scan_directory(socket: &Path, directory: &str) -> Result<Vec<ScanCandidate>, String> {
+    let params = crate::rpc::params([("directory", Value::String(directory.to_string()))]);
+    let value = crate::rpc::call(socket, "game.scan", Some(params)).await?;
+    parse_scan_candidates(&value)
+}
+
+async fn add_directory(socket: &Path, directory: &str) -> Result<String, String> {
+    let params = crate::rpc::params([("directory", Value::String(directory.to_string()))]);
+    let value = crate::rpc::call(socket, "game.add", Some(params)).await?;
+
+    let added = value
+        .get("added")
+        .and_then(|v| v.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let found = value.get("found").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    Ok(if added == 0 {
+        format!("没有新游戏（发现 {found} 个目录，全部已在库中）")
+    } else {
+        format!("已添加 {added} 个游戏（发现 {found} 个目录）")
+    })
+}
+
+async fn remove_game(socket: &Path, game_id: &str) -> Result<(), String> {
+    let params = crate::rpc::params([("id", Value::String(game_id.to_string()))]);
+    crate::rpc::call(socket, "game.remove", Some(params)).await?;
+    Ok(())
+}
+
+/// Persist the whole edit form through the daemon, which is the single writer
+/// of the config file.
 async fn save_profile(draft: Draft) -> Result<(), String> {
     let profile = profile_from_draft(&draft)?;
-    let mut config = crate::config::load().map_err(|e| e.to_string())?;
 
-    let game = config
-        .games
-        .get_mut(&draft.game_id)
-        .ok_or_else(|| format!("配置中找不到游戏: {}", draft.game_id))?;
-    game.scale_profile = profile;
+    if draft.exe.trim().is_empty() {
+        return Err("可执行文件路径不能为空".to_string());
+    }
 
-    crate::config::save(&config).map_err(|e| e.to_string())?;
+    let mut params = vec![
+        ("id", Value::String(draft.game_id.clone())),
+        (
+            "profile",
+            serde_json::to_value(&profile).map_err(|e| e.to_string())?,
+        ),
+    ];
+    // Only send the exe path when it actually changed: the daemon rejects a
+    // path whose file is missing, and a game on an unmounted drive must not
+    // block a scale edit.
+    if draft.exe_changed() {
+        params.push(("exe_path", Value::String(draft.exe.trim().to_string())));
+    }
 
-    // Tell the daemon to reload config (ignore failures – daemon may be down).
-    let _ = crate::rpc::call(&crate::config::socket_path(), "config.reload", None).await;
+    crate::rpc::call(
+        &crate::config::socket_path(),
+        "game.update",
+        Some(crate::rpc::params(params)),
+    )
+    .await?;
     Ok(())
+}
+
+fn parse_scan_candidates(value: &Value) -> Result<Vec<ScanCandidate>, String> {
+    let games = value
+        .get("games")
+        .and_then(|g| g.as_array())
+        .ok_or_else(|| "守护进程返回格式异常".to_string())?;
+
+    Ok(games
+        .iter()
+        .map(|g| ScanCandidate {
+            id: g
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            name: g
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("未知")
+                .to_string(),
+            exe: g
+                .get("exe_path")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            is_new: g.get("is_new").and_then(|v| v.as_bool()).unwrap_or(false),
+        })
+        .collect())
 }
 
 fn profile_from_draft(draft: &Draft) -> Result<ScaleProfile, String> {
@@ -845,6 +1325,8 @@ mod tests {
             game_id: "x".into(),
             game_name: "x".into(),
             profile_name: "默认".into(),
+            exe: "/games/x/game.exe".into(),
+            exe_original: "/games/x/game.exe".into(),
             algo: algo.into(),
             sharpness: 2,
             internal_w: "1280".into(),
@@ -948,5 +1430,141 @@ mod tests {
         draft.internal_w = "abc".into();
         let err = profile_from_draft(&draft).unwrap_err();
         assert!(err.contains("游戏分辨率宽"), "{err}");
+    }
+
+    fn ui_game() -> UiGame {
+        UiGame {
+            id: "demo".into(),
+            name: "Demo Game".into(),
+            exe: "/games/demo/game.exe".into(),
+            profile_name: "默认".into(),
+            algo: "Fsr".into(),
+            sharpness: 2,
+            internal: (1280, 720),
+            output: (2560, 1440),
+            fullscreen: true,
+            framerate: None,
+        }
+    }
+
+    #[test]
+    fn search_matches_name_and_path_case_insensitively() {
+        let game = ui_game();
+        assert!(matches_query(&game, ""), "empty query shows everything");
+        assert!(matches_query(&game, "   "));
+        assert!(matches_query(&game, "demo"));
+        assert!(matches_query(&game, "DEMO"));
+        assert!(matches_query(&game, "Game")); // name
+        assert!(matches_query(&game, "games/demo")); // path
+        assert!(matches_query(&game, ".exe"));
+        assert!(!matches_query(&game, "nonexistent"));
+    }
+
+    #[test]
+    fn retry_backoff_grows_then_caps() {
+        assert_eq!(retry_delay(1), std::time::Duration::from_secs(2));
+        assert_eq!(retry_delay(2), std::time::Duration::from_secs(4));
+        assert_eq!(retry_delay(3), std::time::Duration::from_secs(8));
+        assert_eq!(retry_delay(4), std::time::Duration::from_secs(16));
+        // capped, and never overflows for a large attempt count
+        assert_eq!(retry_delay(5), std::time::Duration::from_secs(16));
+        assert_eq!(retry_delay(99), std::time::Duration::from_secs(16));
+    }
+
+    #[test]
+    fn parses_scan_candidates() {
+        let value = json!({
+            "directory": "/games",
+            "games": [
+                { "id": "a", "name": "A", "exe_path": "/games/a/a.exe", "is_new": true },
+                { "id": "b", "name": "B", "exe_path": "/games/b/b.exe", "is_new": false }
+            ]
+        });
+        let found = parse_scan_candidates(&value).unwrap();
+        assert_eq!(found.len(), 2);
+        assert!(found[0].is_new);
+        assert!(!found[1].is_new);
+        assert_eq!(found[1].exe, "/games/b/b.exe");
+
+        assert!(parse_scan_candidates(&json!({})).is_err());
+        assert!(
+            parse_scan_candidates(&json!({ "games": [] }))
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn draft_seeds_exe_and_detects_changes() {
+        let game = ui_game();
+        let mut draft = Draft::from_game(&game);
+        assert_eq!(draft.exe, game.exe);
+        assert!(
+            !draft.exe_changed(),
+            "opening a game must not count as an edit"
+        );
+
+        draft.exe = "/games/demo/other.exe".into();
+        assert!(draft.exe_changed());
+
+        // Whitespace-only differences are not an edit either.
+        let mut padded = Draft::from_game(&game);
+        padded.exe = format!("  {}  ", game.exe);
+        assert!(!padded.exe_changed());
+    }
+
+    /// Building the widget tree must not panic in any reachable state. This
+    /// covers the empty-list / no-search-hit branches of the new pages.
+    #[test]
+    fn views_construct_for_every_tab_and_state() {
+        let (mut app, _task) = App::new();
+
+        // Library: empty, populated, filtered, no match.
+        app.tab = Tab::Games;
+        let _ = app.view();
+        app.games = vec![ui_game()];
+        let _ = app.view();
+        app.search = "demo".into();
+        let _ = app.view();
+        app.search = "zzz".into();
+        let _ = app.view();
+        app.search.clear();
+
+        // Detail page, with and without the delete confirmation.
+        app.selected = Some("demo".into());
+        app.draft = Some(Draft::from_game(&ui_game()));
+        let _ = app.view();
+        app.confirm_delete = true;
+        let _ = app.view();
+
+        // Add page: before a scan, with results, with an empty result.
+        app.tab = Tab::Add;
+        app.selected = None;
+        app.draft = None;
+        app.confirm_delete = false;
+        let _ = app.view();
+        app.scan_results = Some(vec![ScanCandidate {
+            id: "a".into(),
+            name: "A".into(),
+            exe: "/games/a/a.exe".into(),
+            is_new: true,
+        }]);
+        let _ = app.view();
+        app.scan_results = Some(Vec::new());
+        let _ = app.view();
+
+        // Settings, plus the disconnected sidebar with its reconnect button.
+        app.tab = Tab::Settings;
+        for (connected, attempts) in [
+            (Some(true), 0),
+            (Some(false), 1),
+            (Some(false), 99),
+            (None, 0),
+        ] {
+            app.daemon_connected = connected;
+            app.retry_attempts = attempts;
+            app.error = Some("boom".into());
+            let _ = app.view();
+        }
     }
 }

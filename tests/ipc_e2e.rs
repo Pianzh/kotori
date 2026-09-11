@@ -373,3 +373,94 @@ fn library_management_over_ipc() {
         "{response}"
     );
 }
+
+/// The daemon is the only writer of the config, so the GUI persists a scale
+/// profile with `game.update`; the patch must be validated and atomic.
+#[test]
+fn scale_profile_is_patched_and_validated_over_ipc() {
+    let mut fixture = Fixture::new("profile");
+    fixture.start();
+
+    let demo = |fixture: &Fixture| {
+        fixture.rpc("game.list", json!({}))["result"]["games"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == "demo")
+            .unwrap()
+            .clone()
+    };
+
+    // Sharpness 9 is representable but out of range: it must be clamped.
+    let response = fixture.rpc(
+        "game.update",
+        json!({
+            "id": "demo",
+            "profile": {
+                "name": "自定义",
+                "algorithm": { "Fsr": { "sharpness": 9 } },
+                "internal_width": 1920,
+                "internal_height": 1080,
+                "output_width": 2560,
+                "output_height": 1440,
+                "framerate_limit": 60,
+                "force_fullscreen": false
+            }
+        }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+
+    let game = demo(&fixture);
+    assert_eq!(game["scale_profile"]["algorithm"]["Fsr"]["sharpness"], 5);
+    assert_eq!(game["scale_profile"]["framerate_limit"], 60);
+    assert_eq!(game["scale_profile"]["force_fullscreen"], false);
+    assert_eq!(game["scale_profile"]["name"], "自定义");
+    assert!(
+        std::fs::read_to_string(&fixture.config)
+            .unwrap()
+            .contains("force_fullscreen = false"),
+        "the profile patch must be persisted"
+    );
+
+    // An impossible resolution is rejected...
+    let response = fixture.rpc(
+        "game.update",
+        json!({
+            "id": "demo",
+            "profile": {
+                "name": "自定义",
+                "algorithm": "Integer",
+                "internal_width": 0,
+                "internal_height": 1080,
+                "output_width": 2560,
+                "output_height": 1440,
+                "force_fullscreen": false
+            }
+        }),
+    );
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("游戏分辨率宽"),
+        "{response}"
+    );
+
+    // ...and leaves the previously stored profile untouched.
+    let game = demo(&fixture);
+    assert_eq!(game["scale_profile"]["framerate_limit"], 60);
+    assert_eq!(game["scale_profile"]["algorithm"]["Fsr"]["sharpness"], 5);
+
+    // A profile that is not a valid ScaleProfile is rejected too.
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "demo", "profile": { "algorithm": "NotAnAlgorithm" } }),
+    );
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("缩放配置格式无效"),
+        "{response}"
+    );
+}

@@ -7,7 +7,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, RwLock};
 
-use crate::config::{self, Config};
+use crate::config::{self, Config, ScaleProfile};
 use crate::scale::niri::NiriScaleEngine;
 use crate::scale::{ScaleEngine, ScaleSession};
 
@@ -162,7 +162,11 @@ impl Daemon {
                     };
                     let name = text("name");
                     let exe_path = text("exe_path");
-                    respond(id, self.rpc_game_update(game_id, name, exe_path).await)
+                    let profile = req.params.as_ref().and_then(|p| p.get("profile")).cloned();
+                    respond(
+                        id,
+                        self.rpc_game_update(game_id, name, exe_path, profile).await,
+                    )
                 }
                 Err(e) => rpc_err(id, -32602, e),
             },
@@ -327,16 +331,20 @@ impl Daemon {
         .await
     }
 
-    /// Update the mutable library fields of a game (currently name / exe path).
-    /// This is the repair path for a wrong exe picked by the scanner.
+    /// Patch the mutable fields of a game: name, exe path, scale profile.
+    ///
+    /// This is the repair path for a wrong exe picked by the scanner, and the
+    /// only way the GUI persists a scale profile (the daemon is the single
+    /// writer of the config file).
     async fn rpc_game_update(
         &self,
         id: &str,
         name: Option<String>,
         exe_path: Option<String>,
+        profile: Option<Value>,
     ) -> Result<Value, String> {
-        if name.is_none() && exe_path.is_none() {
-            return Err("game.update 需要 name 或 exe_path 之一".to_string());
+        if name.is_none() && exe_path.is_none() && profile.is_none() {
+            return Err("game.update 需要 name / exe_path / profile 之一".to_string());
         }
 
         self.mutate_config(|config| {
@@ -358,6 +366,14 @@ impl Daemon {
                     return Err(format!("可执行文件不存在: {}", path.display()));
                 }
                 game.exe_path = path;
+            }
+
+            if let Some(profile) = &profile {
+                let mut parsed: ScaleProfile = serde_json::from_value(profile.clone())
+                    .map_err(|e| format!("缩放配置格式无效: {e}"))?;
+                parsed.normalize();
+                parsed.validate()?;
+                game.scale_profile = parsed;
             }
 
             tracing::info!("game.update: {id}");

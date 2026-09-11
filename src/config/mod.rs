@@ -10,6 +10,11 @@ pub const DEFAULT_INTERNAL_HEIGHT: u32 = 720;
 pub const FALLBACK_OUTPUT_WIDTH: u32 = 1920;
 pub const FALLBACK_OUTPUT_HEIGHT: u32 = 1080;
 
+/// Accepted range for any resolution field coming from a client.
+pub const MAX_RESOLUTION: u32 = 16384;
+/// Accepted range for the frame rate limit.
+pub const MAX_FRAMERATE: u32 = 1000;
+
 /// Internal sharpness range (0 = softest, 5 = sharpest). Mirrors the UI slider.
 pub const MAX_SHARPNESS: u32 = 5;
 
@@ -126,6 +131,50 @@ impl ScaleProfile {
             framerate_limit: None,
             force_fullscreen: true,
         }
+    }
+
+    /// Clamp values that are representable but outside the supported range.
+    pub fn normalize(&mut self) {
+        match self.algorithm {
+            ScaleAlgorithm::Fsr { sharpness } => {
+                self.algorithm = ScaleAlgorithm::Fsr {
+                    sharpness: sharpness.min(MAX_SHARPNESS),
+                };
+            }
+            ScaleAlgorithm::Nis { sharpness } => {
+                self.algorithm = ScaleAlgorithm::Nis {
+                    sharpness: sharpness.min(MAX_SHARPNESS),
+                };
+            }
+            ScaleAlgorithm::Integer | ScaleAlgorithm::Bilinear => {}
+        }
+    }
+
+    /// Validate a profile that arrived from a client before it is persisted.
+    /// Returns a message that is safe to show to the user.
+    pub fn validate(&self) -> Result<(), String> {
+        for (label, value) in [
+            ("游戏分辨率宽", self.internal_width),
+            ("游戏分辨率高", self.internal_height),
+            ("输出分辨率宽", self.output_width),
+            ("输出分辨率高", self.output_height),
+        ] {
+            if value == 0 || value > MAX_RESOLUTION {
+                return Err(format!(
+                    "{label} 必须在 1..={MAX_RESOLUTION} 之间（当前 {value}）"
+                ));
+            }
+        }
+
+        if let Some(fps) = self.framerate_limit
+            && (fps == 0 || fps > MAX_FRAMERATE)
+        {
+            return Err(format!(
+                "帧率限制必须在 1..={MAX_FRAMERATE} 之间（当前 {fps}）"
+            ));
+        }
+
+        Ok(())
     }
 }
 
@@ -395,5 +444,54 @@ output_height = 1440
         assert_eq!(game.scale_profile.framerate_limit, None);
         assert!(!game.scale_profile.force_fullscreen);
         assert_eq!(config.daemon.socket_path, default_socket_path());
+    }
+
+    #[test]
+    fn profile_validation_rejects_impossible_values() {
+        let ok = ScaleProfile::default_for((2560, 1440));
+        assert!(ok.validate().is_ok());
+
+        let mut zero = ok.clone();
+        zero.internal_width = 0;
+        assert!(zero.validate().unwrap_err().contains("游戏分辨率宽"));
+
+        let mut huge = ok.clone();
+        huge.output_height = MAX_RESOLUTION + 1;
+        assert!(huge.validate().unwrap_err().contains("输出分辨率高"));
+
+        let mut fps = ok.clone();
+        fps.framerate_limit = Some(0);
+        assert!(fps.validate().unwrap_err().contains("帧率限制"));
+
+        let mut fps_high = ok.clone();
+        fps_high.framerate_limit = Some(MAX_FRAMERATE + 1);
+        assert!(fps_high.validate().is_err());
+
+        assert!(
+            ok.validate().is_ok(),
+            "validation must not mutate the profile"
+        );
+    }
+
+    #[test]
+    fn normalize_clamps_sharpness_only() {
+        let mut profile = ScaleProfile {
+            algorithm: ScaleAlgorithm::Nis { sharpness: 99 },
+            ..ScaleProfile::default_for((1920, 1080))
+        };
+        profile.normalize();
+        assert_eq!(
+            profile.algorithm,
+            ScaleAlgorithm::Nis {
+                sharpness: MAX_SHARPNESS
+            }
+        );
+
+        let mut unit = ScaleProfile {
+            algorithm: ScaleAlgorithm::Integer,
+            ..ScaleProfile::default_for((1920, 1080))
+        };
+        unit.normalize();
+        assert_eq!(unit.algorithm, ScaleAlgorithm::Integer);
     }
 }
