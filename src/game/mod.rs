@@ -141,8 +141,21 @@ pub fn scan(directory: &Path) -> anyhow::Result<Vec<GameConfig>> {
 pub fn add_from_dir(directory: &Path) -> anyhow::Result<Vec<(String, GameConfig)>> {
     let mut config = crate::config::load()?;
     let found = scan(directory)?;
-    let mut added = Vec::new();
+    let added = add_games(&mut config, found);
+    crate::config::save(&config)?;
+    Ok(added)
+}
 
+/// Insert scanned games into `config`, skipping ids that already exist so that
+/// re-scanning never overwrites a tuned profile.
+///
+/// Pure: the caller owns persistence (the daemon persists atomically, the CLI
+/// writes the file directly). Returns what was actually added.
+pub fn add_games(
+    config: &mut crate::config::Config,
+    found: Vec<GameConfig>,
+) -> Vec<(String, GameConfig)> {
+    let mut added = Vec::new();
     for game in found {
         let id = generate_game_id(&game.name);
         if let std::collections::hash_map::Entry::Vacant(slot) = config.games.entry(id.clone()) {
@@ -150,9 +163,12 @@ pub fn add_from_dir(directory: &Path) -> anyhow::Result<Vec<(String, GameConfig)
             added.push((id, game));
         }
     }
+    added
+}
 
-    crate::config::save(&config)?;
-    Ok(added)
+/// Remove a game from the config. Returns false when the id is unknown.
+pub fn remove_game(config: &mut crate::config::Config, id: &str) -> bool {
+    config.games.remove(id).is_some()
 }
 
 /// Pick the most plausible game executable inside a directory.

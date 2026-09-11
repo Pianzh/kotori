@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -139,6 +139,33 @@ impl Daemon {
             },
             "config.reload" => respond(id, self.rpc_reload_config().await),
             "game.list" => respond(id, self.rpc_game_list().await),
+            "game.scan" => match param_str(&req.params, "directory") {
+                Ok(dir) => respond(id, self.rpc_game_scan(dir).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
+            "game.add" => match param_str(&req.params, "directory") {
+                Ok(dir) => respond(id, self.rpc_game_add(dir).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
+            "game.remove" => match param_str(&req.params, "id") {
+                Ok(game_id) => respond(id, self.rpc_game_remove(game_id).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
+            "game.update" => match param_str(&req.params, "id") {
+                Ok(game_id) => {
+                    let text = |key: &str| {
+                        req.params
+                            .as_ref()
+                            .and_then(|p| p.get(key))
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    };
+                    let name = text("name");
+                    let exe_path = text("exe_path");
+                    respond(id, self.rpc_game_update(game_id, name, exe_path).await)
+                }
+                Err(e) => rpc_err(id, -32602, e),
+            },
             "game.launch" => match param_str(&req.params, "id") {
                 Ok(game_id) => respond(id, self.rpc_game_launch(game_id).await),
                 Err(e) => rpc_err(id, -32602, e),
@@ -236,6 +263,122 @@ impl Daemon {
         });
 
         Ok(json!({ "games": games }))
+    }
+
+    /// Preview a directory scan without touching the config.
+    async fn rpc_game_scan(&self, directory: &str) -> Result<Value, String> {
+        let dir = require_directory(directory)?;
+        let found = crate::game::scan(&dir).map_err(|e| e.to_string())?;
+
+        let config = self.config.read().await;
+        let games: Vec<Value> = found
+            .iter()
+            .map(|game| {
+                let id = crate::game::generate_game_id(&game.name);
+                json!({
+                    "id": id,
+                    "name": game.name,
+                    "exe_path": game.exe_path,
+                    "is_new": !config.games.contains_key(&id),
+                })
+            })
+            .collect();
+
+        Ok(json!({ "directory": dir, "games": games }))
+    }
+
+    /// Scan a directory and add the games that are not configured yet.
+    async fn rpc_game_add(&self, directory: &str) -> Result<Value, String> {
+        let dir = require_directory(directory)?;
+        let found = crate::game::scan(&dir).map_err(|e| e.to_string())?;
+        let found_count = found.len();
+
+        self.mutate_config(|config| {
+            let added = crate::game::add_games(config, found);
+            tracing::info!(
+                "game.add: {} new game(s) from {}",
+                added.len(),
+                dir.display()
+            );
+            Ok(json!({
+                "directory": dir,
+                "found": found_count,
+                "added": added
+                    .iter()
+                    .map(|(id, game)| json!({
+                        "id": id,
+                        "name": game.name,
+                        "exe_path": game.exe_path,
+                    }))
+                    .collect::<Vec<_>>(),
+            }))
+        })
+        .await
+    }
+
+    async fn rpc_game_remove(&self, id: &str) -> Result<Value, String> {
+        self.mutate_config(|config| {
+            if !crate::game::remove_game(config, id) {
+                return Err(format!("配置中找不到游戏: {id}"));
+            }
+            tracing::info!("game.remove: {id}");
+            Ok(json!({ "success": true }))
+        })
+        .await
+    }
+
+    /// Update the mutable library fields of a game (currently name / exe path).
+    /// This is the repair path for a wrong exe picked by the scanner.
+    async fn rpc_game_update(
+        &self,
+        id: &str,
+        name: Option<String>,
+        exe_path: Option<String>,
+    ) -> Result<Value, String> {
+        if name.is_none() && exe_path.is_none() {
+            return Err("game.update 需要 name 或 exe_path 之一".to_string());
+        }
+
+        self.mutate_config(|config| {
+            let game = config
+                .games
+                .get_mut(id)
+                .ok_or_else(|| format!("配置中找不到游戏: {id}"))?;
+
+            if let Some(name) = &name {
+                if name.trim().is_empty() {
+                    return Err("名称不能为空".to_string());
+                }
+                game.name = name.clone();
+            }
+
+            if let Some(exe) = &exe_path {
+                let path = PathBuf::from(exe);
+                if !path.is_file() {
+                    return Err(format!("可执行文件不存在: {}", path.display()));
+                }
+                game.exe_path = path;
+            }
+
+            tracing::info!("game.update: {id}");
+            Ok(json!({ "success": true }))
+        })
+        .await
+    }
+
+    /// Apply a mutation to the config atomically: the change is made on a copy,
+    /// persisted, and only then committed to memory, so the daemon's view never
+    /// diverges from the file on disk.
+    async fn mutate_config<F>(&self, mutate: F) -> Result<Value, String>
+    where
+        F: FnOnce(&mut Config) -> Result<Value, String>,
+    {
+        let mut guard = self.config.write().await;
+        let mut candidate = guard.clone();
+        let value = mutate(&mut candidate)?;
+        crate::config::save(&candidate).map_err(|e| format!("保存配置失败: {e}"))?;
+        *guard = candidate;
+        Ok(value)
     }
 
     async fn rpc_game_launch(&self, id: &str) -> Result<Value, String> {
@@ -428,6 +571,15 @@ fn param_str<'a>(
         .and_then(|p| p.get(key))
         .and_then(|v| v.as_str())
         .ok_or_else(|| format!("missing parameter: {key}"))
+}
+
+/// Validate a directory parameter before scanning it.
+fn require_directory(directory: &str) -> Result<PathBuf, String> {
+    let path = PathBuf::from(directory);
+    if !path.is_dir() {
+        return Err(format!("目录不存在或不是目录: {}", path.display()));
+    }
+    Ok(path)
 }
 
 pub mod rpc {

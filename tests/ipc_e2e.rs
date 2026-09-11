@@ -248,3 +248,128 @@ fn second_daemon_replaces_a_stale_socket_file() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// The daemon owns config mutation, so a wrong exe pick or a stale entry can be
+/// repaired over IPC instead of by hand-editing the TOML.
+#[test]
+fn library_management_over_ipc() {
+    let mut fixture = Fixture::new("library");
+    fixture.start();
+
+    // A directory holding one game, in the layout the scanner understands.
+    let games_dir = fixture.dir.join("games");
+    let game_dir = games_dir.join("NewGame");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    let exe = game_dir.join("game.chs.exe");
+    std::fs::write(&exe, b"").unwrap();
+    let dir_str = games_dir.to_string_lossy().to_string();
+
+    let game_count = |fixture: &Fixture| {
+        fixture.rpc("game.list", json!({}))["result"]["games"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+
+    // --- game.scan is a preview: it must not write -------------------------
+    let response = fixture.rpc("game.scan", json!({ "directory": dir_str.clone() }));
+    let found = &response["result"]["games"][0];
+    assert_eq!(found["name"], "NewGame", "{response}");
+    assert_eq!(found["id"], "newgame");
+    assert_eq!(found["is_new"], true);
+    assert_eq!(game_count(&fixture), 1, "scan must not add anything");
+
+    // --- game.add ----------------------------------------------------------
+    let response = fixture.rpc("game.add", json!({ "directory": dir_str.clone() }));
+    assert_eq!(response["result"]["found"], 1, "{response}");
+    assert_eq!(response["result"]["added"][0]["id"], "newgame");
+    assert_eq!(game_count(&fixture), 2);
+    assert!(
+        std::fs::read_to_string(&fixture.config)
+            .unwrap()
+            .contains("NewGame"),
+        "game.add must persist to disk"
+    );
+
+    // Adding the same directory again is a no-op, and the second scan marks the
+    // entry as already known.
+    let response = fixture.rpc("game.add", json!({ "directory": dir_str.clone() }));
+    assert!(response["result"]["added"].as_array().unwrap().is_empty());
+    let response = fixture.rpc("game.scan", json!({ "directory": dir_str.clone() }));
+    assert_eq!(response["result"]["games"][0]["is_new"], false);
+    assert_eq!(game_count(&fixture), 2);
+
+    // --- game.update: the "wrong exe" repair path --------------------------
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "newgame", "name": "Renamed Game", "exe_path": exe }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+    let games = fixture.rpc("game.list", json!({}))["result"]["games"].clone();
+    let renamed = games
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == "newgame")
+        .unwrap()
+        .clone();
+    assert_eq!(renamed["name"], "Renamed Game");
+    assert_eq!(renamed["exe_path"], exe.to_string_lossy().as_ref());
+
+    // A non-existent exe is rejected and leaves the stored value untouched.
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "newgame", "exe_path": "/nonexistent/game.exe" }),
+    );
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("不存在"),
+        "{response}"
+    );
+    let games = fixture.rpc("game.list", json!({}))["result"]["games"].clone();
+    let unchanged = games
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|g| g["id"] == "newgame")
+        .unwrap()
+        .clone();
+    assert_eq!(unchanged["exe_path"], exe.to_string_lossy().as_ref());
+
+    // Updating without any field, or an unknown id, is an error.
+    assert_is_error(
+        &fixture.rpc("game.update", json!({ "id": "newgame" })),
+        -32000,
+    );
+    assert_is_error(
+        &fixture.rpc("game.update", json!({ "id": "ghost", "name": "x" })),
+        -32000,
+    );
+
+    // --- game.remove -------------------------------------------------------
+    let response = fixture.rpc("game.remove", json!({ "id": "newgame" }));
+    assert_eq!(response["result"]["success"], true, "{response}");
+    assert_eq!(game_count(&fixture), 1);
+    assert!(
+        !std::fs::read_to_string(&fixture.config)
+            .unwrap()
+            .contains("Renamed Game"),
+        "game.remove must persist to disk"
+    );
+    assert_is_error(
+        &fixture.rpc("game.remove", json!({ "id": "newgame" })),
+        -32000,
+    );
+
+    // --- invalid directory -------------------------------------------------
+    let response = fixture.rpc("game.scan", json!({ "directory": "/nope/nope" }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("目录不存在"),
+        "{response}"
+    );
+}
