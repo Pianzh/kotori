@@ -100,6 +100,14 @@ pub struct SyncStatus {
     pub games: Vec<SyncGameRow>,
 }
 
+impl SyncStatus {
+    /// Whether one of our credential slots is filled. `sync.status` reports
+    /// account names only — never a value.
+    fn has_secret(&self, account: &str) -> bool {
+        self.secrets.iter().any(|a| a == account)
+    }
+}
+
 /// Which sync input a keystroke went to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncField {
@@ -353,8 +361,12 @@ pub enum Message {
     SyncSettingsSaved(Result<(), String>),
     SyncSaveCredentials,
     SyncCredentialsSaved(Result<(), String>),
+    SyncClearCredentials,
+    SyncCredentialsCleared(Result<(), String>),
     SyncSavePassword,
     SyncPasswordSaved(Result<(), String>),
+    SyncClearPassword,
+    SyncPasswordCleared(Result<(), String>),
     SyncTest,
     SyncTested(Result<String, String>),
     SyncMasterPasswordChanged(String),
@@ -948,6 +960,48 @@ impl App {
                     // The daemon consumed them; never echo secrets back.
                     self.sync_form.key_id.clear();
                     self.sync_form.app_key.clear();
+                }
+                self.reload_sync()
+            }
+            Message::SyncClearCredentials => {
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { save_sync_credentials(&socket, "", "").await },
+                    Message::SyncCredentialsCleared,
+                )
+            }
+            Message::SyncCredentialsCleared(result) => {
+                self.sync_form.busy = false;
+                self.sync_form.msg = Some(match &result {
+                    Ok(()) => "已删除密钥环里的 B2 凭据".to_string(),
+                    Err(e) => format!("删除凭据失败: {e}"),
+                });
+                if result.is_ok() {
+                    self.sync_form.key_id.clear();
+                    self.sync_form.app_key.clear();
+                }
+                self.reload_sync()
+            }
+            Message::SyncClearPassword => {
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { save_sync_password(&socket, "").await },
+                    Message::SyncPasswordCleared,
+                )
+            }
+            Message::SyncPasswordCleared(result) => {
+                self.sync_form.busy = false;
+                self.sync_form.msg = Some(match &result {
+                    Ok(()) => "已删除密钥环里的同步密码".to_string(),
+                    Err(e) => format!("删除密码失败: {e}"),
+                });
+                if result.is_ok() {
+                    self.sync_form.password.clear();
+                    self.sync_form.password_again.clear();
                 }
                 self.reload_sync()
             }
@@ -2098,7 +2152,12 @@ impl App {
         }
 
         sections.push(horizontal_rule(1).into());
-        sections.push(text("B2 凭据").size(13).font(ui_font()).into());
+        sections.push(
+            text("B2 凭据（只保存一套，再次保存即覆盖）")
+                .size(13)
+                .font(ui_font())
+                .into(),
+        );
         sections.push(
             text(
                 "第一次用 B2 的话，先在网页控制台做两件事：\n                 1. Buckets → Create a Bucket，名字填到上面的 bucket 里（Files in Bucket 选 Private）\n                 2. Account → Application Keys → Add a New Application Key：Bucket(s) 只勾这一个 bucket，\n                 \u{20}\u{20}\u{20}Type of Access 选 Read and Write\n                 创建后会显示 keyID 和 applicationKey，只显示这一次，复制到下面两个框里。",
@@ -2107,32 +2166,19 @@ impl App {
             .color(dim)
             .into(),
         );
-        let known = |account: &str| {
-            status
-                .map(|s| s.secrets.iter().any(|a| a == account))
-                .unwrap_or(false)
-        };
+        let known = |account: &str| status.is_some_and(|s| s.has_secret(account));
+        let key_id_saved = known("b2-key-id");
+        let app_key_saved = known("b2-app-key");
+        let stored = usize::from(key_id_saved) + usize::from(app_key_saved);
         sections.push(
-            text(format!(
-                "只存进系统密钥环，配置文件里没有明文。当前状态：key id {}，application key {}。",
-                if known("b2-key-id") {
-                    "已保存"
-                } else {
-                    "未保存"
-                },
-                if known("b2-app-key") {
-                    "已保存"
-                } else {
-                    "未保存"
-                }
-            ))
-            .size(11)
-            .color(dim)
-            .into(),
+            text(credentials_label(key_id_saved, app_key_saved))
+                .size(11)
+                .color(if stored == 2 { ok } else { warn })
+                .into(),
         );
         sections.push(sync_input_row(
             "keyID",
-            "Application Key ID（形如 005a…）；留空再保存 = 清除",
+            "Application Key ID（形如 005a…）",
             &form.key_id,
             SyncField::KeyId,
             false,
@@ -2149,7 +2195,14 @@ impl App {
                 button(text("保存凭据"))
                     .padding([7, 16])
                     .on_press_maybe((!form.busy).then_some(Message::SyncSaveCredentials)),
-                text("两个都留空再点保存 = 清除凭据").size(11).color(dim),
+                // Deleting takes effect immediately: no need to empty the boxes
+                // and save, which looked like it might do nothing.
+                button(text("删除凭据")).padding([7, 16]).on_press_maybe(
+                    (!form.busy && stored > 0).then_some(Message::SyncClearCredentials)
+                ),
+                text("两个框填的都是同一个 B2 账号，下次保存会覆盖上一套")
+                    .size(11)
+                    .color(dim),
             ]
             .spacing(10)
             .align_y(iced::Alignment::Center)
@@ -2196,6 +2249,9 @@ impl App {
                 button(text("保存密码"))
                     .padding([7, 16])
                     .on_press_maybe((!form.busy).then_some(Message::SyncSavePassword)),
+                button(text("删除密码")).padding([7, 16]).on_press_maybe(
+                    (!form.busy && known("sync-password")).then_some(Message::SyncClearPassword)
+                ),
             ]
             .spacing(8)
             .align_y(iced::Alignment::Center)
@@ -2207,7 +2263,7 @@ impl App {
                 if known("sync-password") {
                     "已保存在密钥环（改密码会让已加密上传的存档无法解密，会再确认一次）"
                 } else {
-                    "未设置"
+                    "未设置（没开加密就不需要它）"
                 }
             ))
             .size(11)
@@ -2278,6 +2334,22 @@ impl App {
 
         sections
     }
+}
+
+/// What the B2 section says about the stored credentials.
+///
+/// There is only ever **one** set of B2 keys (the daemon overwrites the two
+/// keyring entries), so the useful information is how many of its two halves
+/// are actually there — never the values, which do not leave the keyring.
+fn credentials_label(has_key_id: bool, has_app_key: bool) -> String {
+    let stored = usize::from(has_key_id) + usize::from(has_app_key);
+    let mark = |saved: bool| if saved { "✓" } else { "✗ 未保存" };
+    format!(
+        "密钥环里现在有 {stored}/2 项：keyID {}，applicationKey {}。再次保存会覆盖上一套，\
+         只存进密钥环，配置文件里没有任何明文。",
+        mark(has_key_id),
+        mark(has_app_key),
+    )
 }
 
 /// Label + (optionally masked) input row for the sync form.
@@ -2950,6 +3022,62 @@ fn algo_sharpness(v: &Value) -> Option<u32> {
     val.get("sharpness")?.as_u64().map(|s| s as u32)
 }
 
+/// Crash report file, next to the daemon log.
+const UI_CRASH_LOG: &str = "ui-crash.log";
+
+/// Record a panic before the process dies.
+///
+/// The GUI lives in a terminal the user closes as soon as something goes
+/// wrong, and stderr dies with it — which is how a crash becomes "it just
+/// exited for no reason". Keeping the report on disk makes it explainable.
+///
+/// Returns the path and whether it could actually be written to; the message
+/// printed on a crash must not promise a file that is not there.
+fn install_crash_log() -> (PathBuf, bool) {
+    let dir = crate::config::log_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join(UI_CRASH_LOG);
+
+    let open = || {
+        std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+    };
+    // Find out now, while there is still someone to tell.
+    let writable = open().is_ok();
+
+    let report_path = path.clone();
+    let note = if writable {
+        format!("kotori 崩溃了，原因已写入 {}", path.display())
+    } else {
+        format!(
+            "kotori 崩溃了：{} 写不进去（目录只读？），报告只在上面这段输出里",
+            path.display()
+        )
+    };
+    std::panic::set_hook(Box::new(move |info| {
+        use std::io::Write;
+
+        let when = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let report = format!(
+            "\n===== {when} =====\n{info}\n\nbacktrace:\n{}\n",
+            std::backtrace::Backtrace::force_capture()
+        );
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&report_path)
+        {
+            let _ = file.write_all(report.as_bytes());
+        }
+        eprint!("{report}");
+        eprintln!("{note}");
+    }));
+
+    (path, writable)
+}
+
 pub fn run() -> anyhow::Result<()> {
     // Niri + wgpu Vulkan swapchain constantly reports SurfaceError::Outdated,
     // producing an ERROR log storm (33k lines in 6s). Force GL/EGL by default;
@@ -2957,6 +3085,17 @@ pub fn run() -> anyhow::Result<()> {
     if std::env::var_os("WGPU_BACKEND").is_none() {
         unsafe { std::env::set_var("WGPU_BACKEND", "gl") };
     }
+
+    let (crash_log, crash_log_ok) = install_crash_log();
+    tracing::info!(
+        "UI 渲染后端 {}；崩溃报告 {}",
+        std::env::var("WGPU_BACKEND").unwrap_or_else(|_| "自动".into()),
+        if crash_log_ok {
+            crash_log.display().to_string()
+        } else {
+            format!("写不进 {}（目录不可写）", crash_log.display())
+        }
+    );
 
     let socket = crate::config::socket_path();
 
@@ -2976,7 +3115,13 @@ pub fn run() -> anyhow::Result<()> {
         })
         .theme(|_| Theme::Dark)
         .run_with(App::new)
-        .map_err(|e| anyhow::anyhow!("UI error: {e}"))
+        .map_err(|e| anyhow::anyhow!("UI error: {e}"))?;
+
+    // Reaching this line means the event loop ended because every window was
+    // closed — not because of a panic. Worth recording: "it just exited" is
+    // ambiguous otherwise.
+    tracing::info!("UI 退出：所有窗口已关闭（不是崩溃）");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -3482,6 +3627,58 @@ mod tests {
         })));
         assert_eq!(app.wine_prefix_input, "/prefixes/mine");
         assert!(!app.wine_prefix_dirty);
+    }
+
+    #[test]
+    fn the_credentials_section_counts_what_is_stored() {
+        // One pair of keys per account, so "how many" means "how many of the
+        // two halves are there" — the values never come back from the daemon.
+        assert!(credentials_label(true, true).contains("2/2"));
+        assert!(credentials_label(true, false).contains("1/2"));
+        let empty = credentials_label(false, false);
+        assert!(empty.contains("0/2"), "{empty}");
+        assert!(empty.contains("未保存"), "{empty}");
+        assert!(empty.contains("覆盖"), "覆盖语义要写出来：{empty}");
+
+        let status = sync_status_fixture();
+        assert!(status.has_secret("b2-key-id") && status.has_secret("sync-password"));
+        assert!(!status.has_secret("b2-app-key-x"));
+    }
+
+    #[test]
+    fn deleting_a_credential_takes_effect_at_once_and_says_so() {
+        let (mut app, _task) = App::new();
+        app.sync_form
+            .apply(&sync_status_fixture(), &sync_payload()["settings"]);
+        let _ = app.update(Message::SyncField(SyncField::KeyId, "0046b5".into()));
+        let _ = app.update(Message::SyncField(SyncField::AppKey, "K004".into()));
+
+        // Deleting does not require emptying the boxes first.
+        let _ = app.update(Message::SyncClearCredentials);
+        assert!(app.sync_form.busy);
+        let _ = app.update(Message::SyncCredentialsCleared(Ok(())));
+        assert!(!app.sync_form.busy);
+        assert!(app.sync_form.key_id.is_empty() && app.sync_form.app_key.is_empty());
+        assert_eq!(
+            app.sync_form.msg.as_deref(),
+            Some("已删除密钥环里的 B2 凭据")
+        );
+
+        // A failure keeps what the user typed and names the problem.
+        let _ = app.update(Message::SyncField(
+            SyncField::Password,
+            "hunter2hunter2".into(),
+        ));
+        let _ = app.update(Message::SyncClearPassword);
+        let _ = app.update(Message::SyncPasswordCleared(Err("密钥环没在运行".into())));
+        assert_eq!(app.sync_form.password, "hunter2hunter2");
+        assert!(
+            app.sync_form
+                .msg
+                .as_deref()
+                .unwrap_or_default()
+                .contains("密钥环没在运行")
+        );
     }
 
     #[test]

@@ -15,7 +15,62 @@ mod wine;
 use clap::Parser;
 use tracing_subscriber::{EnvFilter, fmt};
 
+/// The GUI's own log, next to the daemon's.
+const UI_LOG: &str = "ui.log";
+
+/// Writes to stderr and, for the GUI, to a file as well.
+///
+/// The GUI is started from a terminal that the user closes — taking stderr
+/// with it. When it then crashes "for no reason", the only evidence is gone.
+/// Keeping a copy on disk makes the next one explainable.
+#[derive(Clone, Default)]
+struct LogWriter {
+    file: Option<std::sync::Arc<std::sync::Mutex<std::fs::File>>>,
+}
+
+impl std::io::Write for LogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if let Some(file) = &self.file
+            && let Ok(mut file) = file.lock()
+        {
+            let _ = file.write_all(buf);
+        }
+        std::io::stderr().write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        if let Some(file) = &self.file
+            && let Ok(mut file) = file.lock()
+        {
+            let _ = file.flush();
+        }
+        std::io::stderr().flush()
+    }
+}
+
+impl<'a> fmt::MakeWriter<'a> for LogWriter {
+    type Writer = Self;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+/// Open the GUI log, or `None` when it cannot be created (logging to stderr is
+/// still better than not starting at all).
+fn open_ui_log() -> Option<std::fs::File> {
+    let dir = config::log_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join(UI_LOG))
+        .ok()
+}
+
 fn main() -> anyhow::Result<()> {
+    let cli = cli::Cli::parse();
+
     // Initialize logging.
     //
     // The graphics stack is chatty at `info`: on niri the wgpu Vulkan path
@@ -30,6 +85,12 @@ fn main() -> anyhow::Result<()> {
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG)),
         )
+        .with_writer(LogWriter {
+            file: matches!(&cli.command, cli::Command::Ui)
+                .then(open_ui_log)
+                .flatten()
+                .map(|file| std::sync::Arc::new(std::sync::Mutex::new(file))),
+        })
         .init();
 
     let cli = cli::Cli::parse();
@@ -273,6 +334,20 @@ fn print_sync_result(method: &str, value: &serde_json::Value) {
             println!(
                 "密钥环: {}",
                 value["keyring"]["backend"].as_str().unwrap_or("-")
+            );
+            // Which of the (single) credential slots are filled — the values
+            // themselves never leave the keyring.
+            let saved = |account: &str| {
+                value["secrets"]
+                    .as_array()
+                    .is_some_and(|list| list.iter().any(|a| a.as_str() == Some(account)))
+            };
+            let mark = |account: &str| if saved(account) { "✓" } else { "✗" };
+            println!(
+                "凭据: keyID {} applicationKey {} 同步密码 {}",
+                mark("b2-key-id"),
+                mark("b2-app-key"),
+                mark("sync-password")
             );
             if let Some(problem) = value["problem"].as_str() {
                 println!("待解决: {problem}");
