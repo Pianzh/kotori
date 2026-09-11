@@ -44,6 +44,19 @@ nix = { version = "0.29", features = ["signal", "process", "term"] }
 argon2 = "0.6.0"
 chacha20poly1305 = "0.11.0"
 
+# The GUI stack is unusably slow when compiled without optimisation: wgpu, naga
+# and cosmic-text all do per-frame work, and at opt-level 0 a frame can take
+# hundreds of milliseconds — the window then trails the keyboard by about a
+# second, so typing or pasting looks like it "did not register". Optimise the
+# dependencies even in debug builds; our own crate stays cheap to rebuild.
+[profile.dev.package."*"]
+opt-level = 3
+
+# A little optimisation for kotori itself (the view tree is rebuilt per frame).
+# Debug info and debug assertions are untouched, so debugging still works.
+[profile.dev]
+opt-level = 1
+
 [profile.release]
 opt-level = "s"
 lto = true
