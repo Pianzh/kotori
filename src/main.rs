@@ -16,10 +16,19 @@ use clap::Parser;
 use tracing_subscriber::{EnvFilter, fmt};
 
 fn main() -> anyhow::Result<()> {
-    // Initialize logging
+    // Initialize logging.
+    //
+    // The graphics stack is chatty at `info`: on niri the wgpu Vulkan path
+    // prints a `SurfaceError::Outdated` storm (tens of thousands of lines in
+    // seconds), and drowning the terminal is itself a way to make the UI feel
+    // frozen. Our own logs stay at `info`; the noisy modules are pushed to
+    // `warn`, and `RUST_LOG` still overrides everything when debugging.
+    const DEFAULT_LOG: &str = "info,\
+         wgpu_core=warn,wgpu_hal=warn,wgpu_types=warn,naga=warn,\
+         winit=warn,calloop=warn,sctk=warn,sctk_adwaita=warn,iced_wgpu=warn";
     fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG)),
         )
         .init();
 
@@ -118,6 +127,75 @@ fn sync_cli(rt: &tokio::runtime::Runtime, action: cli::SyncCommand) -> anyhow::R
             "sync.versions",
             rpc::params([("id", serde_json::Value::String(game_id))]),
         ),
+        SyncCommand::Unlock => {
+            let password = prompt_password("主密码: ")?;
+            let result = rt.block_on(async {
+                rpc::call(
+                    &socket,
+                    "sync.unlock",
+                    Some(rpc::params([(
+                        "password",
+                        serde_json::Value::String(password),
+                    )])),
+                )
+                .await
+            });
+            match result {
+                Ok(_) => println!("已解锁"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
+        SyncCommand::MasterPassword => {
+            println!(
+                "主密码用来加密凭据文件（本机没有系统密钥环时用它）。\n\
+                 它只由你保管：我们不会存它，忘了就打不开这个文件。"
+            );
+            let password = prompt_password("主密码（至少 8 位）: ")?;
+            let again = prompt_password("再输一次: ")?;
+            if password != again {
+                eprintln!("两次输入不一样");
+                std::process::exit(1);
+            }
+            let result = rt.block_on(async {
+                rpc::call(
+                    &socket,
+                    "sync.set_master_password",
+                    Some(rpc::params([
+                        ("password", serde_json::Value::String(password)),
+                        // The CLI asked twice already; that is the confirmation.
+                        ("force", serde_json::Value::Bool(true)),
+                    ])),
+                )
+                .await
+            });
+            match result {
+                Ok(value) => println!(
+                    "已加密保存 {} 条凭据到 {}",
+                    value["count"].as_u64().unwrap_or(0),
+                    value["path"].as_str().unwrap_or("?")
+                ),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
+        SyncCommand::Lock => {
+            let result = rt.block_on(async { rpc::call(&socket, "sync.lock", None).await });
+            match result {
+                Ok(_) => println!("已锁定"),
+                Err(e) => {
+                    eprintln!("{e}");
+                    std::process::exit(1);
+                }
+            }
+            return Ok(());
+        }
         SyncCommand::Restore { game_id, version } => {
             let mut params = rpc::params([("id", serde_json::Value::String(game_id))]);
             if let Some(version) = version {
@@ -138,6 +216,37 @@ fn sync_cli(rt: &tokio::runtime::Runtime, action: cli::SyncCommand) -> anyhow::R
             std::process::exit(1);
         }
     }
+}
+
+/// Read a password without echoing it.
+///
+/// It never becomes a command-line argument: `ps` is world-readable, and the
+/// shell history outlives the session.
+fn prompt_password(prompt: &str) -> anyhow::Result<String> {
+    use nix::sys::termios::{self, LocalFlags, SetArg};
+    use std::io::{BufRead, Write};
+
+    eprint!("{prompt}");
+    std::io::stderr().flush().ok();
+
+    let stdin = std::io::stdin();
+    let original = termios::tcgetattr(&stdin).ok();
+    if let Some(original) = &original {
+        let mut quiet = original.clone();
+        quiet.local_flags.remove(LocalFlags::ECHO);
+        let _ = termios::tcsetattr(&stdin, SetArg::TCSANOW, &quiet);
+    }
+
+    let mut line = String::new();
+    let read = stdin.lock().read_line(&mut line);
+
+    if let Some(original) = &original {
+        let _ = termios::tcsetattr(&stdin, SetArg::TCSANOW, original);
+    }
+    eprintln!();
+    read?;
+
+    Ok(line.trim_end_matches(['\n', '\r']).to_string())
 }
 
 /// Sync output is meant to be read by a human, not piped into `jq` — so it is

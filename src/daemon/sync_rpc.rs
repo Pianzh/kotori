@@ -13,13 +13,14 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::Daemon;
 use crate::config::SyncConfig;
-use crate::secrets::{Keyring, SecretKey};
+use crate::secrets::{EncryptedFile, Keyring, SecretKey};
 use crate::sync::{
     self, SaveTarget,
     runner::{GameOutcome, PULL_TIMEOUT, Runner, SETTLE_DELAY},
@@ -31,22 +32,106 @@ pub const MAX_KEEP_VERSIONS: u32 = 100;
 
 /// Keyring handle plus the last result per game, for the settings page.
 pub(super) struct SyncState {
-    keyring: Keyring,
+    keyring: Mutex<Keyring>,
+    /// Where the master-password file lives. Held here (instead of being
+    /// re-resolved) so a test can point it at a throw-away directory.
+    secrets_path: std::path::PathBuf,
+    /// Set when the store we fell back to is a session-only one because no
+    /// keyring was running. It is what makes the fallback *recoverable*: the
+    /// daemon outlives the condition, and a user who starts their keyring after
+    /// reading our own advice must not have to restart the daemon for it to
+    /// count.
+    retry_backend: AtomicBool,
     records: Mutex<HashMap<String, SyncRecord>>,
 }
 
 impl SyncState {
     /// The system keyring, or a session-only store when there is none.
     pub(super) fn system() -> Self {
-        let (keyring, _ephemeral) = Keyring::system_or_memory();
-        Self::with_keyring(keyring)
+        let path = crate::config::secrets_path();
+        let (keyring, ephemeral) = Keyring::open_default(&path);
+        Self::new(keyring, path, ephemeral)
     }
 
-    pub(super) fn with_keyring(keyring: Keyring) -> Self {
+    fn new(keyring: Keyring, secrets_path: std::path::PathBuf, retry: bool) -> Self {
         Self {
-            keyring,
+            keyring: Mutex::new(keyring),
+            secrets_path,
+            retry_backend: AtomicBool::new(retry),
             records: Mutex::new(HashMap::new()),
         }
+    }
+
+    pub(super) fn secrets_path(&self) -> &std::path::Path {
+        &self.secrets_path
+    }
+
+    /// Use one specific store, and never second-guess it (tests do this).
+    #[cfg(test)]
+    pub(super) fn with_keyring(keyring: Keyring) -> Self {
+        Self::new(keyring, crate::config::secrets_path(), false)
+    }
+
+    /// A session store plus a chosen file path: the state a machine with no
+    /// keyring is in before the user sets a master password.
+    #[cfg(test)]
+    pub(super) fn with_keyring_at(keyring: Keyring, secrets_path: std::path::PathBuf) -> Self {
+        Self::new(keyring, secrets_path, false)
+    }
+
+    /// A daemon that finds an existing master-password file, as after a restart.
+    #[cfg(test)]
+    pub(super) fn from_master_file(secrets_path: std::path::PathBuf) -> Self {
+        let keyring = Keyring::encrypted_file(&secrets_path);
+        Self::new(keyring, secrets_path, false)
+    }
+
+    /// Switch to a store we just created, and stop second-guessing the choice.
+    pub(super) fn adopt(&self, keyring: Keyring) {
+        if let Ok(mut current) = self.keyring.lock() {
+            *current = keyring;
+        }
+        self.retry_backend.store(false, Ordering::Relaxed);
+    }
+
+    /// The best store available right now.
+    ///
+    /// Re-checks the platform keyring while we are on the session-only
+    /// fallback, and hands over anything the user stored meanwhile.
+    pub(super) fn keyring(&self) -> Keyring {
+        let Ok(mut current) = self.keyring.lock() else {
+            return Keyring::memory();
+        };
+        if !self.retry_backend.load(Ordering::Relaxed) {
+            return current.clone();
+        }
+
+        let (fresh, still_missing) = Keyring::open_default(&self.secrets_path);
+        if still_missing {
+            // Keep the session store; its contents are still the user's.
+            return current.clone();
+        }
+
+        // Hand the session's secrets over, unless the new store needs a
+        // password first — a locked file cannot accept them yet, and dropping
+        // them on the floor would be worse than leaving them in memory.
+        let carried = current.snapshot();
+        let locked = matches!(
+            fresh.kind(),
+            crate::secrets::StoreKind::EncryptedFile { locked: true, .. }
+        );
+        if !carried.is_empty() && !locked {
+            tracing::info!("有可持久化的凭据后端了，迁移 {} 条临时凭据", carried.len());
+            for (key, value) in carried {
+                if let Err(error) = fresh.set(key, &value) {
+                    tracing::warn!("迁移 {} 失败: {error}", key.account());
+                }
+            }
+        }
+        tracing::info!("凭据后端现在可用：{}", fresh.describe());
+        *current = fresh.clone();
+        self.retry_backend.store(false, Ordering::Relaxed);
+        fresh
     }
 
     fn remember(&self, game_id: &str, action: &str, outcome: &GameOutcome) {
@@ -119,7 +204,7 @@ pub(super) struct Password {
 impl Daemon {
     /// Build a runner for the current settings, or explain why we cannot.
     fn sync_runner(&self, settings: &SyncConfig) -> Result<Runner, String> {
-        Runner::new(settings.clone(), self.sync.keyring.clone()).map_err(|e| e.to_string())
+        Runner::new(settings.clone(), self.sync.keyring()).map_err(|e| e.to_string())
     }
 
     /// The name and resolved locations of a game that is ready to sync.
@@ -143,7 +228,7 @@ impl Daemon {
         let rclone = sync::find_rclone().map(|p| p.to_string_lossy().to_string());
         let secrets: Vec<&str> = self
             .sync
-            .keyring
+            .keyring()
             .present()
             .into_iter()
             .map(|key| key.account())
@@ -154,7 +239,7 @@ impl Daemon {
         let problem = if settings.enabled {
             sync::validate(&settings)
                 .err()
-                .or_else(|| sync::validate_secrets(&settings, &self.sync.keyring).err())
+                .or_else(|| sync::validate_secrets(&settings, &self.sync.keyring()).err())
                 .map(|error| error.to_string())
         } else {
             None
@@ -198,8 +283,13 @@ impl Daemon {
             "enabled": settings.enabled,
             "rclone": rclone,
             "keyring": {
-                "backend": self.sync.keyring.describe(),
-                "ephemeral": self.sync.keyring.is_ephemeral(),
+                "backend": self.sync.keyring().describe(),
+                "ephemeral": self.sync.keyring().is_ephemeral(),
+                // Which store, and whether it still needs a password. The UI
+                // needs both to offer "unlock" instead of "enter credentials".
+                "store": self.sync.keyring().kind(),
+                "secrets_file": self.sync.secrets_path().display().to_string(),
+                "min_master_password": crate::secrets::encrypted::MIN_MASTER_PASSWORD,
             },
             // Which entries exist — never what they contain.
             "secrets": secrets,
@@ -218,7 +308,7 @@ impl Daemon {
         &self,
         patch: SettingsPatch,
     ) -> Result<Value, String> {
-        let keyring = self.sync.keyring.clone();
+        let keyring = self.sync.keyring();
         self.mutate_config(|config| {
             let before = config.sync.clone();
             let mut candidate = before.clone();
@@ -290,11 +380,11 @@ impl Daemon {
 
         if key_id.is_empty() && app_key.is_empty() {
             self.sync
-                .keyring
+                .keyring()
                 .clear(SecretKey::B2KeyId)
                 .map_err(|e| e.to_string())?;
             self.sync
-                .keyring
+                .keyring()
                 .clear(SecretKey::B2AppKey)
                 .map_err(|e| e.to_string())?;
             return Ok(json!({ "cleared": true }));
@@ -305,11 +395,11 @@ impl Daemon {
         }
 
         self.sync
-            .keyring
+            .keyring()
             .set(SecretKey::B2KeyId, key_id)
             .map_err(|e| e.to_string())?;
         self.sync
-            .keyring
+            .keyring()
             .set(SecretKey::B2AppKey, app_key)
             .map_err(|e| e.to_string())?;
         tracing::info!("B2 credentials stored in the keyring");
@@ -320,18 +410,21 @@ impl Daemon {
     pub(super) async fn rpc_sync_set_password(&self, password: Password) -> Result<Value, String> {
         if password.password.is_empty() {
             self.sync
-                .keyring
+                .keyring()
                 .clear(SecretKey::SyncPassword)
                 .map_err(|e| e.to_string())?;
             self.sync
-                .keyring
+                .keyring()
                 .clear(SecretKey::SyncPasswordObscured)
                 .map_err(|e| e.to_string())?;
             return Ok(json!({ "cleared": true }));
         }
 
         let settings = self.config.read().await.sync.clone();
-        let existing = matches!(self.sync.keyring.get(SecretKey::SyncPassword), Ok(Some(_)));
+        let existing = matches!(
+            self.sync.keyring().get(SecretKey::SyncPassword),
+            Ok(Some(_))
+        );
         if settings.encryption && existing && !password.force {
             return Err(
                 "加密已开启，改密码会让已经上传的存档无法解密。确认要改请再确认一次".to_string(),
@@ -346,11 +439,11 @@ impl Daemon {
             .map_err(|e| e.to_string())?;
 
         self.sync
-            .keyring
+            .keyring()
             .set(SecretKey::SyncPassword, &password.password)
             .map_err(|e| e.to_string())?;
         self.sync
-            .keyring
+            .keyring()
             .set(SecretKey::SyncPasswordObscured, &obscured)
             .map_err(|e| e.to_string())?;
 
@@ -361,6 +454,87 @@ impl Daemon {
             // back later without kotori.
             "hint": crate::secrets::lookup_hint(SecretKey::SyncPassword),
         }))
+    }
+
+    /// Unlock the master-password file with the password the user just typed.
+    pub(super) fn rpc_sync_unlock(&self, password: Password) -> Result<Value, String> {
+        let keyring = self.sync.keyring();
+        let Some(file) = keyring.encrypted_store() else {
+            return Err("当前不需要解锁（凭据存在系统密钥环或内存里）".to_string());
+        };
+        file.unlock(&password.password).map_err(|e| e.to_string())?;
+        tracing::info!("凭据文件已解锁");
+        Ok(json!({ "unlocked": true, "store": keyring.kind() }))
+    }
+
+    /// Move whatever credentials we have into a master-password file.
+    ///
+    /// This is the escape hatch for machines with no OS keyring: without it,
+    /// every restart would ask for the B2 keys again, which is exactly what
+    /// makes unattended sync impossible on those systems.
+    pub(super) fn rpc_sync_set_master_password(&self, password: Password) -> Result<Value, String> {
+        let path = self.sync.secrets_path().to_path_buf();
+        let existing = EncryptedFile::new(&path);
+        if existing.exists() && !password.force {
+            return Err(
+                "已经有一个主密码凭据文件了；重设主密码会重新加密它（旧密码立即失效），确认请再点一次"
+                    .to_string(),
+            );
+        }
+
+        let current = self.sync.keyring();
+        let entries: Vec<(SecretKey, String)> = SecretKey::ALL
+            .into_iter()
+            .filter_map(|key| match current.get(key) {
+                Ok(Some(value)) => Some((key, value)),
+                _ => None,
+            })
+            .collect();
+
+        existing
+            .create(&password.password, &entries)
+            .map_err(|e| e.to_string())?;
+        // Adopt the very handle we just sealed: a fresh one would be locked.
+        self.sync.adopt(Keyring::from_encrypted(existing));
+
+        tracing::info!(
+            "凭据已存入主密码文件 {}（{} 条）",
+            path.display(),
+            entries.len()
+        );
+        Ok(json!({
+            "stored": true,
+            "path": path.display().to_string(),
+            "count": entries.len(),
+        }))
+    }
+
+    /// Delete the master-password file.
+    ///
+    /// The credentials in it go with it; on a machine with no keyring that
+    /// means they are gone. The UI asks twice.
+    pub(super) fn rpc_sync_clear_master_password(&self) -> Result<Value, String> {
+        let path = self.sync.secrets_path().to_path_buf();
+        let file = EncryptedFile::new(&path);
+        if !file.exists() {
+            return Err("没有主密码凭据文件".to_string());
+        }
+        file.remove().map_err(|e| e.to_string())?;
+
+        let (fresh, _) = Keyring::open_default(&path);
+        self.sync.adopt(fresh);
+        tracing::warn!("主密码凭据文件已删除: {}", path.display());
+        Ok(json!({ "removed": true }))
+    }
+
+    /// Forget the key until the password is entered again.
+    pub(super) fn rpc_sync_lock(&self) -> Result<Value, String> {
+        let keyring = self.sync.keyring();
+        let Some(file) = keyring.encrypted_store() else {
+            return Err("当前不是主密码凭据文件模式".to_string());
+        };
+        file.lock();
+        Ok(json!({ "locked": true, "store": keyring.kind() }))
     }
 
     /// Check credentials, bucket and write access.
@@ -586,6 +760,14 @@ mod tests {
             .unwrap_or_else(|e| panic!("bad reply {}: {e}", reply.body))
     }
 
+    /// The sync settings every test here starts from.
+    fn daemon_config() -> Config {
+        let mut config = Config::default();
+        config.sync.enabled = true;
+        config.sync.bucket = "bkt".to_string();
+        config
+    }
+
     fn daemon(keyring: Keyring) -> Daemon {
         let mut config = Config::default();
         config.sync.enabled = true;
@@ -809,6 +991,198 @@ mod tests {
         let value = credentials(r#"{"key_id":"","app_key":""}"#).await;
         assert_eq!(value["result"]["cleared"], true);
         assert!(keyring.present().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_master_password_seals_the_credentials_and_survives_a_restart() {
+        // The whole point of this backend: on a machine with no OS keyring the
+        // B2 keys must not have to be retyped after every reboot, or unattended
+        // sync is impossible there.
+        let dir = std::env::temp_dir().join(format!(
+            "kotori-master-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let path = dir.join("secrets.json");
+
+        // --- a machine with nothing but a session store ---------------------
+        let daemon = Daemon::with_keyring_at(daemon_config(), Keyring::memory(), path.clone());
+        call(
+            &daemon,
+            "sync.set_credentials",
+            r#"{"key_id":"005keyid","app_key":"K005appkey"}"#,
+        )
+        .await;
+
+        let value = call(
+            &daemon,
+            "sync.set_master_password",
+            r#"{"password":"correct horse battery","force":true}"#,
+        )
+        .await;
+        assert_eq!(value["result"]["stored"], true, "{value}");
+        assert_eq!(value["result"]["count"], 2);
+        assert!(path.is_file(), "凭据文件应当被创建");
+
+        // The plaintext must not be anywhere in the file.
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("K005appkey"), "{raw}");
+
+        // And the daemon is now using that file, unlocked.
+        let status = call(&daemon, "sync.status", "").await;
+        assert_eq!(
+            status["result"]["keyring"]["store"]["kind"],
+            "encrypted-file"
+        );
+        assert_eq!(status["result"]["keyring"]["store"]["locked"], false);
+        assert_eq!(status["result"]["ready"], true, "{status}");
+
+        // --- the same machine after a restart ------------------------------
+        let restarted = Daemon::with_master_file(daemon_config(), path.clone());
+        let status = call(&restarted, "sync.status", "").await;
+        assert_eq!(
+            status["result"]["keyring"]["store"]["kind"],
+            "encrypted-file"
+        );
+        assert_eq!(
+            status["result"]["keyring"]["store"]["locked"], true,
+            "重启后应当是锁定的"
+        );
+        assert!(
+            status["result"]["problem"]
+                .as_str()
+                .unwrap()
+                .contains("已锁定"),
+            "锁定时要说「已锁定」，不能说「还没有凭据」: {status}"
+        );
+        // The credentials are still there — just not readable yet.
+        assert!(status["result"]["secrets"].as_array().unwrap().is_empty());
+
+        // A wrong password changes nothing.
+        let value = call(&restarted, "sync.unlock", r#"{"password":"nope"}"#).await;
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("主密码"),
+            "{value}"
+        );
+        assert_eq!(
+            call(&restarted, "sync.status", "").await["result"]["keyring"]["store"]["locked"],
+            true
+        );
+
+        // The right one opens it, and the credentials come back.
+        let value = call(
+            &restarted,
+            "sync.unlock",
+            r#"{"password":"correct horse battery"}"#,
+        )
+        .await;
+        assert_eq!(value["result"]["unlocked"], true, "{value}");
+        let status = call(&restarted, "sync.status", "").await;
+        assert_eq!(status["result"]["keyring"]["store"]["locked"], false);
+        assert_eq!(status["result"]["secrets"].as_array().unwrap().len(), 2);
+        assert_eq!(status["result"]["ready"], true, "{status}");
+
+        // Locking again hides them without destroying anything.
+        let value = call(&restarted, "sync.lock", "").await;
+        assert_eq!(value["result"]["locked"], true, "{value}");
+        assert_eq!(
+            call(&restarted, "sync.status", "").await["result"]["keyring"]["store"]["locked"],
+            true
+        );
+        // ...and unlocking still works, so nothing was thrown away.
+        call(
+            &restarted,
+            "sync.unlock",
+            r#"{"password":"correct horse battery"}"#,
+        )
+        .await;
+        assert_eq!(
+            call(&restarted, "sync.status", "").await["result"]["secrets"]
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_short_master_password_is_refused_with_a_reason() {
+        let dir = std::env::temp_dir().join(format!(
+            "kotori-master-short-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let daemon =
+            Daemon::with_keyring_at(daemon_config(), Keyring::memory(), dir.join("secrets.json"));
+        call(
+            &daemon,
+            "sync.set_credentials",
+            r#"{"key_id":"k","app_key":"s"}"#,
+        )
+        .await;
+
+        let value = call(
+            &daemon,
+            "sync.set_master_password",
+            r#"{"password":"short","force":true}"#,
+        )
+        .await;
+        assert!(
+            value["error"]["message"].as_str().unwrap().contains("至少"),
+            "{value}"
+        );
+        assert!(!dir.join("secrets.json").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_explicitly_given_store_is_never_replaced_behind_the_caller() {
+        // Only the *fallback* is retried. A store handed in deliberately (tests,
+        // and any future backend) must stay in use, otherwise every test that
+        // seeds a fake keyring would silently start reading the real one.
+        let keyring = Keyring::memory();
+        keyring.set(SecretKey::B2KeyId, "seeded").unwrap();
+        let state = SyncState::with_keyring(keyring);
+
+        assert!(!state.retry_backend.load(Ordering::Relaxed));
+        for _ in 0..3 {
+            let current = state.keyring();
+            assert_eq!(
+                current.get(SecretKey::B2KeyId).unwrap().as_deref(),
+                Some("seeded")
+            );
+            assert!(current.is_ephemeral());
+        }
+    }
+
+    #[test]
+    fn a_session_store_can_hand_its_secrets_over() {
+        // What makes the fallback survivable: credentials typed while no
+        // keyring was running are carried into the real one once it appears.
+        let keyring = Keyring::memory();
+        assert!(keyring.snapshot().is_empty());
+
+        keyring.set(SecretKey::B2KeyId, "id").unwrap();
+        keyring.set(SecretKey::B2AppKey, "key").unwrap();
+        let mut carried = keyring.snapshot();
+        carried.sort_by_key(|(key, _)| key.account());
+
+        assert_eq!(carried.len(), 2);
+        assert_eq!(carried[0].0, SecretKey::B2AppKey);
+        assert_eq!(carried[0].1, "key");
+        assert_eq!(carried[1].0, SecretKey::B2KeyId);
+
+        // A real keyring has nothing to hand over.
+        assert!(
+            Keyring::with_tool("/usr/bin/secret-tool")
+                .snapshot()
+                .is_empty()
+        );
     }
 
     #[tokio::test]

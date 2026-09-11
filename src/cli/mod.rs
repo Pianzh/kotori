@@ -68,4 +68,10 @@ pub enum SyncCommand {
     },
     /// Check the credentials and the bucket
     Test,
+    /// Unlock the master-password credential file (prompts, no echo)
+    Unlock,
+    /// Store the credentials in a master-password file (prompts, no echo)
+    MasterPassword,
+    /// Forget the key until the master password is entered again
+    Lock,
 }

@@ -89,6 +89,14 @@ pub fn validate_secrets(
     settings: &SyncConfig,
     keyring: &crate::secrets::Keyring,
 ) -> Result<(), SyncError> {
+    // A locked store is not an empty one. Saying "no credentials yet" here
+    // would send the user to re-enter keys that are already on disk.
+    if let crate::secrets::StoreKind::EncryptedFile { locked: true, path } = keyring.kind() {
+        return Err(SyncError::Config(format!(
+            "凭据文件 {path} 已锁定，请先用主密码解锁"
+        )));
+    }
+
     let missing = |key: crate::secrets::SecretKey| !matches!(keyring.get(key), Ok(Some(_)));
 
     if missing(crate::secrets::SecretKey::B2KeyId) || missing(crate::secrets::SecretKey::B2AppKey) {

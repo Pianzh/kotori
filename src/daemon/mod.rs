@@ -46,6 +46,22 @@ impl Daemon {
         Self::assemble(config, SyncState::with_keyring(keyring))
     }
 
+    /// A daemon with a session store and a chosen credential-file path.
+    #[cfg(test)]
+    pub fn with_keyring_at(
+        config: Config,
+        keyring: crate::secrets::Keyring,
+        secrets_path: PathBuf,
+    ) -> Self {
+        Self::assemble(config, SyncState::with_keyring_at(keyring, secrets_path))
+    }
+
+    /// A daemon that finds an existing master-password file (a restart).
+    #[cfg(test)]
+    pub fn with_master_file(config: Config, secrets_path: PathBuf) -> Self {
+        Self::assemble(config, SyncState::from_master_file(secrets_path))
+    }
+
     fn assemble(config: Config, sync: SyncState) -> Self {
         Self {
             config: Arc::new(RwLock::new(config)),
@@ -311,6 +327,24 @@ impl Daemon {
                     Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
                 }
             }
+            "sync.unlock" => {
+                match serde_json::from_value::<sync_rpc::Password>(Value::Object(
+                    req.params.clone().unwrap_or_default(),
+                )) {
+                    Ok(password) => respond(id, self.rpc_sync_unlock(password)),
+                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
+                }
+            }
+            "sync.set_master_password" => {
+                match serde_json::from_value::<sync_rpc::Password>(Value::Object(
+                    req.params.clone().unwrap_or_default(),
+                )) {
+                    Ok(password) => respond(id, self.rpc_sync_set_master_password(password)),
+                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
+                }
+            }
+            "sync.clear_master_password" => respond(id, self.rpc_sync_clear_master_password()),
+            "sync.lock" => respond(id, self.rpc_sync_lock()),
             "sync.test" => respond(id, self.rpc_sync_test().await),
             "sync.now" => {
                 let game_id = req

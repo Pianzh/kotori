@@ -22,3 +22,6 @@ kotori.sock
 .env.*
 credentials*.json
 *kopia-password*
+
+# 沙箱里构建用的独立 cargo 缓存（~/.cargo 只读）
+.cargo-home/

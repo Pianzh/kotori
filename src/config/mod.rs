@@ -459,6 +459,21 @@ pub fn config_path() -> PathBuf {
         .join("config.toml")
 }
 
+/// Path of the master-password credential file.
+///
+/// It lives next to the config rather than in the data directory because it is
+/// configuration-shaped: one per machine, not per dataset. `KOTORI_SECRETS_FILE`
+/// overrides it (tests rely on that).
+pub fn secrets_path() -> PathBuf {
+    if let Some(p) = std::env::var_os("KOTORI_SECRETS_FILE") {
+        return PathBuf::from(p);
+    }
+    config_path()
+        .parent()
+        .map(|dir| dir.join("secrets.json"))
+        .unwrap_or_else(|| PathBuf::from("secrets.json"))
+}
+
 /// Data directory (`~/.local/share/kotori`). `KOTORI_DATA_DIR` overrides it.
 pub fn data_dir() -> PathBuf {
     if let Some(p) = std::env::var_os("KOTORI_DATA_DIR") {

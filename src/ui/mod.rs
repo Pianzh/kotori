@@ -87,6 +87,12 @@ pub struct SyncStatus {
     pub rclone: Option<String>,
     pub keyring: String,
     pub ephemeral: bool,
+    /// `system` | `encrypted-file` | `session-only`.
+    pub store_kind: String,
+    /// Only meaningful for `encrypted-file`.
+    pub store_locked: bool,
+    pub store_path: String,
+    pub min_master_password: usize,
     pub secrets: Vec<String>,
     pub ready: bool,
     pub problem: Option<String>,
@@ -121,6 +127,8 @@ struct SyncForm {
     app_key: String,
     password: String,
     password_again: String,
+    /// Master password for the credential file (unlock, or set one up).
+    master_password: String,
     /// An encryption change needs one more click: it decides whether existing
     /// data in the bucket can still be read.
     confirm_encryption: Option<bool>,
@@ -342,6 +350,11 @@ pub enum Message {
     SyncPasswordSaved(Result<(), String>),
     SyncTest,
     SyncTested(Result<String, String>),
+    SyncMasterPasswordChanged(String),
+    SyncUnlock,
+    SyncUnlocked(Result<(), String>),
+    SyncSetMasterPassword,
+    SyncMasterSaved(Result<String, String>),
     SyncNow(Option<String>),
     SyncNowDone(Result<String, String>),
     SyncRestoreRequested(String, Option<String>),
@@ -936,6 +949,63 @@ impl App {
                 });
                 Task::none()
             }
+            Message::SyncMasterPasswordChanged(value) => {
+                self.sync_form.master_password = value;
+                Task::none()
+            }
+            Message::SyncUnlock => {
+                let password = self.sync_form.master_password.clone();
+                if password.is_empty() {
+                    self.sync_form.msg = Some("请先输入主密码".to_string());
+                    return Task::none();
+                }
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { unlock_credentials(&socket, &password).await },
+                    Message::SyncUnlocked,
+                )
+            }
+            Message::SyncUnlocked(result) => {
+                self.sync_form.busy = false;
+                match result {
+                    Ok(()) => {
+                        self.sync_form.master_password.clear();
+                        self.sync_form.msg = Some("已解锁".to_string());
+                    }
+                    Err(e) => self.sync_form.msg = Some(e),
+                }
+                self.reload_sync()
+            }
+            Message::SyncSetMasterPassword => {
+                let password = self.sync_form.master_password.clone();
+                if password.chars().count() < self.min_master_password() {
+                    self.sync_form.msg = Some(format!(
+                        "主密码至少要 {} 个字符",
+                        self.min_master_password()
+                    ));
+                    return Task::none();
+                }
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { set_master_password(&socket, &password).await },
+                    Message::SyncMasterSaved,
+                )
+            }
+            Message::SyncMasterSaved(result) => {
+                self.sync_form.busy = false;
+                match result {
+                    Ok(path) => {
+                        self.sync_form.master_password.clear();
+                        self.sync_form.msg = Some(format!("凭据已加密保存到 {path}"));
+                    }
+                    Err(e) => self.sync_form.msg = Some(e),
+                }
+                self.reload_sync()
+            }
             Message::SyncNow(game_id) => {
                 self.sync_form.busy = true;
                 self.sync_form.msg = Some("正在同步…".to_string());
@@ -1022,6 +1092,16 @@ impl App {
                 Task::none()
             }
         }
+    }
+
+    /// Minimum master password length as reported by the daemon (with a sane
+    /// fallback so the form is usable before the first status arrives).
+    fn min_master_password(&self) -> usize {
+        self.sync_status
+            .as_ref()
+            .map(|status| status.min_master_password)
+            .filter(|minimum| *minimum > 0)
+            .unwrap_or(8)
     }
 
     /// Encryption as last reported by the daemon, used to decide whether a save
@@ -1767,10 +1847,13 @@ impl App {
                 );
                 if status.ephemeral {
                     state = state.push(
-                        text("⚠ 这台机器上没有可用的系统密钥环，密码只保存在内存里，重启后需要重新输入。")
+                        text("⚠ 本机没有运行中的系统密钥环，填进去的凭据只留在内存里，重启后要重新输入。")
                             .size(11)
                             .color(warn),
                     );
+                    // The platform-specific advice lives in one place
+                    // (`secrets::keyring_hint`); the UI only relays it.
+                    state = state.push(text(crate::secrets::keyring_hint()).size(11).color(dim));
                 }
                 if let Some(problem) = &status.problem {
                     state = state.push(text(format!("待解决：{problem}")).size(11).color(warn));
@@ -1881,6 +1964,96 @@ impl App {
         );
 
         // --- credentials ---------------------------------------------------
+        // --- where the credentials live ------------------------------------
+        sections.push(horizontal_rule(1).into());
+        sections.push(text("凭据存储").size(13).font(ui_font()).into());
+        let store = status.map(|s| s.store_kind.as_str()).unwrap_or("");
+        sections.push(
+            text(status.map(|s| s.keyring.clone()).unwrap_or_default())
+                .size(11)
+                .color(dim)
+                .into(),
+        );
+
+        match store {
+            // A file on disk, sealed with a password only the user knows.
+            "encrypted-file" => {
+                if status.map(|s| s.store_locked).unwrap_or(false) {
+                    sections.push(
+                        text("凭据文件已锁定：输入主密码解锁（解锁后本次守护进程内一直有效）。")
+                            .size(11)
+                            .color(warn)
+                            .into(),
+                    );
+                    sections.push(
+                        row![
+                            text("主密码").size(13).width(120),
+                            text_input("凭据文件的主密码", &form.master_password)
+                                .on_input(Message::SyncMasterPasswordChanged)
+                                .secure(true)
+                                .padding([7, 10])
+                                .width(Length::Fill),
+                            button(text("解锁"))
+                                .padding([7, 16])
+                                .on_press_maybe((!form.busy).then_some(Message::SyncUnlock)),
+                        ]
+                        .spacing(8)
+                        .align_y(iced::Alignment::Center)
+                        .into(),
+                    );
+                } else {
+                    sections.push(text("✓ 已解锁").size(11).color(ok).into());
+                }
+            }
+            // Nothing on this machine can persist a secret: say so, explain how
+            // to fix the machine, and offer the way out that works anywhere.
+            "session-only" => {
+                sections.push(
+                    text("⚠ 本机没有运行中的密钥环，凭据只留在内存里，重启后要重新输入。")
+                        .size(11)
+                        .color(warn)
+                        .into(),
+                );
+                sections.push(
+                    text(crate::secrets::keyring_hint())
+                        .size(11)
+                        .color(dim)
+                        .into(),
+                );
+                sections.push(
+                    text(format!(
+                        "也可以在这里设一个主密码：凭据会用 Argon2id + ChaCha20-Poly1305 加密存到 {}，\
+                         之后每次开机只要输一次主密码。密码由你自己保管，我们不会存它。",
+                        status
+                            .map(|s| s.store_path.clone())
+                            .filter(|path| !path.is_empty())
+                            .unwrap_or_else(|| "凭据文件".to_string())
+                    ))
+                    .size(11)
+                    .color(dim)
+                    .into(),
+                );
+                let hint = format!("至少 {} 位，自己记得住就行", self.min_master_password());
+                sections.push(
+                    row![
+                        text("主密码").size(13).width(120),
+                        text_input(hint.as_str(), &form.master_password)
+                            .on_input(Message::SyncMasterPasswordChanged)
+                            .secure(true)
+                            .padding([7, 10])
+                            .width(Length::Fill),
+                        button(text("加密保存凭据"))
+                            .padding([7, 16])
+                            .on_press_maybe((!form.busy).then_some(Message::SyncSetMasterPassword)),
+                    ]
+                    .spacing(8)
+                    .align_y(iced::Alignment::Center)
+                    .into(),
+                );
+            }
+            _ => {}
+        }
+
         sections.push(horizontal_rule(1).into());
         sections.push(text("B2 凭据").size(13).font(ui_font()).into());
         sections.push(
@@ -2266,6 +2439,27 @@ fn parse_sync_status(value: &Value) -> Result<SyncStatus, String> {
             .get("keyring")
             .map(|keyring| str_field(keyring, "backend"))
             .unwrap_or_default(),
+        store_kind: value
+            .get("keyring")
+            .and_then(|keyring| keyring.get("store"))
+            .map(|store| str_field(store, "kind"))
+            .unwrap_or_default(),
+        store_locked: value
+            .get("keyring")
+            .and_then(|keyring| keyring.get("store"))
+            .and_then(|store| store.get("locked"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        store_path: value
+            .get("keyring")
+            .and_then(|keyring| keyring.get("store"))
+            .map(|store| str_field(store, "path"))
+            .unwrap_or_default(),
+        min_master_password: value
+            .get("keyring")
+            .and_then(|keyring| keyring.get("min_master_password"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(8) as usize,
         ephemeral: value
             .get("keyring")
             .and_then(|v| v.get("ephemeral"))
@@ -2335,6 +2529,38 @@ async fn save_sync_password(socket: &Path, password: &str) -> Result<(), String>
     )
     .await?;
     Ok(())
+}
+
+/// Unlock the master-password file. The password goes over IPC to our own
+/// daemon and is never written anywhere.
+async fn unlock_credentials(socket: &Path, password: &str) -> Result<(), String> {
+    crate::rpc::call(
+        socket,
+        "sync.unlock",
+        Some(crate::rpc::params([(
+            "password",
+            Value::String(password.to_string()),
+        )])),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Seal the current credentials into a master-password file, and say where it
+/// landed.
+async fn set_master_password(socket: &Path, password: &str) -> Result<String, String> {
+    let value = crate::rpc::call(
+        socket,
+        "sync.set_master_password",
+        Some(crate::rpc::params([
+            ("password", Value::String(password.to_string())),
+            // The UI asked for the password in a dedicated field; that is the
+            // confirmation.
+            ("force", Value::Bool(true)),
+        ])),
+    )
+    .await?;
+    Ok(str_field(&value, "path"))
 }
 
 async fn sync_test(socket: &Path) -> Result<String, String> {
@@ -3025,7 +3251,10 @@ mod tests {
             "rclone": "/usr/bin/rclone",
             "keyring": {
                 "backend": "Secret Service (libsecret) (/usr/bin/secret-tool)",
-                "ephemeral": false
+                "ephemeral": false,
+                "store": { "kind": "system", "backend": "Secret Service (libsecret)" },
+                "secrets_file": "/home/user/.config/kotori/secrets.json",
+                "min_master_password": 8
             },
             "secrets": ["b2-key-id", "b2-app-key", "sync-password"],
             "ready": true,
@@ -3065,6 +3294,9 @@ mod tests {
         let status = sync_status_fixture();
         assert!(status.ready);
         assert!(!status.ephemeral);
+        assert_eq!(status.store_kind, "system");
+        assert!(!status.store_locked);
+        assert_eq!(status.min_master_password, 8);
         assert_eq!(status.remote, "kotori:kotori-saves/kotori");
         assert_eq!(status.rclone.as_deref(), Some("/usr/bin/rclone"));
         assert!(status.problem.is_none());
@@ -3281,6 +3513,43 @@ mod tests {
         app.sync_restore_pending = Some(("demo".into(), None));
         let _ = app.view();
         app.sync_restore_pending = None;
+
+        // A locked credential file: the page must offer "unlock", not
+        // "enter your B2 keys again".
+        app.sync_status = Some(SyncStatus {
+            store_kind: "encrypted-file".into(),
+            store_locked: true,
+            store_path: "/home/user/.config/kotori/secrets.json".into(),
+            keyring: "主密码加密文件 /home/user/.config/kotori/secrets.json（已锁定）".into(),
+            secrets: Vec::new(),
+            ready: false,
+            problem: Some("凭据文件已锁定，请先用主密码解锁".into()),
+            ..sync_status_fixture()
+        });
+        app.sync_form.master_password = "typed".into();
+        let _ = app.view();
+
+        // ...and once unlocked, no password field at all.
+        app.sync_status = Some(SyncStatus {
+            store_locked: false,
+            secrets: vec!["b2-key-id".into(), "b2-app-key".into()],
+            ready: true,
+            problem: None,
+            ..app.sync_status.clone().unwrap()
+        });
+        let _ = app.view();
+
+        // A machine with no keyring at all: explain, and offer the way out.
+        app.sync_status = Some(SyncStatus {
+            store_kind: "session-only".into(),
+            store_locked: false,
+            keyring: "内存（本机没有运行中的系统密钥环，重启后需要重新输入）".into(),
+            ephemeral: true,
+            ..sync_status_fixture()
+        });
+        let _ = app.view();
+        app.sync_status = Some(sync_status_fixture());
+        app.sync_form.master_password.clear();
 
         // A machine with no keyring, no rclone and an unresolvable save path.
         app.sync_status = Some(SyncStatus {
