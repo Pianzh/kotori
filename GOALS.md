@@ -70,6 +70,7 @@
 - **恢复用 `copy` 不用 `sync`**：坏备份也删不掉本地存档；恢复前会先把当前状态存成一个快照
 - 失败不阻断流程，仅提示
 - **Windows 端的主要交付内容**，同步模块平台无关（不依赖 gamescope/wine）
+- 配置步骤见 `docs/cloud-sync.md`（第一次用 B2 的人照做即可）
 
 ### 2.4 跨平台适配
 - Linux ARM64：主交付平台，内嵌 rclone + ludusavi 静态二进制
