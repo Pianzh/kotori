@@ -117,6 +117,11 @@ pub enum SyncField {
 #[derive(Debug, Clone, Default)]
 struct SyncForm {
     loaded: bool,
+    /// Set as soon as the user edits a *settings* field. `sync.status` replies
+    /// can land seconds after the request (the daemon probes the keyring on the
+    /// way), so a reply that was already in flight must never overwrite what
+    /// the user is in the middle of typing. Cleared once a save succeeds.
+    settings_dirty: bool,
     enabled: bool,
     endpoint: String,
     bucket: String,
@@ -138,21 +143,23 @@ struct SyncForm {
 
 impl SyncForm {
     /// Fill the form from what the daemon reports. Secrets are never echoed, so
-    /// those inputs always start empty.
+    /// their inputs are left alone here: they are only cleared when a save
+    /// actually consumed them (`SyncCredentialsSaved` / `SyncPasswordSaved`).
+    ///
+    /// Everything is skipped while `settings_dirty` is set — see the field.
     fn apply(&mut self, status: &SyncStatus, settings: &Value) {
         self.loaded = true;
+        self.confirm_encryption = None;
+        let _ = status;
+        if self.settings_dirty {
+            return;
+        }
         self.enabled = settings["enabled"].as_bool().unwrap_or(false);
         self.endpoint = str_field(settings, "endpoint");
         self.bucket = str_field(settings, "bucket");
         self.prefix = str_field(settings, "prefix");
         self.keep_versions = settings["keep_versions"].as_u64().unwrap_or(0).to_string();
         self.encryption = settings["encryption"].as_bool().unwrap_or(false);
-        self.confirm_encryption = None;
-        self.key_id.clear();
-        self.app_key.clear();
-        self.password.clear();
-        self.password_again.clear();
-        let _ = status;
     }
 
     /// The patch sent to `sync.set_settings`.
@@ -385,6 +392,9 @@ pub struct App {
     create_msg: Option<String>,
     /// Settings tab: wine prefix.
     wine_prefix_input: String,
+    /// Set when the user edits the prefix by hand, so a `wine.status` reply that
+    /// was already in flight cannot overwrite it.
+    wine_prefix_dirty: bool,
     wine_status: Option<WineStatus>,
     wine_msg: Option<String>,
     /// Automatic reconnect bookkeeping.
@@ -423,6 +433,7 @@ impl App {
                 creating: false,
                 create_msg: None,
                 wine_prefix_input: String::new(),
+                wine_prefix_dirty: false,
                 wine_status: None,
                 wine_msg: None,
                 retry_attempts: 0,
@@ -689,7 +700,11 @@ impl App {
             Message::WineStatusLoaded(result) => {
                 match result {
                     Ok(status) => {
-                        self.wine_prefix_input = status.configured.clone().unwrap_or_default();
+                        // Do not clobber an edit that is still in progress: this
+                        // reply can arrive a second after the user started typing.
+                        if !self.wine_prefix_dirty {
+                            self.wine_prefix_input = status.configured.clone().unwrap_or_default();
+                        }
                         self.wine_status = Some(status);
                     }
                     Err(e) => self.error = Some(e),
@@ -698,6 +713,7 @@ impl App {
             }
             Message::WinePrefixChanged(value) => {
                 self.wine_prefix_input = value;
+                self.wine_prefix_dirty = true;
                 Task::none()
             }
             Message::SaveWinePrefix => {
@@ -722,7 +738,10 @@ impl App {
                     Ok(()) => "已保存".to_string(),
                     Err(e) => format!("保存失败: {e}"),
                 });
-                if let Err(e) = &result {
+                if result.is_ok() {
+                    // The daemon holds it now, so a reload may refill the field.
+                    self.wine_prefix_dirty = false;
+                } else if let Err(e) = &result {
                     self.error = Some(e.clone());
                 }
                 Task::perform(
@@ -820,6 +839,7 @@ impl App {
             }
             Message::SyncToggleEnabled(value) => {
                 self.sync_form.enabled = value;
+                self.sync_form.settings_dirty = true;
                 Task::none()
             }
             // Flipping encryption decides whether data already in the bucket can
@@ -841,6 +861,7 @@ impl App {
             Message::SyncConfirmEncryption => {
                 if let Some(value) = self.sync_form.confirm_encryption.take() {
                     self.sync_form.encryption = value;
+                    self.sync_form.settings_dirty = true;
                     self.sync_form.msg = Some("已勾选，记得点「保存设置」".to_string());
                 }
                 Task::none()
@@ -861,6 +882,15 @@ impl App {
                     SyncField::AppKey => form.app_key = value,
                     SyncField::Password => form.password = value,
                     SyncField::PasswordAgain => form.password_again = value,
+                }
+                if matches!(
+                    field,
+                    SyncField::Endpoint
+                        | SyncField::Bucket
+                        | SyncField::Prefix
+                        | SyncField::KeepVersions
+                ) {
+                    form.settings_dirty = true;
                 }
                 Task::none()
             }
@@ -884,7 +914,11 @@ impl App {
                     Ok(()) => "已保存".to_string(),
                     Err(e) => format!("保存失败: {e}"),
                 });
-                if result.is_err() {
+                if result.is_ok() {
+                    // The daemon now holds exactly what the form holds, so a
+                    // later status reply may refill the form again.
+                    self.sync_form.settings_dirty = false;
+                } else {
                     self.sync_form.confirm_encryption = None;
                 }
                 self.reload_sync()
@@ -910,6 +944,11 @@ impl App {
                     Ok(()) => "凭据已存入系统密钥环（磁盘上没有明文）".to_string(),
                     Err(e) => format!("保存凭据失败: {e}"),
                 });
+                if result.is_ok() {
+                    // The daemon consumed them; never echo secrets back.
+                    self.sync_form.key_id.clear();
+                    self.sync_form.app_key.clear();
+                }
                 self.reload_sync()
             }
             Message::SyncSavePassword => {
@@ -933,6 +972,10 @@ impl App {
                     Ok(()) => "密码已存入系统密钥环（我们不会替你生成密码）".to_string(),
                     Err(e) => format!("保存密码失败: {e}"),
                 });
+                if result.is_ok() {
+                    self.sync_form.password.clear();
+                    self.sync_form.password_again.clear();
+                }
                 self.reload_sync()
             }
             Message::SyncTest => {
@@ -3348,6 +3391,97 @@ mod tests {
             patch.get("key_id").is_none() && patch.get("password").is_none(),
             "settings patches must carry no secrets: {patch}"
         );
+    }
+
+    #[test]
+    fn a_late_status_reply_never_eats_what_the_user_typed() {
+        let (mut app, _task) = App::new();
+        let status = sync_status_fixture();
+        // Opening the settings tab fires a `sync.status` request...
+        app.sync_form.apply(&status, &sync_payload()["settings"]);
+
+        // ...and while it is in flight the user pastes their keys by hand.
+        for message in [
+            Message::SyncField(SyncField::KeyId, "0046b5".into()),
+            Message::SyncField(SyncField::AppKey, "K004bk5u".into()),
+            Message::SyncField(SyncField::Bucket, "my-own-bucket".into()),
+            Message::SyncToggleEnabled(false),
+        ] {
+            let _ = app.update(message);
+        }
+
+        // The reply lands about a second later: it must not wipe the form.
+        let _ = app.update(Message::SyncStatusLoaded(Ok(status)));
+
+        assert_eq!(app.sync_form.key_id, "0046b5");
+        assert_eq!(app.sync_form.app_key, "K004bk5u");
+        assert_eq!(app.sync_form.bucket, "my-own-bucket");
+        assert!(!app.sync_form.enabled);
+        assert_eq!(app.sync_form.keep_versions, "0");
+    }
+
+    #[test]
+    fn saving_consumes_the_secrets_it_was_given_and_no_more() {
+        let (mut app, _task) = App::new();
+        let status = sync_status_fixture();
+        app.sync_form.apply(&status, &sync_payload()["settings"]);
+        for message in [
+            Message::SyncField(SyncField::KeyId, "0046b5".into()),
+            Message::SyncField(SyncField::AppKey, "K004bk5u".into()),
+            Message::SyncField(SyncField::Password, "hunter2hunter2".into()),
+            Message::SyncField(SyncField::Bucket, "my-own-bucket".into()),
+        ] {
+            let _ = app.update(message);
+        }
+
+        // A successful save echoes nothing back and clears only what it took.
+        let _ = app.update(Message::SyncCredentialsSaved(Ok(())));
+        assert!(app.sync_form.key_id.is_empty());
+        assert!(app.sync_form.app_key.is_empty());
+        assert_eq!(app.sync_form.password, "hunter2hunter2");
+
+        // Saving the sync password clears its pair, and leaves the (still
+        // unsaved) bucket edit alone even though a reload follows.
+        let _ = app.update(Message::SyncPasswordSaved(Ok(())));
+        assert!(app.sync_form.password.is_empty());
+        assert!(app.sync_form.password_again.is_empty());
+        assert_eq!(app.sync_form.bucket, "my-own-bucket");
+
+        // Once the settings are saved, the daemon is the truth again.
+        let _ = app.update(Message::SyncSettingsSaved(Ok(())));
+        assert!(!app.sync_form.settings_dirty);
+        app.sync_form.apply(&status, &sync_payload()["settings"]);
+        assert_eq!(app.sync_form.bucket, "kotori-saves");
+
+        // A failed save keeps the user's text so they can correct it.
+        let _ = app.update(Message::SyncField(SyncField::Bucket, "typo".into()));
+        let _ = app.update(Message::SyncSettingsSaved(Err("boom".into())));
+        app.sync_form.apply(&status, &sync_payload()["settings"]);
+        assert_eq!(app.sync_form.bucket, "typo");
+    }
+
+    #[test]
+    fn a_late_wine_status_reply_does_not_clobber_a_typed_prefix() {
+        let (mut app, _task) = App::new();
+        let _ = app.update(Message::WinePrefixChanged("/prefixes/mine".into()));
+        let _ = app.update(Message::WineStatusLoaded(Ok(WineStatus {
+            configured: Some("/home/user/.wine".into()),
+            default_prefix: "/home/user/.wine".into(),
+            environment: None,
+            detected: vec!["/home/user/.wine".into()],
+        })));
+        assert_eq!(app.wine_prefix_input, "/prefixes/mine");
+
+        // Once saved, the daemon's answer may fill the field again.
+        let _ = app.update(Message::WinePrefixSaved(Ok(())));
+        let _ = app.update(Message::WineStatusLoaded(Ok(WineStatus {
+            configured: Some("/prefixes/mine".into()),
+            default_prefix: "/prefixes/mine".into(),
+            environment: None,
+            detected: vec![],
+        })));
+        assert_eq!(app.wine_prefix_input, "/prefixes/mine");
+        assert!(!app.wine_prefix_dirty);
     }
 
     #[test]
