@@ -14,9 +14,9 @@
 //! This module builds and parses rclone invocations; it does not depend on
 //! rclone being installed, which keeps it unit-testable.
 
-use std::path::Path;
+use std::path::PathBuf;
 
-use crate::config::SyncConfig;
+use crate::config::{Config, GameConfig, SyncConfig};
 
 /// Remote name synthesised through rclone's environment configuration.
 pub const REMOTE: &str = "kotori";
@@ -35,6 +35,8 @@ pub enum SyncError {
     #[error("rclone 执行失败: {0}")]
     Command(String),
 }
+
+pub mod runner;
 
 /// Where version snapshots live, relative to the configured prefix.
 pub const VERSIONS_DIR: &str = "versions";
@@ -158,23 +160,59 @@ pub fn save_key(save: &crate::config::SavePath) -> String {
     format!("{kind}-{short}")
 }
 
-/// Timestamp used for a version snapshot directory. Lexicographic order equals
-/// chronological order, which makes pruning a simple sort.
+/// Timestamp used for a version snapshot directory.
+///
+/// The first 16 characters are second-precision UTC, so lexicographic order
+/// equals chronological order and pruning stays a simple sort. The suffix is
+/// random and is what makes the name **unique**: two uploads inside the same
+/// second (a game exiting while the user hits "sync now", or the safety
+/// snapshot a restore takes) would otherwise share a directory, and the later
+/// one would silently destroy the earlier snapshot.
 pub fn version_stamp(now: chrono::DateTime<chrono::Utc>) -> String {
-    now.format("%Y%m%dT%H%M%SZ").to_string()
+    let unique: String = uuid::Uuid::new_v4()
+        .simple()
+        .to_string()
+        .chars()
+        .take(8)
+        .collect();
+    format!("{}-{unique}", now.format("%Y%m%dT%H%M%SZ"))
+}
+
+/// How a transfer treats a file that already exists at the destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Merge {
+    /// Overwrite the destination, moving whatever it replaced into the version
+    /// snapshot. This is what an upload does.
+    Replace,
+    /// Never overwrite a **newer** file at the destination (`rclone --update`).
+    ///
+    /// This is what the automatic pre-launch pull uses: if an earlier upload
+    /// failed (no network, machine crashed) the local saves are newer than the
+    /// cloud, and a plain restore would happily throw away the progress the
+    /// user just made. With `--update` the newer local copy simply wins.
+    Newer,
 }
 
 /// Arguments for uploading local data into the cloud (`rclone copy`).
 ///
 /// `copy` never deletes anything on the destination, and it is also what makes
 /// a re-run after a failure cheap: only changed files move.
-pub fn copy_args(source: &str, destination: &str, backup_dir: Option<&str>) -> Vec<String> {
+pub fn copy_args(
+    source: &str,
+    destination: &str,
+    backup_dir: Option<&str>,
+    merge: Merge,
+) -> Vec<String> {
     let mut args = vec![
         "copy".to_string(),
         source.to_string(),
         destination.to_string(),
     ];
     args.push("--create-empty-src-dirs".to_string());
+    if merge == Merge::Newer {
+        args.push("--update".to_string());
+    }
     if let Some(backup_dir) = backup_dir {
         // Replaced files are moved aside instead of being overwritten, which is
         // what gives us version history without a repository format.
@@ -184,6 +222,17 @@ pub fn copy_args(source: &str, destination: &str, backup_dir: Option<&str>) -> V
         args.push(String::new());
     }
     args
+}
+
+/// Append the per-location ignore patterns.
+pub fn push_excludes(args: &mut Vec<String>, exclude: &[String]) {
+    for pattern in exclude {
+        let pattern = pattern.trim();
+        if !pattern.is_empty() {
+            args.push("--exclude".to_string());
+            args.push(pattern.to_string());
+        }
+    }
 }
 
 /// Arguments for downloading cloud data into a local directory.
@@ -233,10 +282,7 @@ pub fn prune_plan(versions: &[String], keep_versions: u32) -> Vec<String> {
         return Vec::new();
     }
 
-    let mut stamps: Vec<&String> = versions
-        .iter()
-        .filter(|name| looks_like_stamp(name))
-        .collect();
+    let mut stamps: Vec<&String> = versions.iter().filter(|name| is_snapshot(name)).collect();
     stamps.sort();
 
     let keep = keep_versions as usize;
@@ -249,14 +295,29 @@ pub fn prune_plan(versions: &[String], keep_versions: u32) -> Vec<String> {
         .collect()
 }
 
-/// `20260911T101500Z` — the only names pruning is allowed to touch.
-fn looks_like_stamp(name: &str) -> bool {
+/// `20260911T101500Z` or `20260911T101500Z-1a2b3c4d` — the only names pruning
+/// is allowed to touch.
+///
+/// Anything else in the bucket belongs to the user or to another tool, and is
+/// never deleted.
+pub fn is_snapshot(name: &str) -> bool {
     let bytes = name.as_bytes();
-    bytes.len() == 16
-        && bytes[8] == b'T'
-        && bytes[15] == b'Z'
-        && bytes[..8].iter().all(u8::is_ascii_digit)
-        && bytes[9..15].iter().all(u8::is_ascii_digit)
+    if bytes.len() < 16 {
+        return false;
+    }
+    let base = &bytes[..16];
+    if !(base[8] == b'T'
+        && base[15] == b'Z'
+        && base[..8].iter().all(u8::is_ascii_digit)
+        && base[9..15].iter().all(u8::is_ascii_digit))
+    {
+        return false;
+    }
+    let rest = &name[16..];
+    rest.is_empty()
+        || (rest.starts_with('-')
+            && rest.len() > 1
+            && rest[1..].chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
 /// Environment passed to every rclone invocation.
@@ -359,9 +420,53 @@ pub fn find_rclone() -> Option<std::path::PathBuf> {
     crate::util::executor::find_binary("rclone")
 }
 
-/// Human-readable upload plan, used by the UI and by `--dry-run` style tests.
-pub fn describe_upload(settings: &SyncConfig, game_id: &str, source: &Path) -> String {
-    format!("{} -> {}", source.display(), game_remote(settings, game_id))
+/// One configured save location, resolved to a real directory on this machine.
+///
+/// This is the bridge between the portable description stored in the config
+/// (`%APPDATA%\Game\save`, `savedata`, `/home/me/...`) and something rclone can
+/// be pointed at. The `key` is derived from the description, not the index, so
+/// reordering the list in the UI cannot scramble what is already in the bucket.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SaveTarget {
+    pub key: String,
+    /// The configured location, for user-facing messages.
+    pub configured: String,
+    /// Where it lives here and now.
+    pub local: PathBuf,
+    /// Glob patterns rclone must skip.
+    pub exclude: Vec<String>,
+}
+
+/// Resolve every save location of a game into a local directory.
+///
+/// Fails loudly rather than silently syncing the wrong thing: a location that
+/// cannot be resolved, or that resolves to the filesystem root (which would
+/// mean "upload the whole disk"), aborts the whole game.
+pub fn targets(game: &GameConfig, config: &Config) -> Result<Vec<SaveTarget>, String> {
+    let (root, _) = crate::wine::SaveRoot::for_platform(game, config);
+    let game_dir = game.effective_game_dir();
+
+    let mut targets = Vec::with_capacity(game.save_paths.len());
+    for save in &game.save_paths {
+        let local = crate::wine::resolve_save_path(&root, &game_dir, save)?;
+        if local.as_os_str().is_empty() {
+            return Err(format!("存档位置「{}」解析为空路径", save.path));
+        }
+        // `/` has no parent; nothing legitimate about syncing a whole disk.
+        if local.parent().is_none() {
+            return Err(format!(
+                "存档位置「{}」解析到了文件系统根目录，拒绝同步",
+                save.path
+            ));
+        }
+        targets.push(SaveTarget {
+            key: save_key(save),
+            configured: save.path.clone(),
+            local,
+            exclude: save.exclude.clone(),
+        });
+    }
+    Ok(targets)
 }
 
 #[cfg(test)]
@@ -447,6 +552,7 @@ mod tests {
             "/saves/3days",
             "kotori:prefix/games/3days/current/win-appdata",
             Some("kotori:prefix/games/3days/versions/20260911T101500Z"),
+            Merge::Replace,
         );
         assert_eq!(args[0], "copy", "never sync: it could delete remote data");
         assert!(args.contains(&"--backup-dir".to_string()));
@@ -555,9 +661,32 @@ mod tests {
                 .unwrap()
                 .with_timezone(&chrono::Utc),
         );
-        assert_eq!(first, "20260911T101500Z");
+        assert!(first.starts_with("20260911T101500Z"), "{first}");
         assert!(first < second, "lexicographic order must match time order");
-        assert!(looks_like_stamp(&first));
+        assert!(is_snapshot(&first), "{first}");
+        assert!(is_snapshot("20260911T101500Z"));
+        assert!(!is_snapshot("20260911T101500"), "no Z");
+        assert!(!is_snapshot("20260911T101500Z_extra"), "only -suffix");
+        assert!(!is_snapshot("20260911X101500Z"), "T separator is required");
+        assert!(!is_snapshot("not-a-stamp"));
+        assert!(!is_snapshot(""));
+    }
+
+    #[test]
+    fn two_uploads_in_the_same_second_do_not_share_a_snapshot() {
+        // Regression: snapshot directories used to be named to the second, so
+        // the second upload overwrote the first one's history — and a restore's
+        // safety snapshot could destroy the very snapshot being restored.
+        let now = chrono::DateTime::parse_from_rfc3339("2026-09-11T10:15:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let first = version_stamp(now);
+        let second = version_stamp(now);
+        assert_ne!(first, second);
+        for stamp in [first, second] {
+            assert!(is_snapshot(&stamp), "{stamp}");
+            assert!(stamp.starts_with("20260911T101500Z-"), "{stamp}");
+        }
     }
 
     #[test]
@@ -651,5 +780,78 @@ mod tests {
             .set(SecretKey::SyncPasswordObscured, "obscured")
             .unwrap();
         assert!(validate_secrets(&encrypted, &keyring).is_ok());
+    }
+
+    #[test]
+    fn save_locations_resolve_to_this_machines_directories() {
+        use crate::config::{GameConfig, SavePath, ScaleProfile};
+
+        let dir = std::env::temp_dir().join(format!(
+            "kotori-sync-targets-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let prefix = dir.join("prefix");
+        let user = prefix.join("drive_c/users/tester");
+        std::fs::create_dir_all(&user).unwrap();
+
+        let mut config = Config::default();
+        config.wine.prefix = Some(prefix.clone());
+        let game = GameConfig {
+            name: "demo".into(),
+            game_dir: PathBuf::from("/games/demo"),
+            exe_path: PathBuf::from("/games/demo/game.exe"),
+            launch_args: Vec::new(),
+            save_paths: vec![
+                SavePath::inferred("savedata"),
+                SavePath::inferred("%APPDATA%\\Demo\\save"),
+            ],
+            wine_prefix: None,
+            watch_only: false,
+            process_name: None,
+            scale_profile: ScaleProfile::default_for((1920, 1080)),
+            created_at: chrono::Utc::now(),
+        };
+
+        let resolved = targets(&game, &config).unwrap();
+        assert_eq!(resolved.len(), 2);
+        // The cloud key comes from the *description*, so it is the same on
+        // Windows and on wine (ADR-008) — and cannot be scrambled by reordering.
+        assert_eq!(resolved[0].key, "rel-savedata");
+        assert_eq!(resolved[0].local, PathBuf::from("/games/demo/savedata"));
+        assert_eq!(resolved[1].key, "win-appdata_demo_save");
+        assert_eq!(
+            resolved[1].local,
+            user.join("AppData/Roaming/Demo/save"),
+            "the token resolves inside the wine prefix"
+        );
+
+        // Without a prefix the token still resolves (to the default ~/.wine).
+        let bare = targets(&game, &Config::default()).unwrap();
+        assert!(bare[1].local.ends_with("AppData/Roaming/Demo/save"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn syncing_the_filesystem_root_is_refused() {
+        use crate::config::{GameConfig, SavePath, SavePathKind, ScaleProfile};
+
+        let game = GameConfig {
+            name: "demo".into(),
+            game_dir: PathBuf::from("/games/demo"),
+            exe_path: PathBuf::from("/games/demo/game.exe"),
+            launch_args: Vec::new(),
+            // A typo here would mean "upload the whole disk".
+            save_paths: vec![SavePath::new(SavePathKind::Absolute, "/")],
+            wine_prefix: None,
+            watch_only: false,
+            process_name: None,
+            scale_profile: ScaleProfile::default_for((1920, 1080)),
+            created_at: chrono::Utc::now(),
+        };
+
+        let error = targets(&game, &Config::default()).unwrap_err();
+        assert!(error.contains("根目录"), "{error}");
     }
 }

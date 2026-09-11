@@ -24,9 +24,11 @@
 //! Only the Linux backend (Secret Service, driven through `secret-tool`) is
 //! implemented; the Windows backend is part of the Windows port (AGENTS.md).
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 /// Attributes identifying kotori's entries in the keyring.
 pub const SERVICE: &str = "kotori";
@@ -34,7 +36,7 @@ pub const SERVICE: &str = "kotori";
 pub const TOOL_ENV: &str = "KOTORI_SECRET_TOOL";
 
 /// One stored secret.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SecretKey {
     /// Backblaze application key id.
     B2KeyId,
@@ -100,16 +102,40 @@ pub const fn backend_name() -> &'static str {
     }
 }
 
-/// Handle to the platform keyring.
+/// Where a [`Keyring`] keeps its entries.
+#[derive(Debug, Clone)]
+enum Backend {
+    /// The platform's own store, driven through `secret-tool`.
+    Tool(PathBuf),
+    /// No keyring on this machine: hold the secrets for this session only.
+    Memory(Arc<Mutex<HashMap<SecretKey, String>>>),
+}
+
+/// Handle to a secret store.
+///
+/// Normally this is the platform keyring. When the machine has none, the store
+/// degrades to [`Keyring::memory`] — **memory for this session only**, never a
+/// file: a credential written to disk in clear text is the one outcome the user
+/// ruled out. The trade-off is honest and visible: the settings page says the
+/// password has to be re-entered after a restart.
 #[derive(Debug, Clone)]
 pub struct Keyring {
-    tool: PathBuf,
+    backend: Backend,
 }
 
 impl Keyring {
     /// Use a specific `secret-tool` binary.
     pub fn with_tool(tool: impl Into<PathBuf>) -> Self {
-        Self { tool: tool.into() }
+        Self {
+            backend: Backend::Tool(tool.into()),
+        }
+    }
+
+    /// A store that lives only as long as this process.
+    pub fn memory() -> Self {
+        Self {
+            backend: Backend::Memory(Arc::new(Mutex::new(HashMap::new()))),
+        }
     }
 
     /// Detect the system keyring, or explain what is missing.
@@ -133,13 +159,39 @@ impl Keyring {
             .ok_or(SecretError::BackendMissing)
     }
 
-    /// Is a keyring usable right now?
-    pub fn available() -> bool {
-        Self::system().is_ok()
+    /// The system keyring, or the session-only store when there is none.
+    ///
+    /// The second element of the pair is `true` when the secrets will not
+    /// survive a restart, so callers can tell the user instead of pretending
+    /// everything is fine.
+    pub fn system_or_memory() -> (Self, bool) {
+        match Self::system() {
+            Ok(keyring) => (keyring, false),
+            Err(error) => {
+                tracing::warn!("{error}；本次会话的密码只保存在内存里");
+                (Self::memory(), true)
+            }
+        }
+    }
+
+    /// True when secrets are held in memory and lost on restart.
+    pub fn is_ephemeral(&self) -> bool {
+        matches!(self.backend, Backend::Memory(_))
+    }
+
+    /// Name of the store, for the settings page.
+    pub fn describe(&self) -> String {
+        match &self.backend {
+            Backend::Tool(tool) => format!("{} ({})", backend_name(), tool.display()),
+            Backend::Memory(_) => "内存（没有系统密钥环，重启后需重新输入）".to_string(),
+        }
     }
 
     fn run(&self, args: &[&str], stdin: Option<&str>) -> Result<std::process::Output, SecretError> {
-        let mut command = Command::new(&self.tool);
+        let Backend::Tool(tool) = &self.backend else {
+            return Err(SecretError::Command("内存存储不需要外部命令".to_string()));
+        };
+        let mut command = Command::new(tool);
         command
             .args(args)
             .stdin(if stdin.is_some() {
@@ -152,7 +204,7 @@ impl Keyring {
 
         let mut child = command
             .spawn()
-            .map_err(|e| SecretError::Command(format!("{}: {e}", self.tool.display())))?;
+            .map_err(|e| SecretError::Command(format!("{}: {e}", tool.display())))?;
 
         if let Some(value) = stdin {
             let mut pipe = child
@@ -171,6 +223,13 @@ impl Keyring {
 
     /// Read a secret. `Ok(None)` means "not stored".
     pub fn get(&self, key: SecretKey) -> Result<Option<String>, SecretError> {
+        if let Backend::Memory(store) = &self.backend {
+            let store = store
+                .lock()
+                .map_err(|_| SecretError::Command("内存存储已损坏".to_string()))?;
+            return Ok(store.get(&key).cloned());
+        }
+
         let output = self.run(
             &["lookup", "service", SERVICE, "account", key.account()],
             None,
@@ -189,6 +248,14 @@ impl Keyring {
     ///
     /// The value goes in over stdin so it never appears in `ps`.
     pub fn set(&self, key: SecretKey, value: &str) -> Result<(), SecretError> {
+        if let Backend::Memory(store) = &self.backend {
+            let mut store = store
+                .lock()
+                .map_err(|_| SecretError::Command("内存存储已损坏".to_string()))?;
+            store.insert(key, value.to_string());
+            return Ok(());
+        }
+
         let label = format!("--label={}", key.label());
         let output = self.run(
             &[
@@ -211,6 +278,14 @@ impl Keyring {
 
     /// Remove a secret. Succeeds when it was not there in the first place.
     pub fn clear(&self, key: SecretKey) -> Result<(), SecretError> {
+        if let Backend::Memory(store) = &self.backend {
+            let mut store = store
+                .lock()
+                .map_err(|_| SecretError::Command("内存存储已损坏".to_string()))?;
+            store.remove(&key);
+            return Ok(());
+        }
+
         let output = self.run(
             &["clear", "service", SERVICE, "account", key.account()],
             None,
@@ -258,7 +333,41 @@ pub fn lookup_hint(key: SecretKey) -> String {
 #[cfg(test)]
 pub(crate) mod testing {
     use super::{Keyring, SecretKey};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+
+    /// Argument every fake helper answers with an immediate, side-effect-free
+    /// exit. Used by [`write_executable`].
+    pub(crate) const WARMUP_FLAG: &str = "--kotori-warmup";
+
+    /// Write a helper script and prove the kernel will actually run it.
+    ///
+    /// Writing a file and exec'ing it are each safe on their own, but tests run
+    /// in parallel: another thread can fork between our write and our first
+    /// exec and inherit the still-open write handle, which makes the kernel
+    /// report `ETXTBSY` for that inode until the child execs. Retrying
+    /// converges, because once our own write handle is closed nothing can open
+    /// the file for writing again — and every fake script exits immediately on
+    /// [`WARMUP_FLAG`], so the warm-up has no side effects.
+    pub(crate) fn write_executable(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, body).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        for _ in 0..200 {
+            match std::process::Command::new(path).arg(WARMUP_FLAG).output() {
+                Ok(_) => return,
+                Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                }
+                Err(e) => panic!("cannot execute {}: {e}", path.display()),
+            }
+        }
+        panic!("{} stayed busy", path.display());
+    }
 
     pub(crate) struct FakeTool {
         dir: PathBuf,
@@ -280,6 +389,7 @@ pub(crate) mod testing {
             // secret from stdin, `lookup` prints it, `clear` removes it.
             let script = format!(
                 r#"#!/bin/sh
+[ "$1" = "{WARMUP_FLAG}" ] && exit 0
 dir='{dir}'
 name=''
 prev=''
@@ -297,12 +407,7 @@ esac
 "#,
                 dir = dir.display()
             );
-            std::fs::write(&tool, script).unwrap();
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-            }
+            write_executable(&tool, &script);
 
             Self { dir, tool }
         }
@@ -408,15 +513,49 @@ mod tests {
         // yields a usable handle or a clear "no keyring here" error — never a
         // silent fallback to plaintext.
         match Keyring::system() {
-            Ok(keyring) => assert!(keyring.tool.is_file()),
-            Err(error) => assert!(
-                matches!(
-                    error,
-                    SecretError::BackendMissing | SecretError::BackendUnsupported(_)
-                ),
-                "{error:?}"
-            ),
+            Ok(keyring) => assert!(!keyring.is_ephemeral()),
+            Err(error) => {
+                assert!(
+                    matches!(
+                        error,
+                        SecretError::BackendMissing | SecretError::BackendUnsupported(_)
+                    ),
+                    "{error:?}"
+                );
+                // ...and that the caller degrades to memory rather than disk.
+                let (fallback, ephemeral) = Keyring::system_or_memory();
+                assert!(ephemeral && fallback.is_ephemeral());
+            }
         }
+    }
+
+    #[test]
+    fn a_machine_without_a_keyring_keeps_secrets_in_memory_only() {
+        let keyring = Keyring::memory();
+        assert!(keyring.is_ephemeral());
+        assert!(keyring.get(SecretKey::SyncPassword).unwrap().is_none());
+
+        keyring.set(SecretKey::SyncPassword, "hunter2").unwrap();
+        assert_eq!(
+            keyring.get(SecretKey::SyncPassword).unwrap().as_deref(),
+            Some("hunter2")
+        );
+        assert_eq!(keyring.present(), vec![SecretKey::SyncPassword]);
+        // The memory store never shells out, so it cannot leak through a file.
+        assert!(keyring.run(&["lookup"], None).is_err());
+
+        keyring.clear(SecretKey::SyncPassword).unwrap();
+        assert!(keyring.present().is_empty());
+        // Clearing twice is not an error, exactly like the real keyring.
+        keyring.clear(SecretKey::SyncPassword).unwrap();
+    }
+
+    #[test]
+    fn the_store_describes_itself_honestly() {
+        assert!(Keyring::memory().describe().contains("内存"));
+        let keyring = Keyring::with_tool("/usr/bin/secret-tool");
+        assert!(keyring.describe().contains("/usr/bin/secret-tool"));
+        assert!(!keyring.describe().contains("内存"));
     }
 
     #[test]
