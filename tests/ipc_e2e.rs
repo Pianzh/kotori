@@ -18,6 +18,8 @@ struct Fixture {
     socket: PathBuf,
     log: PathBuf,
     child: Option<Child>,
+    /// Extra directory prepended to the daemon's PATH (fake gamescope/wine).
+    extra_path: Option<PathBuf>,
 }
 
 impl Fixture {
@@ -73,21 +75,29 @@ sharpness = 4
             socket,
             log,
             child: None,
+            extra_path: None,
         }
     }
 
     fn start(&mut self) {
         let stdout = std::fs::File::create(&self.log).unwrap();
         let stderr = stdout.try_clone().unwrap();
-        let child = Command::new(env!("CARGO_BIN_EXE_kotori"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_kotori"));
+        command
             .arg("daemon")
             .env("KOTORI_CONFIG", &self.config)
             .env("KOTORI_SOCKET", &self.socket)
+            // Keep display detection out of the test: the daemon must use this
+            // value for new games regardless of the machine it runs on.
+            .env("KOTORI_OUTPUT_RESOLUTION", "2560x1440")
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .expect("failed to spawn kotori daemon");
+            .stderr(Stdio::from(stderr));
+        if let Some(bin) = &self.extra_path {
+            let existing = std::env::var("PATH").unwrap_or_default();
+            command.env("PATH", format!("{}:{existing}", bin.display()));
+        }
+        let child = command.spawn().expect("failed to spawn kotori daemon");
         self.child = Some(child);
 
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -189,7 +199,8 @@ fn daemon_ipc_end_to_end() {
     assert_eq!(game["scale_profile"]["framerate_limit"], 60);
     assert_eq!(game["scale_profile"]["force_fullscreen"], false);
     assert_eq!(game["scale_profile"]["output_width"], 2560);
-    assert_eq!(game["save_paths"][0], "/games/demo/save");
+    assert_eq!(game["save_paths"][0]["path"], "/games/demo/save");
+    assert_eq!(game["save_paths"][0]["kind"], "absolute");
 
     // --- error paths -------------------------------------------------------
     assert_is_error(&fixture.rpc("does.not.exist", json!({})), -32601);
@@ -249,20 +260,18 @@ fn second_daemon_replaces_a_stale_socket_file() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-/// The daemon owns config mutation, so a wrong exe pick or a stale entry can be
-/// repaired over IPC instead of by hand-editing the TOML.
+/// The daemon owns config mutation, so the GUI adds, repairs, renames and
+/// removes entries over IPC instead of hand-editing the TOML.
 #[test]
-fn library_management_over_ipc() {
+fn library_entries_are_managed_over_ipc() {
     let mut fixture = Fixture::new("library");
     fixture.start();
 
-    // A directory holding one game, in the layout the scanner understands.
-    let games_dir = fixture.dir.join("games");
-    let game_dir = games_dir.join("NewGame");
+    // A game directory with an exe in it.
+    let game_dir = fixture.dir.join("NewGame");
     std::fs::create_dir_all(&game_dir).unwrap();
     let exe = game_dir.join("game.chs.exe");
     std::fs::write(&exe, b"").unwrap();
-    let dir_str = games_dir.to_string_lossy().to_string();
 
     let game_count = |fixture: &Fixture| {
         fixture.rpc("game.list", json!({}))["result"]["games"]
@@ -271,38 +280,24 @@ fn library_management_over_ipc() {
             .len()
     };
 
-    // --- game.scan is a preview: it must not write -------------------------
-    let response = fixture.rpc("game.scan", json!({ "directory": dir_str.clone() }));
-    let found = &response["result"]["games"][0];
-    assert_eq!(found["name"], "NewGame", "{response}");
-    assert_eq!(found["id"], "newgame");
-    assert_eq!(found["is_new"], true);
-    assert_eq!(game_count(&fixture), 1, "scan must not add anything");
-
-    // --- game.add ----------------------------------------------------------
-    let response = fixture.rpc("game.add", json!({ "directory": dir_str.clone() }));
-    assert_eq!(response["result"]["found"], 1, "{response}");
-    assert_eq!(response["result"]["added"][0]["id"], "newgame");
+    // --- add ---------------------------------------------------------------
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "New Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "new-game", "{response}");
     assert_eq!(game_count(&fixture), 2);
     assert!(
         std::fs::read_to_string(&fixture.config)
             .unwrap()
-            .contains("NewGame"),
-        "game.add must persist to disk"
+            .contains("New Game"),
+        "game.create must persist to disk"
     );
 
-    // Adding the same directory again is a no-op, and the second scan marks the
-    // entry as already known.
-    let response = fixture.rpc("game.add", json!({ "directory": dir_str.clone() }));
-    assert!(response["result"]["added"].as_array().unwrap().is_empty());
-    let response = fixture.rpc("game.scan", json!({ "directory": dir_str.clone() }));
-    assert_eq!(response["result"]["games"][0]["is_new"], false);
-    assert_eq!(game_count(&fixture), 2);
-
-    // --- game.update: the "wrong exe" repair path --------------------------
+    // --- rename + repair the exe path --------------------------------------
     let response = fixture.rpc(
         "game.update",
-        json!({ "id": "newgame", "name": "Renamed Game", "exe_path": exe }),
+        json!({ "id": "new-game", "name": "Renamed Game", "exe_path": exe }),
     );
     assert_eq!(response["result"]["success"], true, "{response}");
     let games = fixture.rpc("game.list", json!({}))["result"]["games"].clone();
@@ -310,7 +305,7 @@ fn library_management_over_ipc() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|g| g["id"] == "newgame")
+        .find(|g| g["id"] == "new-game")
         .unwrap()
         .clone();
     assert_eq!(renamed["name"], "Renamed Game");
@@ -319,7 +314,7 @@ fn library_management_over_ipc() {
     // A non-existent exe is rejected and leaves the stored value untouched.
     let response = fixture.rpc(
         "game.update",
-        json!({ "id": "newgame", "exe_path": "/nonexistent/game.exe" }),
+        json!({ "id": "new-game", "exe_path": "/nonexistent/game.exe" }),
     );
     assert!(
         response["error"]["message"]
@@ -333,23 +328,23 @@ fn library_management_over_ipc() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|g| g["id"] == "newgame")
+        .find(|g| g["id"] == "new-game")
         .unwrap()
         .clone();
     assert_eq!(unchanged["exe_path"], exe.to_string_lossy().as_ref());
 
     // Updating without any field, or an unknown id, is an error.
     assert_is_error(
-        &fixture.rpc("game.update", json!({ "id": "newgame" })),
-        -32000,
+        &fixture.rpc("game.update", json!({ "id": "new-game" })),
+        -32602,
     );
     assert_is_error(
         &fixture.rpc("game.update", json!({ "id": "ghost", "name": "x" })),
         -32000,
     );
 
-    // --- game.remove -------------------------------------------------------
-    let response = fixture.rpc("game.remove", json!({ "id": "newgame" }));
+    // --- remove ------------------------------------------------------------
+    let response = fixture.rpc("game.remove", json!({ "id": "new-game" }));
     assert_eq!(response["result"]["success"], true, "{response}");
     assert_eq!(game_count(&fixture), 1);
     assert!(
@@ -359,18 +354,8 @@ fn library_management_over_ipc() {
         "game.remove must persist to disk"
     );
     assert_is_error(
-        &fixture.rpc("game.remove", json!({ "id": "newgame" })),
+        &fixture.rpc("game.remove", json!({ "id": "new-game" })),
         -32000,
-    );
-
-    // --- invalid directory -------------------------------------------------
-    let response = fixture.rpc("game.scan", json!({ "directory": "/nope/nope" }));
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("目录不存在"),
-        "{response}"
     );
 }
 
@@ -456,11 +441,282 @@ fn scale_profile_is_patched_and_validated_over_ipc() {
         "game.update",
         json!({ "id": "demo", "profile": { "algorithm": "NotAnAlgorithm" } }),
     );
+    assert_eq!(response["error"]["code"], -32602, "{response}");
     assert!(
         response["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("缩放配置格式无效"),
+            .contains("NotAnAlgorithm"),
         "{response}"
     );
+}
+
+/// Manual add (no scanning) plus the wine/save-path settings it needs.
+#[test]
+fn manual_add_and_wine_settings_over_ipc() {
+    let mut fixture = Fixture::new("manual");
+    fixture.start();
+
+    // A game directory with an exe in it.
+    let game_dir = fixture.dir.join("MyGame");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    let exe = game_dir.join("MyGame.exe");
+    std::fs::write(&exe, b"").unwrap();
+
+    // --- game.create -------------------------------------------------------
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "My Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "my-game", "{response}");
+
+    let game = |fixture: &Fixture, id: &str| {
+        fixture.rpc("game.list", json!({}))["result"]["games"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|g| g["id"] == id)
+            .unwrap()
+            .clone()
+    };
+
+    let created = game(&fixture, "my-game");
+    assert_eq!(created["name"], "My Game");
+    assert_eq!(created["game_dir"], game_dir.to_string_lossy().as_ref());
+    assert_eq!(created["watch_only"], false);
+    assert!(created["save_paths"].as_array().unwrap().is_empty());
+    // New games inherit the detected output resolution (pinned by the fixture).
+    assert_eq!(created["scale_profile"]["output_width"], 2560);
+    assert_eq!(created["scale_profile"]["output_height"], 1440);
+
+    // Duplicates, a missing exe and a bad game dir are refused.
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "My Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("已存在同名"),
+        "{response}"
+    );
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Ghost", "exe_path": "/nope/ghost.exe" }),
+    );
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("可执行文件不存在"),
+        "{response}"
+    );
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Bad Dir", "exe_path": exe, "game_dir": "/nope/nope" }),
+    );
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("游戏目录不存在"),
+        "{response}"
+    );
+
+    // --- watch-only games are never launched by kotori ---------------------
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "my-game", "watch_only": true, "process_name": "MyGame.exe" }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+    let updated = game(&fixture, "my-game");
+    assert_eq!(updated["watch_only"], true);
+    assert_eq!(updated["process_name"], "MyGame.exe");
+
+    let response = fixture.rpc("game.launch", json!({ "id": "my-game" }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("仅观测"),
+        "{response}"
+    );
+
+    // --- save paths are validated by resolving them ------------------------
+    let response = fixture.rpc(
+        "game.update",
+        json!({
+            "id": "my-game",
+            "save_paths": [
+                "savedata",
+                { "kind": "windows", "path": "%APPDATA%\\MyGame", "exclude": ["*.log"] }
+            ]
+        }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+    let stored = game(&fixture, "my-game")["save_paths"].clone();
+    assert_eq!(stored[0]["kind"], "relative");
+    assert_eq!(stored[0]["path"], "savedata");
+    assert_eq!(stored[1]["kind"], "windows");
+    assert_eq!(stored[1]["exclude"][0], "*.log");
+
+    // An unknown token is rejected, and the stored paths stay as they were.
+    let response = fixture.rpc(
+        "game.update",
+        json!({
+            "id": "my-game",
+            "save_paths": [{ "kind": "windows", "path": "%NOPE%\\save" }]
+        }),
+    );
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("%NOPE%"),
+        "{response}"
+    );
+    assert_eq!(
+        game(&fixture, "my-game")["save_paths"][1]["path"],
+        "%APPDATA%\\MyGame"
+    );
+
+    // --- wine prefix: status, set, validate, clear -------------------------
+    let status = fixture.rpc("wine.status", json!({}));
+    assert_eq!(status["result"]["configured"], serde_json::Value::Null);
+    assert!(status["result"]["detected"].is_array());
+
+    let prefix = fixture.dir.join("prefix");
+    std::fs::create_dir_all(prefix.join("drive_c/users/tester")).unwrap();
+    let response = fixture.rpc("wine.set_prefix", json!({ "prefix": prefix }));
+    assert_eq!(
+        response["result"]["prefix"],
+        prefix.to_string_lossy().as_ref()
+    );
+
+    // A directory that is not a prefix is refused.
+    let response = fixture.rpc("wine.set_prefix", json!({ "prefix": fixture.dir }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("drive_c"),
+        "{response}"
+    );
+
+    // The prefix is persisted, and a game inherits it.
+    assert!(
+        std::fs::read_to_string(&fixture.config)
+            .unwrap()
+            .contains("prefix = "),
+        "wine prefix must be persisted"
+    );
+    let response = fixture.rpc("wine.status", json!({}));
+    assert_eq!(
+        response["result"]["configured"],
+        prefix.to_string_lossy().as_ref()
+    );
+
+    // `null` (or an empty string) means "auto-detect" again.
+    let response = fixture.rpc("wine.set_prefix", json!({ "prefix": null }));
+    assert_eq!(response["result"]["prefix"], serde_json::Value::Null);
+    assert_eq!(
+        fixture.rpc("wine.status", json!({}))["result"]["configured"],
+        serde_json::Value::Null
+    );
+}
+
+/// Launch plumbing: the game root is the working directory, the resolved wine
+/// prefix is exported, and the gamescope command carries the scaled profile.
+///
+/// Fake `gamescope` and `wine` scripts on PATH make this deterministic and
+/// window-free: the fake gamescope records how it was invoked and exits.
+#[test]
+fn launch_builds_the_expected_gamescope_command() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut fixture = Fixture::new("launch");
+    let bin = fixture.dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let probe = fixture.dir.join("probe.txt");
+
+    let script = format!(
+        "#!/bin/sh\n{{ echo \"argv:$*\"; echo \"cwd:$(pwd)\"; echo \"WINEPREFIX:${{WINEPREFIX:-}}\"; }} >> '{}'\nexit 0\n",
+        probe.display()
+    );
+    for name in ["gamescope", "wine"] {
+        let path = bin.join(name);
+        std::fs::write(&path, &script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    fixture.extra_path = Some(bin.clone());
+    fixture.start();
+
+    // A game directory, an executable, and a wine prefix that looks real.
+    let game_dir = fixture.dir.join("Game");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    let exe = game_dir.join("game.exe");
+    std::fs::write(&exe, b"").unwrap();
+    let prefix = fixture.dir.join("prefix");
+    std::fs::create_dir_all(prefix.join("drive_c/users/tester")).unwrap();
+
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Launch Test", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "launch-test", "{response}");
+
+    let response = fixture.rpc(
+        "game.update",
+        json!({
+            "id": "launch-test",
+            "launch_args": ["--windowed"],
+            "wine_prefix": prefix,
+        }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+
+    // The fake gamescope exits instantly, so the daemon reports the immediate
+    // exit — that error carries the command line it built.
+    let response = fixture.rpc("game.launch", json!({ "id": "launch-test" }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("gamescope")),
+        "expected an immediate-exit error, got {response}"
+    );
+
+    // Wait for the fake to have written its probe.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !probe.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let probed = std::fs::read_to_string(&probe).expect("fake gamescope never ran");
+
+    let field = |key: &str| {
+        probed
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .unwrap_or_else(|| panic!("{key} missing from probe:\n{probed}"))
+            .to_string()
+    };
+
+    // The game root is the working directory, and the prefix is exported.
+    assert_eq!(field("cwd:"), game_dir.to_string_lossy());
+    assert_eq!(field("WINEPREFIX:"), prefix.to_string_lossy());
+
+    // gamescope gets the scaled profile, then `--`, then wine + exe + args.
+    let argv = field("argv:");
+    for expected in [
+        "-w 1280 -h 720 -W 2560 -H 1440",
+        "-S fit -F fsr --sharpness 12",
+        "-- ",
+    ] {
+        assert!(argv.contains(expected), "missing {expected:?} in {argv:?}");
+    }
+    let (_, game_cmd) = argv.split_once(" -- ").expect("separator");
+    let parts: Vec<&str> = game_cmd.split_whitespace().collect();
+    assert!(parts[0].ends_with("bin/wine"), "wine first: {parts:?}");
+    assert_eq!(parts[1], exe.to_string_lossy());
+    assert_eq!(parts[2], "--windowed", "launch args are passed through");
 }

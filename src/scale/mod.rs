@@ -1,17 +1,30 @@
 pub mod niri;
 
+use std::path::Path;
+
 use crate::config::{MAX_SHARPNESS, ScaleAlgorithm, ScaleProfile};
+
+/// Everything needed to start one game.
+#[derive(Debug, Clone)]
+pub struct LaunchSpec<'a> {
+    /// Executable to run (through wine).
+    pub exe: &'a str,
+    /// Extra arguments for that executable.
+    pub args: &'a [String],
+    /// Working directory — the game root, so the game finds its own assets and
+    /// relative save paths line up.
+    pub game_dir: &'a Path,
+    /// Wine prefix to run under, when one could be resolved.
+    pub wine_prefix: Option<&'a Path>,
+    /// Scaling to apply to this launch.
+    pub profile: &'a ScaleProfile,
+}
 
 /// ScaleEngine trait - core abstraction for scaling backends
 #[async_trait::async_trait]
 pub trait ScaleEngine: Send + Sync {
     /// Start a scaling session (gamescope + game)
-    async fn start_session(
-        &self,
-        game_exe: &str,
-        game_args: &[String],
-        profile: &ScaleProfile,
-    ) -> Result<ScaleSession, ScaleError>;
+    async fn start_session(&self, spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError>;
 
     /// Stop a scaling session
     async fn stop_session(&self, session: &ScaleSession) -> Result<(), ScaleError>;
@@ -65,6 +78,9 @@ pub enum ScaleError {
 
     #[error("gamescope failed to start: {0}")]
     GamescopeStartFailed(String),
+
+    #[error("wine not found")]
+    WineNotFound,
 
     #[error("session not found: {0}")]
     SessionNotFound(String),

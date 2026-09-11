@@ -2,14 +2,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, RwLock};
 
-use crate::config::{self, Config, ScaleProfile};
+use crate::config::{self, Config};
 use crate::scale::niri::NiriScaleEngine;
-use crate::scale::{ScaleEngine, ScaleSession};
+use crate::scale::{LaunchSpec, ScaleEngine, ScaleSession};
 
 /// Daemon log file name inside [`config::log_dir`].
 pub const DAEMON_LOG: &str = "daemon.log";
@@ -138,38 +139,47 @@ impl Daemon {
                 shutdown: true,
             },
             "config.reload" => respond(id, self.rpc_reload_config().await),
+            "wine.status" => respond(id, self.rpc_wine_status().await),
+            "wine.set_prefix" => {
+                let value = match req.params.as_ref().and_then(|p| p.get("prefix")) {
+                    Some(v) => v.clone(),
+                    None => return rpc_err(id, -32602, "缺少参数: prefix".to_string()),
+                };
+                respond(id, self.rpc_set_wine_prefix(value).await)
+            }
+
             "game.list" => respond(id, self.rpc_game_list().await),
-            "game.scan" => match param_str(&req.params, "directory") {
-                Ok(dir) => respond(id, self.rpc_game_scan(dir).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "game.add" => match param_str(&req.params, "directory") {
-                Ok(dir) => respond(id, self.rpc_game_add(dir).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
             "game.remove" => match param_str(&req.params, "id") {
                 Ok(game_id) => respond(id, self.rpc_game_remove(game_id).await),
                 Err(e) => rpc_err(id, -32602, e),
             },
-            "game.update" => match param_str(&req.params, "id") {
-                Ok(game_id) => {
-                    let text = |key: &str| {
-                        req.params
-                            .as_ref()
-                            .and_then(|p| p.get(key))
-                            .and_then(|v| v.as_str())
-                            .map(str::to_string)
-                    };
-                    let name = text("name");
-                    let exe_path = text("exe_path");
-                    let profile = req.params.as_ref().and_then(|p| p.get("profile")).cloned();
-                    respond(
-                        id,
-                        self.rpc_game_update(game_id, name, exe_path, profile).await,
-                    )
+            "game.create" => {
+                match serde_json::from_value::<NewGame>(Value::Object(
+                    req.params.clone().unwrap_or_default(),
+                )) {
+                    Ok(new_game) => respond(id, self.rpc_game_create(new_game).await),
+                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
                 }
-                Err(e) => rpc_err(id, -32602, e),
-            },
+            }
+            "game.update" => {
+                let game_id = match param_str(&req.params, "id") {
+                    Ok(v) => v.to_string(),
+                    Err(e) => return rpc_err(id, -32602, e),
+                };
+                let mut patch_fields = req.params.clone().unwrap_or_default();
+                patch_fields.remove("id");
+                if patch_fields.is_empty() {
+                    return rpc_err(
+                        id,
+                        -32602,
+                        "game.update 需要至少一个要修改的字段".to_string(),
+                    );
+                }
+                match serde_json::from_value::<GamePatch>(Value::Object(patch_fields)) {
+                    Ok(patch) => respond(id, self.rpc_game_update(&game_id, patch).await),
+                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
+                }
+            }
             "game.launch" => match param_str(&req.params, "id") {
                 Ok(game_id) => respond(id, self.rpc_game_launch(game_id).await),
                 Err(e) => rpc_err(id, -32602, e),
@@ -227,6 +237,47 @@ impl Daemon {
         }))
     }
 
+    /// Which wine prefix would be used, and what was found on this machine.
+    async fn rpc_wine_status(&self) -> Result<Value, String> {
+        let config = self.config.read().await;
+        let detected = crate::wine::detect_prefixes(Path::new(""));
+        Ok(json!({
+            "configured": config.wine.prefix,
+            "default": crate::wine::default_prefix(),
+            "environment": std::env::var("WINEPREFIX").ok(),
+            "detected": detected,
+        }))
+    }
+
+    /// Set (or clear, with `null`) the machine-wide wine prefix.
+    async fn rpc_set_wine_prefix(&self, value: Value) -> Result<Value, String> {
+        let prefix: Option<PathBuf> = match value {
+            Value::Null => None,
+            Value::String(text) if text.trim().is_empty() => None,
+            Value::String(text) => {
+                let path = PathBuf::from(text.trim());
+                // Accept a prefix that exists (must look like one) or a path
+                // that does not exist yet (wine will populate it), but reject a
+                // directory that clearly is not a prefix.
+                if path.exists() && !path.join("drive_c").is_dir() {
+                    return Err(format!(
+                        "这不是一个 wine prefix（缺少 drive_c）: {}",
+                        path.display()
+                    ));
+                }
+                Some(path)
+            }
+            _ => return Err("prefix 必须是路径字符串或 null".to_string()),
+        };
+
+        self.mutate_config(|config| {
+            config.wine.prefix = prefix.clone();
+            tracing::info!("wine prefix set to {:?}", prefix);
+            Ok(json!({ "prefix": prefix }))
+        })
+        .await
+    }
+
     async fn rpc_reload_config(&self) -> Result<Value, String> {
         let new_config = crate::config::load().map_err(|e| e.to_string())?;
         *self.config.write().await = new_config;
@@ -269,57 +320,6 @@ impl Daemon {
         Ok(json!({ "games": games }))
     }
 
-    /// Preview a directory scan without touching the config.
-    async fn rpc_game_scan(&self, directory: &str) -> Result<Value, String> {
-        let dir = require_directory(directory)?;
-        let found = crate::game::scan(&dir).map_err(|e| e.to_string())?;
-
-        let config = self.config.read().await;
-        let games: Vec<Value> = found
-            .iter()
-            .map(|game| {
-                let id = crate::game::generate_game_id(&game.name);
-                json!({
-                    "id": id,
-                    "name": game.name,
-                    "exe_path": game.exe_path,
-                    "is_new": !config.games.contains_key(&id),
-                })
-            })
-            .collect();
-
-        Ok(json!({ "directory": dir, "games": games }))
-    }
-
-    /// Scan a directory and add the games that are not configured yet.
-    async fn rpc_game_add(&self, directory: &str) -> Result<Value, String> {
-        let dir = require_directory(directory)?;
-        let found = crate::game::scan(&dir).map_err(|e| e.to_string())?;
-        let found_count = found.len();
-
-        self.mutate_config(|config| {
-            let added = crate::game::add_games(config, found);
-            tracing::info!(
-                "game.add: {} new game(s) from {}",
-                added.len(),
-                dir.display()
-            );
-            Ok(json!({
-                "directory": dir,
-                "found": found_count,
-                "added": added
-                    .iter()
-                    .map(|(id, game)| json!({
-                        "id": id,
-                        "name": game.name,
-                        "exe_path": game.exe_path,
-                    }))
-                    .collect::<Vec<_>>(),
-            }))
-        })
-        .await
-    }
-
     async fn rpc_game_remove(&self, id: &str) -> Result<Value, String> {
         self.mutate_config(|config| {
             if !crate::game::remove_game(config, id) {
@@ -331,46 +331,139 @@ impl Daemon {
         .await
     }
 
-    /// Patch the mutable fields of a game: name, exe path, scale profile.
-    ///
-    /// This is the repair path for a wrong exe picked by the scanner, and the
-    /// only way the GUI persists a scale profile (the daemon is the single
-    /// writer of the config file).
-    async fn rpc_game_update(
-        &self,
-        id: &str,
-        name: Option<String>,
-        exe_path: Option<String>,
-        profile: Option<Value>,
-    ) -> Result<Value, String> {
-        if name.is_none() && exe_path.is_none() && profile.is_none() {
-            return Err("game.update 需要 name / exe_path / profile 之一".to_string());
+    /// Create a library entry from explicit user input (the manual add path —
+    /// no scanning heuristics involved).
+    async fn rpc_game_create(&self, new_game: NewGame) -> Result<Value, String> {
+        let name = new_game.name.trim().to_string();
+        if name.is_empty() {
+            return Err("名称不能为空".to_string());
+        }
+        if !new_game.exe_path.is_file() {
+            return Err(format!("可执行文件不存在: {}", new_game.exe_path.display()));
         }
 
+        let game_dir = match new_game.game_dir {
+            Some(dir) if !dir.as_os_str().is_empty() => {
+                if !dir.is_dir() {
+                    return Err(format!("游戏目录不存在: {}", dir.display()));
+                }
+                dir
+            }
+            // Default to where the exe lives.
+            _ => new_game
+                .exe_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from(".")),
+        };
+
+        let id = crate::game::generate_game_id(&name);
+        if id.is_empty() {
+            return Err("这个名称无法生成合法的游戏 ID，请换一个".to_string());
+        }
+
+        let output = crate::display::primary_resolution_or((
+            crate::config::FALLBACK_OUTPUT_WIDTH,
+            crate::config::FALLBACK_OUTPUT_HEIGHT,
+        ));
+
         self.mutate_config(|config| {
+            if config.games.contains_key(&id) {
+                return Err(format!("已存在同名游戏（ID: {id}）"));
+            }
+            config.games.insert(
+                id.clone(),
+                crate::config::GameConfig {
+                    name: name.clone(),
+                    game_dir: game_dir.clone(),
+                    exe_path: new_game.exe_path.clone(),
+                    launch_args: Vec::new(),
+                    save_paths: Vec::new(),
+                    wine_prefix: None,
+                    watch_only: false,
+                    process_name: None,
+                    scale_profile: crate::config::ScaleProfile::default_for(output),
+                    created_at: chrono::Utc::now(),
+                },
+            );
+            tracing::info!("game.create: {id}");
+            Ok(json!({ "id": id, "name": name }))
+        })
+        .await
+    }
+
+    /// Patch the mutable fields of a game. This is the only way a client
+    /// persists game settings (the daemon is the single writer of the config).
+    async fn rpc_game_update(&self, id: &str, patch: GamePatch) -> Result<Value, String> {
+        self.mutate_config(|config| {
+            // Save paths are validated by resolving them, which needs an
+            // immutable view of the game *and* the config; take that before
+            // mutating anything.
+            if let Some(save_paths) = &patch.save_paths {
+                let snapshot = config
+                    .games
+                    .get(id)
+                    .cloned()
+                    .ok_or_else(|| format!("配置中找不到游戏: {id}"))?;
+                let mut candidate = snapshot;
+                if let Some(dir) = &patch.game_dir {
+                    candidate.game_dir = dir.clone();
+                }
+                let (prefix, _) = crate::wine::resolve_prefix(&candidate, config);
+                let game_dir = candidate.effective_game_dir();
+                for save in save_paths {
+                    crate::wine::resolve_save_path(&prefix, &game_dir, save)?;
+                }
+            }
+
             let game = config
                 .games
                 .get_mut(id)
                 .ok_or_else(|| format!("配置中找不到游戏: {id}"))?;
 
-            if let Some(name) = &name {
+            if let Some(name) = &patch.name {
                 if name.trim().is_empty() {
                     return Err("名称不能为空".to_string());
                 }
                 game.name = name.clone();
             }
 
-            if let Some(exe) = &exe_path {
-                let path = PathBuf::from(exe);
-                if !path.is_file() {
-                    return Err(format!("可执行文件不存在: {}", path.display()));
+            if let Some(dir) = &patch.game_dir {
+                if !dir.is_dir() {
+                    return Err(format!("游戏目录不存在: {}", dir.display()));
                 }
-                game.exe_path = path;
+                game.game_dir = dir.clone();
             }
 
-            if let Some(profile) = &profile {
-                let mut parsed: ScaleProfile = serde_json::from_value(profile.clone())
-                    .map_err(|e| format!("缩放配置格式无效: {e}"))?;
+            if let Some(exe) = &patch.exe_path {
+                if !exe.is_file() {
+                    return Err(format!("可执行文件不存在: {}", exe.display()));
+                }
+                game.exe_path = exe.clone();
+            }
+
+            if let Some(args) = &patch.launch_args {
+                game.launch_args = args.clone();
+            }
+
+            if let Some(save_paths) = &patch.save_paths {
+                game.save_paths = save_paths.clone();
+            }
+
+            // `null` clears an optional field; an absent key leaves it alone.
+            if let Some(prefix) = &patch.wine_prefix {
+                game.wine_prefix = prefix.clone();
+            }
+            if let Some(process_name) = &patch.process_name {
+                game.process_name = process_name.clone().filter(|name| !name.trim().is_empty());
+            }
+
+            if let Some(watch_only) = patch.watch_only {
+                game.watch_only = watch_only;
+            }
+
+            if let Some(profile) = &patch.profile {
+                let mut parsed = profile.clone();
                 parsed.normalize();
                 parsed.validate()?;
                 game.scale_profile = parsed;
@@ -398,24 +491,53 @@ impl Daemon {
     }
 
     async fn rpc_game_launch(&self, id: &str) -> Result<Value, String> {
-        let game = {
+        let (game, wine_prefix, prefix_source) = {
             let config = self.config.read().await;
-            config.games.get(id).cloned()
+            let Some(game) = config.games.get(id).cloned() else {
+                return Err(format!("Game not found: {id}"));
+            };
+            let (prefix, source) = crate::wine::resolve_prefix(&game, &config);
+            (game, prefix, source)
         };
 
-        let Some(game) = game else {
-            return Err(format!("Game not found: {id}"));
+        if !game.is_launchable() {
+            return Err(format!(
+                "「{}」是「仅观测」模式，kotori 不负责启动它；请自行启动游戏，存档同步会依据进程 {} 判断运行状态",
+                game.name,
+                game.process_name.as_deref().unwrap_or("(未设置)")
+            ));
+        }
+
+        let game_dir = game.effective_game_dir();
+        tracing::info!(
+            "launching {} (cwd={} prefix={} ← {})",
+            game.name,
+            game_dir.display(),
+            wine_prefix.display(),
+            prefix_source.label()
+        );
+
+        let exe = game.exe_path.to_string_lossy().to_string();
+        let spec = LaunchSpec {
+            exe: &exe,
+            args: &game.launch_args,
+            game_dir: &game_dir,
+            wine_prefix: Some(&wine_prefix),
+            profile: &game.scale_profile,
         };
 
         let session = self
             .engine
-            .start_session(&game.exe_path.to_string_lossy(), &[], &game.scale_profile)
+            .start_session(&spec)
             .await
             .map_err(|e| e.to_string())?;
 
         Ok(json!({
             "session_id": session.session_id,
             "gamescope_pid": session.gamescope_pid,
+            "game_dir": game_dir,
+            "wine_prefix": wine_prefix,
+            "prefix_source": prefix_source.label(),
         }))
     }
 
@@ -589,13 +711,39 @@ fn param_str<'a>(
         .ok_or_else(|| format!("missing parameter: {key}"))
 }
 
-/// Validate a directory parameter before scanning it.
-fn require_directory(directory: &str) -> Result<PathBuf, String> {
-    let path = PathBuf::from(directory);
-    if !path.is_dir() {
-        return Err(format!("目录不存在或不是目录: {}", path.display()));
-    }
-    Ok(path)
+/// Fields a client may patch on an existing game. Absent keys are left alone;
+/// `null` clears an optional field.
+#[derive(Debug, Default, Deserialize)]
+struct GamePatch {
+    name: Option<String>,
+    game_dir: Option<PathBuf>,
+    exe_path: Option<PathBuf>,
+    launch_args: Option<Vec<String>>,
+    save_paths: Option<Vec<crate::config::SavePath>>,
+    #[serde(default, deserialize_with = "double_option")]
+    wine_prefix: Option<Option<PathBuf>>,
+    watch_only: Option<bool>,
+    #[serde(default, deserialize_with = "double_option")]
+    process_name: Option<Option<String>>,
+    profile: Option<crate::config::ScaleProfile>,
+}
+
+/// Explicit input for the manual "add game" path.
+#[derive(Debug, Deserialize)]
+struct NewGame {
+    name: String,
+    exe_path: PathBuf,
+    #[serde(default)]
+    game_dir: Option<PathBuf>,
+}
+
+/// Tell `null` apart from "key absent" for `Option<Option<T>>` fields.
+fn double_option<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
 }
 
 pub mod rpc {
@@ -682,10 +830,14 @@ mod tests {
             "demo".into(),
             crate::config::GameConfig {
                 name: "demo".into(),
+                game_dir: "/games/demo".into(),
                 exe_path: "/games/demo/game.exe".into(),
+                launch_args: Vec::new(),
                 save_paths: Vec::new(),
-                scale_profile: profile,
                 wine_prefix: None,
+                watch_only: false,
+                process_name: None,
+                scale_profile: profile,
                 created_at: chrono::Utc::now(),
             },
         );
@@ -711,10 +863,14 @@ mod tests {
                 name.into(),
                 crate::config::GameConfig {
                     name: name.into(),
+                    game_dir: "/g".into(),
                     exe_path: "/g/game.exe".into(),
+                    launch_args: Vec::new(),
                     save_paths: Vec::new(),
-                    scale_profile: crate::config::ScaleProfile::default_for((1920, 1080)),
                     wine_prefix: None,
+                    watch_only: false,
+                    process_name: None,
+                    scale_profile: crate::config::ScaleProfile::default_for((1920, 1080)),
                     created_at: chrono::Utc::now(),
                 },
             );

@@ -26,13 +26,13 @@ pub enum Tab {
     Settings,
 }
 
-/// A game found by a directory scan (preview only, not added yet).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScanCandidate {
-    pub id: String,
-    pub name: String,
-    pub exe: String,
-    pub is_new: bool,
+/// Wine prefix situation on this machine (settings page).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WineStatus {
+    pub configured: Option<String>,
+    pub default_prefix: String,
+    pub environment: Option<String>,
+    pub detected: Vec<String>,
 }
 
 /// Maximum number of automatic reconnect attempts before giving up (a manual
@@ -43,6 +43,7 @@ const MAX_AUTO_RETRIES: u32 = 5;
 pub struct UiGame {
     pub id: String,
     pub name: String,
+    pub game_dir: String,
     pub exe: String,
     /// Profile name as stored, so saving never silently renames it.
     pub profile_name: String,
@@ -69,9 +70,11 @@ struct Draft {
     game_id: String,
     game_name: String,
     profile_name: String,
-    /// Editable exe path, plus the stored value so an unchanged path is not
-    /// re-sent (the daemon rejects a path whose file is missing, e.g. when the
-    /// game lives on a drive that is not mounted right now).
+    /// Editable game root and exe path, plus their stored values so unchanged
+    /// fields are not re-sent (the daemon rejects a path that does not exist,
+    /// e.g. when the game lives on a drive that is not mounted right now).
+    game_dir: String,
+    game_dir_original: String,
     exe: String,
     exe_original: String,
     algo: String,
@@ -92,6 +95,8 @@ impl Draft {
             game_id: game.id.clone(),
             game_name: game.name.clone(),
             profile_name: game.profile_name.clone(),
+            game_dir: game.game_dir.clone(),
+            game_dir_original: game.game_dir.clone(),
             exe: game.exe.clone(),
             exe_original: game.exe.clone(),
             algo: if ScaleAlgorithm::ALL.contains(&game.algo.as_str()) {
@@ -117,6 +122,11 @@ impl Draft {
     fn exe_changed(&self) -> bool {
         self.exe.trim() != self.exe_original
     }
+
+    /// Has the user changed the game root?
+    fn game_dir_changed(&self) -> bool {
+        self.game_dir.trim() != self.game_dir_original
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -138,17 +148,23 @@ pub enum Message {
     FullscreenToggled(bool),
     FramerateChanged(String),
     ExePathChanged(String),
+    GameDirChanged(String),
     SaveProfile,
     ProfileSaved(Result<(), String>),
     DeleteRequested,
     DeleteCancelled,
     DeleteConfirmed,
     Deleted(Result<(), String>),
-    ScanDirChanged(String),
-    ScanRequested,
-    ScanFinished(Result<Vec<ScanCandidate>, String>),
-    AddRequested,
-    AddFinished(Result<String, String>),
+    NewNameChanged(String),
+    NewGameDirChanged(String),
+    NewExeChanged(String),
+    CreateRequested,
+    CreateFinished(Result<String, String>),
+    WinePrefixChanged(String),
+    SaveWinePrefix,
+    ClearWinePrefix,
+    WinePrefixSaved(Result<(), String>),
+    WineStatusLoaded(Result<WineStatus, String>),
 }
 
 pub struct App {
@@ -166,12 +182,16 @@ pub struct App {
     /// Library search query (matches name or exe path).
     search: String,
     confirm_delete: bool,
-    /// "Add games" tab state.
-    add_dir: String,
-    scan_results: Option<Vec<ScanCandidate>>,
-    scanning: bool,
-    adding: bool,
-    add_msg: Option<String>,
+    /// "Add game" tab state (manual entry — no scanning).
+    new_name: String,
+    new_game_dir: String,
+    new_exe: String,
+    creating: bool,
+    create_msg: Option<String>,
+    /// Settings tab: wine prefix.
+    wine_prefix_input: String,
+    wine_status: Option<WineStatus>,
+    wine_msg: Option<String>,
     /// Automatic reconnect bookkeeping.
     retry_attempts: u32,
 }
@@ -195,14 +215,23 @@ impl App {
                 saved_msg: None,
                 search: String::new(),
                 confirm_delete: false,
-                add_dir: String::new(),
-                scan_results: None,
-                scanning: false,
-                adding: false,
-                add_msg: None,
+                new_name: String::new(),
+                new_game_dir: String::new(),
+                new_exe: String::new(),
+                creating: false,
+                create_msg: None,
+                wine_prefix_input: String::new(),
+                wine_status: None,
+                wine_msg: None,
                 retry_attempts: 0,
             },
-            Task::perform(async { connect_and_load().await }, Message::GamesLoaded),
+            Task::batch([
+                Task::perform(async { connect_and_load().await }, Message::GamesLoaded),
+                Task::perform(
+                    async { load_wine_status().await },
+                    Message::WineStatusLoaded,
+                ),
+            ]),
         )
     }
 
@@ -214,6 +243,13 @@ impl App {
                 self.draft = None;
                 self.confirm_delete = false;
                 self.error = None;
+                if tab == Tab::Settings {
+                    // Re-read the prefix situation, it may have changed on disk.
+                    return Task::perform(
+                        async { load_wine_status().await },
+                        Message::WineStatusLoaded,
+                    );
+                }
                 Task::none()
             }
             Message::Refresh => {
@@ -380,72 +416,98 @@ impl App {
                 }
                 Task::none()
             }
-            Message::ScanDirChanged(dir) => {
-                self.add_dir = dir;
+            Message::NewNameChanged(value) => {
+                self.new_name = value;
                 Task::none()
             }
-            Message::ScanRequested => {
-                let dir = self.add_dir.trim().to_string();
-                if dir.is_empty() {
-                    self.add_msg = Some("请先填写要扫描的目录".to_string());
+            Message::NewGameDirChanged(value) => {
+                self.new_game_dir = value;
+                Task::none()
+            }
+            Message::NewExeChanged(value) => {
+                self.new_exe = value;
+                Task::none()
+            }
+            Message::CreateRequested => {
+                let name = self.new_name.trim().to_string();
+                let exe = self.new_exe.trim().to_string();
+                let game_dir = self.new_game_dir.trim().to_string();
+                if name.is_empty() || exe.is_empty() {
+                    self.create_msg = Some("游戏名和可执行文件都必须填写".to_string());
                     return Task::none();
                 }
-                self.scanning = true;
-                self.add_msg = None;
+                self.creating = true;
+                self.create_msg = None;
                 self.error = None;
                 let socket = self.daemon_socket.clone();
                 Task::perform(
-                    async move { scan_directory(&socket, &dir).await },
-                    Message::ScanFinished,
+                    async move { create_game(&socket, name, exe, game_dir).await },
+                    Message::CreateFinished,
                 )
             }
-            Message::ScanFinished(result) => {
-                self.scanning = false;
+            Message::CreateFinished(result) => {
+                self.creating = false;
                 match result {
-                    Ok(found) => {
-                        self.add_msg = Some(format!(
-                            "发现 {} 个游戏目录（其中 {} 个尚未添加）",
-                            found.len(),
-                            found.iter().filter(|c| c.is_new).count()
-                        ));
-                        self.scan_results = Some(found);
+                    Ok(id) => {
+                        self.create_msg = Some(format!("已添加（ID: {id}），可在游戏库里继续配置"));
+                        self.new_name.clear();
+                        self.new_game_dir.clear();
+                        self.new_exe.clear();
+                        return Task::perform(async { connect_and_load().await }, |r| {
+                            Message::GamesLoaded(r)
+                        });
                     }
                     Err(e) => self.error = Some(e),
                 }
                 Task::none()
             }
-            Message::AddRequested => {
-                let dir = self.add_dir.trim().to_string();
-                if dir.is_empty() {
-                    self.add_msg = Some("请先填写要扫描的目录".to_string());
-                    return Task::none();
-                }
-                self.adding = true;
-                self.add_msg = None;
-                self.error = None;
-                let socket = self.daemon_socket.clone();
-                Task::perform(
-                    async move { add_directory(&socket, &dir).await },
-                    Message::AddFinished,
-                )
-            }
-            Message::AddFinished(result) => {
-                self.adding = false;
+            Message::WineStatusLoaded(result) => {
                 match result {
-                    Ok(msg) => {
-                        self.add_msg = Some(msg);
-                        // Re-scan so the "new" badges and the library refresh.
-                        let dir = self.add_dir.trim().to_string();
-                        let socket = self.daemon_socket.clone();
-                        return Task::batch([
-                            Task::perform(
-                                async move { scan_directory(&socket, &dir).await },
-                                Message::ScanFinished,
-                            ),
-                            Task::perform(async { connect_and_load().await }, Message::GamesLoaded),
-                        ]);
+                    Ok(status) => {
+                        self.wine_prefix_input = status.configured.clone().unwrap_or_default();
+                        self.wine_status = Some(status);
                     }
                     Err(e) => self.error = Some(e),
+                }
+                Task::none()
+            }
+            Message::WinePrefixChanged(value) => {
+                self.wine_prefix_input = value;
+                Task::none()
+            }
+            Message::SaveWinePrefix => {
+                let prefix = self.wine_prefix_input.trim().to_string();
+                self.wine_msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { set_wine_prefix(&socket, Some(prefix)).await },
+                    Message::WinePrefixSaved,
+                )
+            }
+            Message::ClearWinePrefix => {
+                self.wine_msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { set_wine_prefix(&socket, None).await },
+                    Message::WinePrefixSaved,
+                )
+            }
+            Message::WinePrefixSaved(result) => {
+                self.wine_msg = Some(match &result {
+                    Ok(()) => "已保存".to_string(),
+                    Err(e) => format!("保存失败: {e}"),
+                });
+                if let Err(e) = &result {
+                    self.error = Some(e.clone());
+                }
+                Task::perform(
+                    async { load_wine_status().await },
+                    Message::WineStatusLoaded,
+                )
+            }
+            Message::GameDirChanged(value) => {
+                if let Some(draft) = &mut self.draft {
+                    draft.game_dir = value;
                 }
                 Task::none()
             }
@@ -666,51 +728,50 @@ impl App {
         }
     }
 
-    /// Directory scan / add page.
+    /// Manual add: name + game root + executable. No scanning, no guessing.
     fn add_view(&self) -> Element<'_, Message> {
-        let dir_input = text_input("例如 /run/media/<盘>/BTL", &self.add_dir)
-            .on_input(Message::ScanDirChanged)
-            .on_submit(Message::ScanRequested)
-            .padding([8, 10])
-            .width(Length::Fill);
-
-        let scan_btn = button(text(if self.scanning {
-            "扫描中…"
-        } else {
-            "扫描"
-        }))
-        .padding([8, 18])
-        .on_press(Message::ScanRequested);
-
-        let add_btn = button(text(if self.adding {
+        let create_btn = button(text(if self.creating {
             "添加中…"
         } else {
-            "添加新游戏"
+            "添加游戏"
         }))
-        .padding([8, 18])
-        .on_press(Message::AddRequested);
+        .padding([8, 20])
+        .on_press(Message::CreateRequested);
 
         let mut body = column![
             text("添加游戏").size(18).font(ui_font()),
             horizontal_rule(1),
-            text("填写「装着多款游戏子目录」的父目录（例如外置盘上的 BTL），先扫描预览，再一次性添加。已存在的游戏不会被覆盖。")
+            text("手动填写。游戏根目录是启动时的工作目录，也是存档相对路径的基准；留空则取可执行文件所在目录。")
                 .size(12)
                 .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
-            row![dir_input, scan_btn]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
+            labeled_input("游戏名", "例如 3days", &self.new_name, Message::NewNameChanged),
+            labeled_input(
+                "游戏根目录",
+                "/path/to/game",
+                &self.new_game_dir,
+                Message::NewGameDirChanged,
+            ),
+            labeled_input(
+                "可执行文件",
+                "/path/to/game.exe",
+                &self.new_exe,
+                Message::NewExeChanged,
+            ),
             {
-                let status: Element<'_, Message> = match &self.add_msg {
+                let status: Element<'_, Message> = match &self.create_msg {
                     Some(msg) => text(msg)
                         .size(12)
                         .color(Color::from_rgb8(0x9e, 0xda, 0xa5))
                         .into(),
                     None => iced::widget::Space::new(0, 0).into(),
                 };
-                row![add_btn, status]
+                row![create_btn, status]
                     .spacing(12)
                     .align_y(iced::Alignment::Center)
             },
+            text("添加后可在游戏库的详情页里继续配置缩放、Wine 目录与存档位置。")
+                .size(11)
+                .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
         ]
         .spacing(10);
 
@@ -722,65 +783,7 @@ impl App {
             );
         }
 
-        match &self.scan_results {
-            None => body.into(),
-            Some(found) if found.is_empty() => body
-                .push(
-                    text("该目录下没有发现可识别的游戏（需要「子目录里含 .exe」的结构）。")
-                        .size(13)
-                        .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
-                )
-                .into(),
-            Some(found) => scrollable(
-                body.push(
-                    column(
-                        found
-                            .iter()
-                            .map(|c| self.candidate_row(c))
-                            .collect::<Vec<_>>(),
-                    )
-                    .spacing(6),
-                ),
-            )
-            .into(),
-        }
-    }
-
-    fn candidate_row(&self, candidate: &ScanCandidate) -> Element<'_, Message> {
-        let badge = if candidate.is_new {
-            text("新")
-                .size(11)
-                .color(Color::from_rgb8(0x7a, 0xaa, 0x7f))
-        } else {
-            text("已存在")
-                .size(11)
-                .color(Color::from_rgb8(0x8a, 0x8a, 0x8a))
-        };
-
-        container(
-            row![
-                column![
-                    text(candidate.name.clone()).size(14).font(ui_font()),
-                    text(candidate.exe.clone())
-                        .size(11)
-                        .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
-                ]
-                .spacing(3)
-                .align_x(iced::Alignment::Start),
-                iced::widget::horizontal_space(),
-                badge,
-            ]
-            .align_y(iced::Alignment::Center)
-            .padding([10, 12])
-            .spacing(8),
-        )
-        .width(Length::Fill)
-        .style(|_theme: &Theme| iced::widget::container::Style {
-            background: Some(Color::from_rgb8(0x22, 0x27, 0x2e).into()),
-            border: iced::border::Border::default().rounded(6),
-            ..Default::default()
-        })
-        .into()
+        scrollable(body).into()
     }
 
     fn game_card(&self, game: &UiGame) -> Element<'_, Message> {
@@ -910,6 +913,17 @@ impl App {
         .spacing(8)
         .into();
 
+        let game_dir_row: Element<'_, Message> = row![
+            text("游戏根目录").size(13).width(120),
+            text_input("/path/to/game", &draft.game_dir)
+                .on_input(Message::GameDirChanged)
+                .padding([6, 8])
+                .width(Length::Fill),
+        ]
+        .align_y(iced::Alignment::Center)
+        .spacing(8)
+        .into();
+
         let exe_row: Element<'_, Message> = row![
             text("可执行文件").size(13).width(120),
             text_input("/path/to/game.exe", &draft.exe)
@@ -945,6 +959,7 @@ impl App {
                 .size(12)
                 .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
             horizontal_rule(1),
+            game_dir_row,
             exe_row,
             algo_row,
             sharpness_row,
@@ -1013,16 +1028,106 @@ impl App {
     }
 
     fn settings_view(&self) -> Element<'_, Message> {
-        column![
+        let gray = Color::from_rgb8(0x9e, 0x9e, 0x9e);
+        let dim = Color::from_rgb8(0x8a, 0x8a, 0x8a);
+
+        let effective = self
+            .wine_status
+            .as_ref()
+            .and_then(|status| status.configured.clone())
+            .unwrap_or_else(|| "自动探测".to_string());
+        let default_prefix = self
+            .wine_status
+            .as_ref()
+            .map(|status| status.default_prefix.clone())
+            .unwrap_or_else(|| "读取中…".to_string());
+        let environment = self
+            .wine_status
+            .as_ref()
+            .and_then(|status| status.environment.clone())
+            .unwrap_or_else(|| "未设置".to_string());
+        let detected: Vec<String> = self
+            .wine_status
+            .as_ref()
+            .map(|status| status.detected.clone())
+            .unwrap_or_default();
+
+        let mut detected_list = column![].spacing(3);
+        if detected.is_empty() {
+            detected_list =
+                detected_list.push(text("没有在常见位置发现 wine prefix").size(11).color(dim));
+        } else {
+            for prefix in detected {
+                detected_list = detected_list.push(text(format!("· {prefix}")).size(11).color(dim));
+            }
+        }
+
+        let mut body = column![
             text("设置").size(18).font(ui_font()),
             horizontal_rule(1),
-            text("全局缩放配置、目录扫描、云同步设置即将上线。")
-                .size(13)
-                .color(Color::from_rgb8(0x9e, 0x9e, 0x9e)),
+            text("Wine 目录（prefix）").size(15).font(ui_font()),
+            text("启动游戏时使用。留空 = 自动探测：游戏目录内的可携式 prefix → 常见位置 → ~/.wine。每个游戏也可以在详情页里单独覆盖。")
+                .size(12)
+                .color(gray),
+            row![
+                text_input("留空即自动探测", &self.wine_prefix_input)
+                    .on_input(Message::WinePrefixChanged)
+                    .padding([7, 10])
+                    .width(Length::Fill),
+                button(text("保存")).padding([8, 18]).on_press(Message::SaveWinePrefix),
+                button(text("自动")).padding([8, 14]).on_press(Message::ClearWinePrefix),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
+            {
+                let status: Element<'_, Message> = match &self.wine_msg {
+                    Some(msg) => text(msg)
+                        .size(12)
+                        .color(Color::from_rgb8(0x9e, 0xda, 0xa5))
+                        .into(),
+                    None => iced::widget::Space::new(0, 0).into(),
+                };
+                status
+            },
+            text(format!("当前生效：{effective}")).size(12).color(dim),
+            text(format!("默认位置：{default_prefix}")).size(11).color(dim),
+            text(format!("WINEPREFIX 环境变量：{environment}")).size(11).color(dim),
+            text("自动探测到的 prefix：").size(11).color(dim),
+            detected_list,
+            horizontal_rule(1),
+            text("云同步设置即将上线。").size(13).color(gray),
         ]
-        .spacing(12)
-        .into()
+        .spacing(10);
+
+        if let Some(err) = &self.error {
+            body = body.push(
+                text(format!("\u{26A0} {err}"))
+                    .size(12)
+                    .color(Color::from_rgb8(0xef, 0x9a, 0x9a)),
+            );
+        }
+
+        scrollable(body).into()
     }
+}
+
+/// Label + text input row used by the add form.
+fn labeled_input<'a>(
+    label: &'static str,
+    placeholder: &'static str,
+    value: &'a str,
+    on_input: fn(String) -> Message,
+) -> Element<'a, Message> {
+    row![
+        text(label).size(13).width(100),
+        text_input(placeholder, value)
+            .on_input(on_input)
+            .padding([7, 10])
+            .width(Length::Fill),
+    ]
+    .align_y(iced::Alignment::Center)
+    .spacing(8)
+    .into()
 }
 
 /// Load the library, booting the daemon first if it is not running. Used for
@@ -1064,28 +1169,68 @@ fn matches_query(game: &UiGame, query: &str) -> bool {
     game.name.to_lowercase().contains(&query) || game.exe.to_lowercase().contains(&query)
 }
 
-async fn scan_directory(socket: &Path, directory: &str) -> Result<Vec<ScanCandidate>, String> {
-    let params = crate::rpc::params([("directory", Value::String(directory.to_string()))]);
-    let value = crate::rpc::call(socket, "game.scan", Some(params)).await?;
-    parse_scan_candidates(&value)
+/// Add one game from explicit user input.
+async fn create_game(
+    socket: &Path,
+    name: String,
+    exe_path: String,
+    game_dir: String,
+) -> Result<String, String> {
+    let mut params = vec![
+        ("name", Value::String(name)),
+        ("exe_path", Value::String(exe_path)),
+    ];
+    let game_dir = game_dir.trim();
+    if !game_dir.is_empty() {
+        params.push(("game_dir", Value::String(game_dir.to_string())));
+    }
+
+    let value = crate::rpc::call(socket, "game.create", Some(crate::rpc::params(params))).await?;
+    Ok(value
+        .get("id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?")
+        .to_string())
 }
 
-async fn add_directory(socket: &Path, directory: &str) -> Result<String, String> {
-    let params = crate::rpc::params([("directory", Value::String(directory.to_string()))]);
-    let value = crate::rpc::call(socket, "game.add", Some(params)).await?;
+/// `Some(prefix)` sets the machine-wide wine prefix, `None` returns to
+/// auto-detection.
+async fn set_wine_prefix(socket: &Path, prefix: Option<String>) -> Result<(), String> {
+    let value = match prefix {
+        Some(prefix) => Value::String(prefix),
+        None => Value::Null,
+    };
+    crate::rpc::call(
+        socket,
+        "wine.set_prefix",
+        Some(crate::rpc::params([("prefix", value)])),
+    )
+    .await?;
+    Ok(())
+}
 
-    let added = value
-        .get("added")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let found = value.get("found").and_then(|v| v.as_u64()).unwrap_or(0);
+async fn load_wine_status() -> Result<WineStatus, String> {
+    let value = crate::rpc::call(&crate::config::socket_path(), "wine.status", None).await?;
+    Ok(parse_wine_status(&value))
+}
 
-    Ok(if added == 0 {
-        format!("没有新游戏（发现 {found} 个目录，全部已在库中）")
-    } else {
-        format!("已添加 {added} 个游戏（发现 {found} 个目录）")
-    })
+fn parse_wine_status(value: &Value) -> WineStatus {
+    let text = |key: &str| value.get(key).and_then(|v| v.as_str()).map(str::to_string);
+    WineStatus {
+        configured: text("configured"),
+        default_prefix: text("default").unwrap_or_default(),
+        environment: text("environment"),
+        detected: value
+            .get("detected")
+            .and_then(|v| v.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|v| v.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }
 }
 
 async fn remove_game(socket: &Path, game_id: &str) -> Result<(), String> {
@@ -1110,9 +1255,12 @@ async fn save_profile(draft: Draft) -> Result<(), String> {
             serde_json::to_value(&profile).map_err(|e| e.to_string())?,
         ),
     ];
-    // Only send the exe path when it actually changed: the daemon rejects a
-    // path whose file is missing, and a game on an unmounted drive must not
-    // block a scale edit.
+    // Only send paths that actually changed: the daemon rejects a path that
+    // does not exist, and a game on an unmounted drive must not block a scale
+    // edit.
+    if draft.game_dir_changed() {
+        params.push(("game_dir", Value::String(draft.game_dir.trim().to_string())));
+    }
     if draft.exe_changed() {
         params.push(("exe_path", Value::String(draft.exe.trim().to_string())));
     }
@@ -1124,35 +1272,6 @@ async fn save_profile(draft: Draft) -> Result<(), String> {
     )
     .await?;
     Ok(())
-}
-
-fn parse_scan_candidates(value: &Value) -> Result<Vec<ScanCandidate>, String> {
-    let games = value
-        .get("games")
-        .and_then(|g| g.as_array())
-        .ok_or_else(|| "守护进程返回格式异常".to_string())?;
-
-    Ok(games
-        .iter()
-        .map(|g| ScanCandidate {
-            id: g
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            name: g
-                .get("name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("未知")
-                .to_string(),
-            exe: g
-                .get("exe_path")
-                .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string(),
-            is_new: g.get("is_new").and_then(|v| v.as_bool()).unwrap_or(false),
-        })
-        .collect())
 }
 
 fn profile_from_draft(draft: &Draft) -> Result<ScaleProfile, String> {
@@ -1206,6 +1325,11 @@ fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     .get("name")
                     .and_then(|v| v.as_str())
                     .unwrap_or("未知")
+                    .to_string(),
+                game_dir: g
+                    .get("game_dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
                     .to_string(),
                 exe: g
                     .get("exe_path")
@@ -1325,6 +1449,8 @@ mod tests {
             game_id: "x".into(),
             game_name: "x".into(),
             profile_name: "默认".into(),
+            game_dir: "/games/x".into(),
+            game_dir_original: "/games/x".into(),
             exe: "/games/x/game.exe".into(),
             exe_original: "/games/x/game.exe".into(),
             algo: algo.into(),
@@ -1436,6 +1562,7 @@ mod tests {
         UiGame {
             id: "demo".into(),
             name: "Demo Game".into(),
+            game_dir: "/games/demo".into(),
             exe: "/games/demo/game.exe".into(),
             profile_name: "默认".into(),
             algo: "Fsr".into(),
@@ -1472,26 +1599,23 @@ mod tests {
     }
 
     #[test]
-    fn parses_scan_candidates() {
+    fn parses_wine_status() {
         let value = json!({
-            "directory": "/games",
-            "games": [
-                { "id": "a", "name": "A", "exe_path": "/games/a/a.exe", "is_new": true },
-                { "id": "b", "name": "B", "exe_path": "/games/b/b.exe", "is_new": false }
-            ]
+            "configured": "/prefixes/games",
+            "default": "/home/user/.wine",
+            "environment": null,
+            "detected": ["/home/user/.local/share/wineprefixes/a", "/home/user/.wine"]
         });
-        let found = parse_scan_candidates(&value).unwrap();
-        assert_eq!(found.len(), 2);
-        assert!(found[0].is_new);
-        assert!(!found[1].is_new);
-        assert_eq!(found[1].exe, "/games/b/b.exe");
+        let status = parse_wine_status(&value);
+        assert_eq!(status.configured.as_deref(), Some("/prefixes/games"));
+        assert_eq!(status.default_prefix, "/home/user/.wine");
+        assert_eq!(status.environment, None);
+        assert_eq!(status.detected.len(), 2);
 
-        assert!(parse_scan_candidates(&json!({})).is_err());
-        assert!(
-            parse_scan_candidates(&json!({ "games": [] }))
-                .unwrap()
-                .is_empty()
-        );
+        // A daemon that reports nothing usable still yields a sane value.
+        let empty = parse_wine_status(&json!({}));
+        assert_eq!(empty.configured, None);
+        assert!(empty.detected.is_empty());
     }
 
     #[test]
@@ -1537,20 +1661,30 @@ mod tests {
         app.confirm_delete = true;
         let _ = app.view();
 
-        // Add page: before a scan, with results, with an empty result.
+        // Add page: empty form, filled form, with and without a message.
         app.tab = Tab::Add;
         app.selected = None;
         app.draft = None;
         app.confirm_delete = false;
         let _ = app.view();
-        app.scan_results = Some(vec![ScanCandidate {
-            id: "a".into(),
-            name: "A".into(),
-            exe: "/games/a/a.exe".into(),
-            is_new: true,
-        }]);
+        app.new_name = "Demo".into();
+        app.new_game_dir = "/games/demo".into();
+        app.new_exe = "/games/demo/game.exe".into();
         let _ = app.view();
-        app.scan_results = Some(Vec::new());
+        app.create_msg = Some("已添加（ID: demo）".into());
+        let _ = app.view();
+
+        // Settings page: before and after the wine status arrives.
+        app.tab = Tab::Settings;
+        app.wine_status = None;
+        let _ = app.view();
+        app.wine_status = Some(WineStatus {
+            configured: Some("/prefixes/games".into()),
+            default_prefix: "/home/user/.wine".into(),
+            environment: None,
+            detected: vec!["/home/user/.wine".into()],
+        });
+        app.wine_msg = Some("已保存".into());
         let _ = app.view();
 
         // Settings, plus the disconnected sidebar with its reconnect button.

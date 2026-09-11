@@ -6,10 +6,9 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
-use crate::config::ScaleProfile;
 use crate::util::executor::find_binary;
 
-use super::{ScaleEngine, ScaleError, ScaleSession, ScaleStatus, build_gamescope_args};
+use super::{LaunchSpec, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, build_gamescope_args};
 
 /// Niri (Wayland) backend: runs gamescope as a nested compositor.
 ///
@@ -38,16 +37,11 @@ impl NiriScaleEngine {
     }
 
     /// Wrap a game command so it runs inside gamescope via `gamescope <args> -- wine game.exe`.
-    fn compose_command(
-        &self,
-        game_exe: &str,
-        game_args: &[String],
-        profile: &ScaleProfile,
-    ) -> Vec<String> {
-        let mut game_cmd = vec![self.wine_path.clone(), game_exe.to_string()];
-        game_cmd.extend(game_args.iter().cloned());
+    fn compose_command(&self, spec: &LaunchSpec<'_>) -> Vec<String> {
+        let mut game_cmd = vec![self.wine_path.clone(), spec.exe.to_string()];
+        game_cmd.extend(spec.args.iter().cloned());
 
-        build_gamescope_args(profile, &game_cmd)
+        build_gamescope_args(spec.profile, &game_cmd)
     }
 }
 
@@ -59,31 +53,40 @@ impl Default for NiriScaleEngine {
 
 #[async_trait::async_trait]
 impl ScaleEngine for NiriScaleEngine {
-    async fn start_session(
-        &self,
-        game_exe: &str,
-        game_args: &[String],
-        profile: &ScaleProfile,
-    ) -> Result<ScaleSession, ScaleError> {
+    async fn start_session(&self, spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError> {
         if find_binary("gamescope").is_none() {
             return Err(ScaleError::GamescopeNotFound);
         }
 
-        let cmd = self.compose_command(game_exe, game_args, profile);
+        // Watch-only games are started by the user, never by us.
+        if find_binary("wine").is_none() {
+            return Err(ScaleError::WineNotFound);
+        }
+
+        let cmd = self.compose_command(spec);
         tracing::debug!("gamescope command: {} {:?}", self.gamescope_path, cmd);
 
-        // Run gamescope (and thus wine) with the game's directory as CWD.
-        // Many visual novels resolve relative paths for assets/config.
-        let cwd = Path::new(game_exe)
-            .parent()
-            .unwrap_or_else(|| Path::new("."));
+        // Run gamescope (and thus wine) with the *game root* as CWD: many
+        // visual novels resolve assets/config relative to it.
+        let cwd = if spec.game_dir.as_os_str().is_empty() {
+            Path::new(spec.exe)
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+        } else {
+            spec.game_dir
+        };
 
         // Spawn gamescope as process-group leader so we can kill the whole
         // tree later.
-        let mut child = Command::new(&self.gamescope_path)
-            .args(&cmd)
-            .current_dir(cwd)
-            .process_group(0)
+        let mut command = Command::new(&self.gamescope_path);
+        command.args(&cmd).current_dir(cwd).process_group(0);
+
+        // Run under the resolved prefix instead of whatever wine defaults to.
+        if let Some(prefix) = spec.wine_prefix {
+            command.env("WINEPREFIX", prefix);
+        }
+
+        let mut child = command
             .spawn()
             .map_err(|e| ScaleError::GamescopeStartFailed(format!("{cmd:?}: {e}")))?;
 
@@ -104,7 +107,7 @@ impl ScaleEngine for NiriScaleEngine {
         let session = ScaleSession {
             session_id: uuid::Uuid::new_v4().to_string(),
             gamescope_pid: pgid,
-            profile: profile.clone(),
+            profile: spec.profile.clone(),
             started_at: std::time::Instant::now(),
             process_group: pgid,
         };

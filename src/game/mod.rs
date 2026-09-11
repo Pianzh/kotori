@@ -79,7 +79,7 @@ pub fn list() -> anyhow::Result<()> {
             } else {
                 game.save_paths
                     .iter()
-                    .map(|p| p.display().to_string())
+                    .map(|p| p.describe())
                     .collect::<Vec<_>>()
                     .join(", ")
             }
@@ -121,12 +121,21 @@ pub fn scan(directory: &Path) -> anyhow::Result<Vec<GameConfig>> {
                 .to_string_lossy()
                 .to_string();
 
+            let game_dir = exe
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| path.clone());
+
             games.push(GameConfig {
                 name,
+                game_dir,
                 exe_path: exe,
+                launch_args: Vec::new(),
                 save_paths: Vec::new(),
-                scale_profile: ScaleProfile::default_for(output),
                 wine_prefix: None,
+                watch_only: false,
+                process_name: None,
+                scale_profile: ScaleProfile::default_for(output),
                 created_at: chrono::Utc::now(),
             });
         }

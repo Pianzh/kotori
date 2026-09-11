@@ -22,6 +22,9 @@ pub const MAX_SHARPNESS: u32 = 5;
 pub struct Config {
     #[serde(default)]
     pub daemon: DaemonConfig,
+    /// Machine-wide wine settings; a game can override the prefix.
+    #[serde(default)]
+    pub wine: WineConfig,
     #[serde(default)]
     pub games: HashMap<String, GameConfig>,
 }
@@ -34,16 +37,205 @@ pub struct DaemonConfig {
     pub log_level: String,
 }
 
+/// Machine-wide wine settings shared by all games.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WineConfig {
+    /// Wine prefix used when a game does not name its own. `None` means
+    /// "auto-detect" (see [`crate::wine::resolve_prefix`]).
+    #[serde(default)]
+    pub prefix: Option<PathBuf>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameConfig {
     pub name: String,
-    pub exe_path: PathBuf,
+    /// Where the game is installed. This is the working directory a launch
+    /// uses (many VNs resolve assets relative to it) and the base that
+    /// [`SavePathKind::Relative`] save paths resolve against.
+    ///
+    /// Older configs have no such field; [`Config::normalize`] fills it in
+    /// from the exe's parent directory.
     #[serde(default)]
-    pub save_paths: Vec<PathBuf>,
-    pub scale_profile: ScaleProfile,
+    pub game_dir: PathBuf,
+    pub exe_path: PathBuf,
+    /// Extra arguments passed to the exe.
+    #[serde(default)]
+    pub launch_args: Vec<String>,
+    /// Where this game keeps its saves. Empty means "not configured yet".
+    #[serde(default)]
+    pub save_paths: Vec<SavePath>,
+    /// Per-game wine prefix; overrides the global [`WineConfig::prefix`].
     #[serde(default)]
     pub wine_prefix: Option<PathBuf>,
+    /// kotori never launches this game (the user starts it themselves, or a
+    /// launcher does). Save sync still works by watching `process_name`.
+    #[serde(default)]
+    pub watch_only: bool,
+    /// Process name to watch so save sync knows when the game is running.
+    /// Useful for launcher games (where the launched process exits early) and
+    /// required for watch-only games.
+    #[serde(default)]
+    pub process_name: Option<String>,
+    pub scale_profile: ScaleProfile,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// How a save path is interpreted. The three kinds exist so that the same
+/// configuration can be understood on Linux (under wine) and on Windows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SavePathKind {
+    /// A Windows-style path inside the wine prefix, e.g.
+    /// `%APPDATA%\Game\save`. Environment tokens are preferred over a literal
+    /// `C:\users\<name>\...` because the user name differs between prefixes
+    /// (plain wine uses the Linux account, Proton usually `steamuser`).
+    Windows,
+    /// Relative to [`GameConfig::game_dir`].
+    Relative,
+    /// Absolute path on this machine: not portable, never mapped to Windows.
+    Absolute,
+}
+
+impl SavePathKind {
+    /// Guess the kind from a bare path string, following the project rule:
+    /// Windows-looking paths stay Windows, absolute stays absolute, everything
+    /// else is relative to the game root.
+    pub fn infer(path: &str) -> Self {
+        let trimmed = path.trim();
+        if trimmed.starts_with('%') || is_windows_absolute(trimmed) {
+            Self::Windows
+        } else if trimmed.starts_with('/') || trimmed.starts_with('~') {
+            Self::Absolute
+        } else {
+            Self::Relative
+        }
+    }
+}
+
+/// `C:\...` / `c:/...` — a Windows drive path.
+fn is_windows_absolute(path: &str) -> bool {
+    let bytes = path.as_bytes();
+    bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic()
+}
+
+/// One save location of a game.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct SavePath {
+    pub kind: SavePathKind,
+    pub path: String,
+    /// Glob patterns (relative to this path) that must not be synced, e.g.
+    /// `*.log` or `cache/`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exclude: Vec<String>,
+}
+
+impl SavePath {
+    pub fn new(kind: SavePathKind, path: impl Into<String>) -> Self {
+        Self {
+            kind,
+            path: path.into(),
+            exclude: Vec::new(),
+        }
+    }
+
+    /// Build from a bare string, inferring the kind.
+    pub fn inferred(path: impl Into<String>) -> Self {
+        let path = path.into();
+        Self::new(SavePathKind::infer(&path), path)
+    }
+
+    /// One-line description for CLI output.
+    pub fn describe(&self) -> String {
+        let kind = match self.kind {
+            SavePathKind::Windows => "windows 路径",
+            SavePathKind::Relative => "相对游戏目录",
+            SavePathKind::Absolute => "绝对路径（仅本机）",
+        };
+        if self.exclude.is_empty() {
+            format!("{}（{}）", self.path, kind)
+        } else {
+            format!(
+                "{}（{}，排除 {}）",
+                self.path,
+                kind,
+                self.exclude.join(", ")
+            )
+        }
+    }
+}
+
+/// Accept both the compact form (`"savedata"`, `"%APPDATA%\\Game"`) and the
+/// explicit table form (`{ kind = "windows", path = "...", exclude = [...] }`),
+/// so hand-written configs stay short without losing precision when needed.
+impl<'de> Deserialize<'de> for SavePath {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Detailed {
+            #[serde(default)]
+            kind: Option<SavePathKind>,
+            path: String,
+            #[serde(default)]
+            exclude: Vec<String>,
+        }
+
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Simple(String),
+            Detailed(Detailed),
+        }
+
+        Ok(match Repr::deserialize(deserializer)? {
+            Repr::Simple(path) => SavePath::inferred(path),
+            Repr::Detailed(d) => SavePath {
+                kind: d.kind.unwrap_or_else(|| SavePathKind::infer(&d.path)),
+                path: d.path,
+                exclude: d.exclude,
+            },
+        })
+    }
+}
+
+impl Config {
+    /// Fill in what older (or freshly hand-written) configs leave out, so the
+    /// rest of the code can rely on the invariants. Runs on every load, and
+    /// the result is written back the next time the config is saved.
+    pub fn normalize(&mut self) {
+        for game in self.games.values_mut() {
+            game.normalize();
+        }
+    }
+}
+
+impl GameConfig {
+    /// See [`Config::normalize`].
+    pub fn normalize(&mut self) {
+        if self.game_dir.as_os_str().is_empty()
+            && let Some(parent) = self.exe_path.parent()
+        {
+            self.game_dir = parent.to_path_buf();
+        }
+    }
+
+    /// Working directory of a launch, and the base for relative save paths.
+    pub fn effective_game_dir(&self) -> PathBuf {
+        if self.game_dir.as_os_str().is_empty() {
+            self.exe_path
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."))
+        } else {
+            self.game_dir.clone()
+        }
+    }
+
+    /// Can kotori launch this game itself, or is it watch-only?
+    pub fn is_launchable(&self) -> bool {
+        !self.watch_only
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -269,7 +461,9 @@ pub fn load() -> anyhow::Result<Config> {
 /// Load and parse a config from an explicit path (strict: no fallback).
 pub fn load_from(path: &Path) -> anyhow::Result<Config> {
     let content = std::fs::read_to_string(path)?;
-    Ok(toml::from_str(&content)?)
+    let mut config: Config = toml::from_str(&content)?;
+    config.normalize();
+    Ok(config)
 }
 
 /// Save the config to the default path.
@@ -308,8 +502,12 @@ mod tests {
             "demo".into(),
             GameConfig {
                 name: "demo".into(),
+                game_dir: PathBuf::from("/games/demo"),
                 exe_path: PathBuf::from("/games/demo/game.exe"),
-                save_paths: vec![PathBuf::from("/games/demo/save")],
+                launch_args: Vec::new(),
+                watch_only: false,
+                process_name: None,
+                save_paths: vec![SavePath::inferred("%APPDATA%\\Demo\\save")],
                 scale_profile: ScaleProfile {
                     algorithm: ScaleAlgorithm::Nis { sharpness: 4 },
                     framerate_limit: Some(60),

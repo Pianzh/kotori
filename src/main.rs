@@ -7,6 +7,7 @@ mod rpc;
 mod scale;
 mod ui;
 mod util;
+mod wine;
 
 use clap::Parser;
 use tracing_subscriber::{EnvFilter, fmt};
