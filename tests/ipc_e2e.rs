@@ -207,7 +207,7 @@ exit 0
 
         let mut config = std::fs::read_to_string(&self.config).unwrap();
         config.push_str(&format!(
-            "\n[sync]\nenabled = {enabled}\nendpoint = \"s3.test.invalid\"\nbucket = \"test-bucket\"\nprefix = \"kotori\"\n"
+            "\n[sync]\nenabled = {enabled}\nbucket = \"test-bucket\"\nprefix = \"kotori\"\n"
         ));
         std::fs::write(&self.config, config).unwrap();
 

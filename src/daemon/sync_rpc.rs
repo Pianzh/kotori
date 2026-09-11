@@ -90,7 +90,6 @@ pub struct SyncRecord {
 pub(super) struct SettingsPatch {
     enabled: Option<bool>,
     endpoint: Option<String>,
-    region: Option<String>,
     bucket: Option<String>,
     prefix: Option<String>,
     encryption: Option<bool>,
@@ -229,9 +228,6 @@ impl Daemon {
             }
             if let Some(value) = &patch.endpoint {
                 candidate.endpoint = clean_endpoint(value)?;
-            }
-            if let Some(value) = &patch.region {
-                candidate.region = value.trim().to_string();
             }
             if let Some(value) = &patch.bucket {
                 candidate.bucket = clean_bucket(value)?;
@@ -536,21 +532,11 @@ impl Daemon {
     }
 }
 
-/// An S3 endpoint is a bare host; rclone rejects a URL and so should we, with a
-/// message that says what to do instead.
+/// The endpoint is optional and rarely needed; when it *is* set it has to be
+/// something rclone can actually use, which is checked by [`sync::validate_endpoint`].
 fn clean_endpoint(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Ok(String::new());
-    }
-    if trimmed.contains("://") {
-        return Err(format!(
-            "endpoint 只填主机名，不要带 https://（当前 {trimmed}）"
-        ));
-    }
-    if trimmed.contains('/') {
-        return Err(format!("endpoint 不能带路径（当前 {trimmed}）"));
-    }
+    sync::validate_endpoint(trimmed).map_err(|e| e.to_string())?;
     Ok(trimmed.to_string())
 }
 
@@ -603,7 +589,7 @@ mod tests {
     fn daemon(keyring: Keyring) -> Daemon {
         let mut config = Config::default();
         config.sync.enabled = true;
-        config.sync.endpoint = "s3.us-west-004.backblazeb2.com".to_string();
+        config.sync.endpoint = String::new();
         config.sync.bucket = "bkt".to_string();
         config.games.insert(
             "demo".into(),
@@ -677,15 +663,23 @@ mod tests {
         let fake = FakeTool::new("settings");
         let daemon = daemon(fake.keyring());
 
-        // A URL where a host belongs, and paths that could escape the prefix.
+        // An endpoint the backend cannot use, and paths that could escape the
+        // prefix or the bucket.
         for (body, needle) in [
-            (r#"{"endpoint":"https://s3.example.com"}"#, "https://"),
+            // The B2 console shows the S3 endpoint first, and it is the wrong
+            // one for this backend; say so instead of failing later with a 404.
+            (
+                r#"{"endpoint":"s3.us-west-004.backblazeb2.com"}"#,
+                "S3 兼容接口",
+            ),
+            // rclone does not add a scheme, so a bare host cannot work.
+            (r#"{"endpoint":"api001.backblazeb2.com"}"#, "https://"),
             (r#"{"bucket":"my/bucket"}"#, "bucket"),
             (r#"{"prefix":"../other"}"#, ".."),
             (r#"{"prefix":"  "}"#, "prefix"),
             (r#"{"keep_versions":100000}"#, "最多"),
-            // Enabling without somewhere to sync to is refused.
-            (r#"{"enabled":true,"endpoint":""}"#, "endpoint"),
+            // Enabling with nowhere to sync to is refused.
+            (r#"{"enabled":true,"bucket":""}"#, "bucket"),
         ] {
             let value = call(&daemon, "sync.set_settings", body).await;
             assert!(
@@ -706,19 +700,14 @@ mod tests {
         .await;
         assert_eq!(value["result"]["settings"]["enabled"], false);
         assert_eq!(value["result"]["settings"]["endpoint"], "");
-        let value = call(
-            &daemon,
-            "sync.set_settings",
-            r#"{"enabled":true,"endpoint":"s3.us-west-004.backblazeb2.com"}"#,
-        )
-        .await;
+        let value = call(&daemon, "sync.set_settings", r#"{"enabled":true}"#).await;
         assert_eq!(value["result"]["settings"]["enabled"], true);
 
         // A good patch is stored, and persisted.
         let value = call(
             &daemon,
             "sync.set_settings",
-            r#"{"bucket":"new-bucket","prefix":"/saves/kotori/","region":"eu"}"#,
+            r#"{"bucket":"new-bucket","prefix":"/saves/kotori/"}"#,
         )
         .await;
         assert_eq!(value["result"]["settings"]["bucket"], "new-bucket");
@@ -726,7 +715,6 @@ mod tests {
             value["result"]["settings"]["prefix"], "saves/kotori",
             "the prefix is normalised, not rejected"
         );
-        assert_eq!(value["result"]["settings"]["region"], "eu");
     }
 
     #[tokio::test]

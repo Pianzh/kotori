@@ -93,11 +93,19 @@ pub struct GameConfig {
 pub struct SyncConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// S3-compatible endpoint, e.g. `s3.us-west-004.backblazeb2.com`.
+    /// Optional override for the storage API endpoint.
+    ///
+    /// Normally **empty**: rclone's native `b2` backend discovers the right
+    /// regional API host from the credentials itself, and every B2 account
+    /// works that way. Set it only to pin a specific endpoint, as a full URL
+    /// (`https://api001.backblazeb2.com`) — a bare host does not work.
+    ///
+    /// Note this is *not* the `s3.<region>.backblazeb2.com` value the B2
+    /// console shows: that is the S3-compatible API, a different service this
+    /// backend does not speak. [`crate::sync::validate`] rejects it by name
+    /// rather than letting rclone fail with a confusing 404.
     #[serde(default)]
     pub endpoint: String,
-    #[serde(default)]
-    pub region: String,
     #[serde(default)]
     pub bucket: String,
     /// Folder inside the bucket that kotori owns.
@@ -122,7 +130,6 @@ impl Default for SyncConfig {
         Self {
             enabled: false,
             endpoint: String::new(),
-            region: String::new(),
             bucket: String::new(),
             prefix: default_sync_prefix(),
             encryption: false,

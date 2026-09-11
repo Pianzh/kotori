@@ -98,7 +98,6 @@ pub struct SyncStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncField {
     Endpoint,
-    Region,
     Bucket,
     Prefix,
     KeepVersions,
@@ -114,7 +113,6 @@ struct SyncForm {
     loaded: bool,
     enabled: bool,
     endpoint: String,
-    region: String,
     bucket: String,
     prefix: String,
     keep_versions: String,
@@ -137,7 +135,6 @@ impl SyncForm {
         self.loaded = true;
         self.enabled = settings["enabled"].as_bool().unwrap_or(false);
         self.endpoint = str_field(settings, "endpoint");
-        self.region = str_field(settings, "region");
         self.bucket = str_field(settings, "bucket");
         self.prefix = str_field(settings, "prefix");
         self.keep_versions = settings["keep_versions"].as_u64().unwrap_or(0).to_string();
@@ -156,7 +153,6 @@ impl SyncForm {
         serde_json::json!({
             "enabled": self.enabled,
             "endpoint": self.endpoint.trim(),
-            "region": self.region.trim(),
             "bucket": self.bucket.trim(),
             "prefix": self.prefix.trim(),
             "keep_versions": keep,
@@ -845,7 +841,6 @@ impl App {
                 let form = &mut self.sync_form;
                 match field {
                     SyncField::Endpoint => form.endpoint = value,
-                    SyncField::Region => form.region = value,
                     SyncField::Bucket => form.bucket = value,
                     SyncField::Prefix => form.prefix = value,
                     SyncField::KeepVersions => form.keep_versions = value,
@@ -1789,17 +1784,10 @@ impl App {
         // --- settings ------------------------------------------------------
         sections.push(horizontal_rule(1).into());
         sections.push(text("连接与保留").size(13).font(ui_font()).into());
-        sections.push(sync_input_row(
-            "S3 endpoint",
-            "s3.us-west-004.backblazeb2.com",
-            &form.endpoint,
-            SyncField::Endpoint,
-            false,
-        ));
         sections.push(
             row![
                 text("bucket").size(13).width(120),
-                text_input("kotori-saves", &form.bucket)
+                text_input("B2 上那个 bucket 的名字", &form.bucket)
                     .on_input(|v| Message::SyncField(SyncField::Bucket, v))
                     .padding([7, 10])
                     .width(Length::Fill),
@@ -1814,12 +1802,18 @@ impl App {
             .into(),
         );
         sections.push(sync_input_row(
-            "region",
-            "us-west-004",
-            &form.region,
-            SyncField::Region,
+            "API endpoint",
+            "留空即可（rclone 会自己找到）",
+            &form.endpoint,
+            SyncField::Endpoint,
             false,
         ));
+        sections.push(
+            text("prefix 是 bucket 里归 kotori 独占的目录，bucket 里的其他东西我们一律不碰。")
+                .size(11)
+                .color(dim)
+                .into(),
+        );
         sections.push(
             row![
                 text("保留版本数").size(13).width(120),
@@ -1889,6 +1883,14 @@ impl App {
         // --- credentials ---------------------------------------------------
         sections.push(horizontal_rule(1).into());
         sections.push(text("B2 凭据").size(13).font(ui_font()).into());
+        sections.push(
+            text(
+                "第一次用 B2 的话，先在网页控制台做两件事：\n                 1. Buckets → Create a Bucket，名字填到上面的 bucket 里（Files in Bucket 选 Private）\n                 2. Account → Application Keys → Add a New Application Key：Bucket(s) 只勾这一个 bucket，\n                 \u{20}\u{20}\u{20}Type of Access 选 Read and Write\n                 创建后会显示 keyID 和 applicationKey，只显示这一次，复制到下面两个框里。",
+            )
+            .size(11)
+            .color(dim)
+            .into(),
+        );
         let known = |account: &str| {
             status
                 .map(|s| s.secrets.iter().any(|a| a == account))
@@ -1913,15 +1915,15 @@ impl App {
             .into(),
         );
         sections.push(sync_input_row(
-            "key id",
-            "留空则清除已保存的凭据",
+            "keyID",
+            "Application Key ID（形如 005a…）；留空再保存 = 清除",
             &form.key_id,
             SyncField::KeyId,
             false,
         ));
         sections.push(sync_input_row(
-            "application key",
-            "在 B2 后台创建，只能看一次",
+            "applicationKey",
+            "只在创建时显示一次，丢了就再建一个",
             &form.app_key,
             SyncField::AppKey,
             true,
@@ -3013,8 +3015,7 @@ mod tests {
         serde_json::json!({
             "settings": {
                 "enabled": true,
-                "endpoint": "s3.us-west-004.backblazeb2.com",
-                "region": "us-west-004",
+                "endpoint": "",
                 "bucket": "kotori-saves",
                 "prefix": "kotori",
                 "encryption": false,
@@ -3091,7 +3092,7 @@ mod tests {
 
         assert!(form.loaded);
         assert!(form.enabled);
-        assert_eq!(form.endpoint, "s3.us-west-004.backblazeb2.com");
+        assert_eq!(form.endpoint, "");
         assert_eq!(form.bucket, "kotori-saves");
         assert_eq!(form.prefix, "kotori");
         assert_eq!(form.keep_versions, "0");

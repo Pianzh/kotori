@@ -44,6 +44,9 @@ pub const VERSIONS_DIR: &str = "versions";
 pub const CURRENT_DIR: &str = "current";
 
 /// Validate the settings that must be present before anything is attempted.
+///
+/// The only thing a B2 setup really needs is the bucket name: credentials live
+/// in the keyring and rclone discovers the API host itself.
 pub fn validate(settings: &SyncConfig) -> Result<(), SyncError> {
     if !settings.enabled {
         return Err(SyncError::NotEnabled);
@@ -51,10 +54,31 @@ pub fn validate(settings: &SyncConfig) -> Result<(), SyncError> {
     if settings.bucket.trim().is_empty() {
         return Err(SyncError::Config("还没有填写 bucket".to_string()));
     }
-    if settings.endpoint.trim().is_empty() {
-        return Err(SyncError::Config(
-            "还没有填写 S3 endpoint（B2 形如 s3.<region>.backblazeb2.com）".to_string(),
-        ));
+    validate_endpoint(&settings.endpoint)?;
+    Ok(())
+}
+
+/// Check the optional endpoint override.
+///
+/// This exists because the value the B2 console shows most prominently — the
+/// `s3.<region>.backblazeb2.com` S3 endpoint — is **not** usable here: the
+/// native B2 backend speaks the B2 API, and rclone would POST to
+/// `https://s3.<region>.backblazeb2.com/b2api/...`, which does not exist.
+/// Failing with that explanation beats a mystery 404 on the user's first sync.
+pub fn validate_endpoint(endpoint: &str) -> Result<(), SyncError> {
+    let endpoint = endpoint.trim();
+    if endpoint.is_empty() {
+        return Ok(());
+    }
+    if endpoint.contains("backblazeb2.com") && endpoint.trim_start().starts_with("s3.") {
+        return Err(SyncError::Config(format!(
+            "{endpoint} 是 B2 的 S3 兼容接口地址，原生 B2 后端用不上——把它留空即可，\n\n             rclone 会自己找到正确的 API 地址。这个字段只在需要指定特定区域端点时才填，\n             而且要写完整（含 https://）"
+        )));
+    }
+    if !endpoint.starts_with("http://") && !endpoint.starts_with("https://") {
+        return Err(SyncError::Config(format!(
+            "endpoint 要写完整地址（含 https://），或者直接留空（推荐）：{endpoint}"
+        )));
     }
     Ok(())
 }
@@ -348,6 +372,8 @@ pub fn rclone_env(
             settings.endpoint.trim().to_string(),
         ));
     }
+    // Note: no region. The native B2 backend derives everything it needs from
+    // the credentials, and a wrong region only produces signature errors.
 
     if settings.encryption {
         let bucket = settings.bucket.trim().trim_matches('/');
@@ -477,9 +503,8 @@ mod tests {
     fn settings() -> SyncConfig {
         SyncConfig {
             enabled: true,
-            endpoint: "s3.us-west-004.backblazeb2.com".to_string(),
+            endpoint: String::new(),
             bucket: "kotori-saves".to_string(),
-            region: "us-west-004".to_string(),
             prefix: "prefix".to_string(),
             encryption: false,
             keep_versions: 0,
@@ -501,14 +526,33 @@ mod tests {
                 .contains("bucket")
         );
 
+        // The endpoint is optional: a plain B2 setup needs only a bucket.
         let mut config = settings();
         config.endpoint = String::new();
+        assert!(validate(&config).is_ok());
+
+        // But a value that the native B2 backend cannot use is refused, with an
+        // explanation — the S3 endpoint is what the B2 console shows first, and
+        // sending it to the B2 API only produces a mystery 404.
+        let mut config = settings();
+        config.endpoint = "s3.us-west-004.backblazeb2.com".to_string();
+        let error = validate(&config).unwrap_err().to_string();
+        assert!(error.contains("S3 兼容接口"), "{error}");
+        assert!(error.contains("留空"), "{error}");
+
+        // A bare host is not a URL either; rclone would not add a scheme.
+        let mut config = settings();
+        config.endpoint = "api001.backblazeb2.com".to_string();
         assert!(
             validate(&config)
                 .unwrap_err()
                 .to_string()
-                .contains("endpoint")
+                .contains("https://")
         );
+
+        let mut config = settings();
+        config.endpoint = "https://api001.backblazeb2.com".to_string();
+        assert!(validate(&config).is_ok());
 
         // Enabling encryption is a structural setting; whether the password
         // exists is checked against the keyring by `validate_secrets`.
@@ -704,10 +748,9 @@ mod tests {
         assert_eq!(get("RCLONE_CONFIG_KOTORI_TYPE"), Some("b2"));
         assert_eq!(get("RCLONE_CONFIG_KOTORI_ACCOUNT"), Some("keyid123"));
         assert_eq!(get("RCLONE_CONFIG_KOTORI_KEY"), Some("appkey456"));
-        assert_eq!(
-            get("RCLONE_CONFIG_KOTORI_ENDPOINT"),
-            Some("s3.us-west-004.backblazeb2.com")
-        );
+        // Nothing pinned: rclone discovers the API host from the credentials,
+        // which is what makes a plain B2 setup work with no endpoint at all.
+        assert_eq!(get("RCLONE_CONFIG_KOTORI_ENDPOINT"), None);
         // Unencrypted setups have no crypt remote at all.
         assert!(get("RCLONE_CONFIG_KOTORIENC_TYPE").is_none());
     }
