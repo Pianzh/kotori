@@ -46,6 +46,18 @@ pub trait ScaleEngine: Send + Sync {
     /// All live sessions.
     async fn list_sessions(&self) -> Vec<ScaleSession>;
 
+    /// Subscribe to session lifecycle events.
+    ///
+    /// The daemon uses these to trigger save sync (upload after a game exits,
+    /// pull before it starts). Returning `None` is allowed: a backend that
+    /// cannot report them simply has no sync triggers, which is a supported
+    /// state rather than an error. The session map stays the only source of
+    /// truth about *what is running* — these events only say that something
+    /// happened.
+    fn subscribe(&self) -> Option<tokio::sync::broadcast::Receiver<SessionEvent>> {
+        None
+    }
+
     /// Toggle FSR
     async fn toggle_fsr(&self, session: &ScaleSession) -> Result<(), ScaleError>;
 
@@ -57,6 +69,25 @@ pub trait ScaleEngine: Send + Sync {
 
     /// Get current status
     async fn get_status(&self, session: &ScaleSession) -> Result<ScaleStatus, ScaleError>;
+}
+
+/// What the engine noticed about a session's lifecycle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionEvent {
+    pub session_id: String,
+    /// The game this session belongs to, when it is a library entry.
+    pub game_id: Option<String>,
+    pub kind: SessionKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionKind {
+    /// A session was created (the game is starting, or we started watching).
+    Started,
+    /// A game actually ran and has now stopped. Never emitted for a watch-only
+    /// session whose process never appeared: nothing ran, so there is nothing
+    /// worth syncing.
+    Ended,
 }
 
 /// A live session: either a game kotori launched, or a process it only watches.

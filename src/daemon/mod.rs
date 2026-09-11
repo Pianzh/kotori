@@ -10,27 +10,57 @@ use tokio::sync::{Notify, RwLock};
 
 use crate::config::{self, Config};
 use crate::scale::niri::NiriScaleEngine;
-use crate::scale::{LaunchSpec, ScaleEngine, ScaleSession};
+use crate::scale::{LaunchSpec, ScaleEngine, ScaleSession, SessionKind};
+
+mod sync_rpc;
+use sync_rpc::SyncState;
 
 /// Daemon log file name inside [`config::log_dir`].
 pub const DAEMON_LOG: &str = "daemon.log";
 
 pub struct Daemon {
     config: Arc<RwLock<Config>>,
+    /// The config file this daemon owns. Remembered rather than re-resolved so
+    /// a write can never land on a different file than the one we loaded.
+    config_path: Arc<PathBuf>,
     /// Single source of truth for live sessions. There is deliberately no
     /// second session list here: a duplicate copy used to go stale and report
     /// already-exited games as running.
     engine: Arc<NiriScaleEngine>,
     shutdown: Arc<Notify>,
+    /// Keyring handle and the last sync result per game.
+    sync: Arc<SyncState>,
 }
 
 impl Daemon {
     pub fn new(config: Config) -> Self {
+        Self::assemble(config, SyncState::system())
+    }
+
+    /// Build a daemon against an explicit secret store.
+    ///
+    /// Only tests need this today: production always uses the platform keyring,
+    /// falling back to a session-only store (`SyncState::system`).
+    #[cfg(test)]
+    pub fn with_keyring(config: Config, keyring: crate::secrets::Keyring) -> Self {
+        Self::assemble(config, SyncState::with_keyring(keyring))
+    }
+
+    fn assemble(config: Config, sync: SyncState) -> Self {
         Self {
             config: Arc::new(RwLock::new(config)),
+            config_path: Arc::new(config::config_path()),
             engine: Arc::new(NiriScaleEngine::new()),
             shutdown: Arc::new(Notify::new()),
+            sync: Arc::new(sync),
         }
+    }
+
+    /// Own an explicit config file instead of the machine-wide one. Tests use
+    /// this so they never touch `~/.config/kotori/config.toml`.
+    pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_path = Arc::new(path.into());
+        self
     }
 
     pub async fn run(&self) -> anyhow::Result<()> {
@@ -50,6 +80,8 @@ impl Daemon {
             .map_err(|e| anyhow::anyhow!("Failed to bind {}: {}", socket_path.display(), e))?;
 
         tracing::info!("daemon listening on {}", socket_path.display());
+
+        self.spawn_sync_events();
 
         loop {
             tokio::select! {
@@ -86,9 +118,47 @@ impl Daemon {
     fn clone_shares(&self) -> Arc<Self> {
         Arc::new(Daemon {
             config: self.config.clone(),
+            config_path: self.config_path.clone(),
             engine: self.engine.clone(),
             shutdown: self.shutdown.clone(),
+            sync: self.sync.clone(),
         })
+    }
+
+    /// React to games starting and stopping.
+    ///
+    /// Save sync hangs off this: a game that exited gets its saves uploaded.
+    /// Note that the event is only a *trigger* — the session map in the engine
+    /// remains the single source of truth about what is running, and each
+    /// upload runs in its own task so a slow network cannot stall the engine
+    /// or the next event.
+    fn spawn_sync_events(&self) {
+        let Some(mut events) = self.engine.subscribe() else {
+            tracing::debug!("this scale backend reports no session events");
+            return;
+        };
+        let this = self.clone_shares();
+
+        tokio::spawn(async move {
+            loop {
+                match events.recv().await {
+                    Ok(event) if event.kind == SessionKind::Ended => {
+                        let Some(game_id) = event.game_id else {
+                            continue;
+                        };
+                        let this = this.clone();
+                        tokio::spawn(async move {
+                            this.sync_after_game_exit(&game_id).await;
+                        });
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!("错过了 {skipped} 个会话事件（同步可能少了触发）");
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
     }
 
     async fn handle_client(&self, stream: UnixStream) -> anyhow::Result<()> {
@@ -216,6 +286,57 @@ impl Daemon {
                 }
                 Err(e) => rpc_err(id, -32602, e),
             },
+            "sync.status" => respond(id, self.rpc_sync_status().await),
+            "sync.set_settings" => {
+                match serde_json::from_value::<sync_rpc::SettingsPatch>(Value::Object(
+                    req.params.clone().unwrap_or_default(),
+                )) {
+                    Ok(patch) => respond(id, self.rpc_sync_set_settings(patch).await),
+                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
+                }
+            }
+            "sync.set_credentials" => {
+                match serde_json::from_value::<sync_rpc::Credentials>(Value::Object(
+                    req.params.clone().unwrap_or_default(),
+                )) {
+                    Ok(credentials) => respond(id, self.rpc_sync_set_credentials(credentials)),
+                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
+                }
+            }
+            "sync.set_password" => {
+                match serde_json::from_value::<sync_rpc::Password>(Value::Object(
+                    req.params.clone().unwrap_or_default(),
+                )) {
+                    Ok(password) => respond(id, self.rpc_sync_set_password(password).await),
+                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
+                }
+            }
+            "sync.test" => respond(id, self.rpc_sync_test().await),
+            "sync.now" => {
+                let game_id = req
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("id"))
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                respond(id, self.rpc_sync_now(game_id.as_deref()).await)
+            }
+            "sync.versions" => match param_str(&req.params, "id") {
+                Ok(game_id) => respond(id, self.rpc_sync_versions(game_id).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
+            "sync.restore" => match param_str(&req.params, "id") {
+                Ok(game_id) => {
+                    let version = req
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("version"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    respond(id, self.rpc_sync_restore(game_id, version.as_deref()).await)
+                }
+                Err(e) => rpc_err(id, -32602, e),
+            },
             other => rpc_err(id, -32601, format!("method not found: {other}")),
         }
     }
@@ -282,7 +403,7 @@ impl Daemon {
     }
 
     async fn rpc_reload_config(&self) -> Result<Value, String> {
-        let new_config = crate::config::load().map_err(|e| e.to_string())?;
+        let new_config = crate::config::load_at(&self.config_path).map_err(|e| e.to_string())?;
         *self.config.write().await = new_config;
         tracing::info!("configuration reloaded");
         Ok(json!({ "success": true }))
@@ -488,7 +609,8 @@ impl Daemon {
         let mut guard = self.config.write().await;
         let mut candidate = guard.clone();
         let value = mutate(&mut candidate)?;
-        crate::config::save(&candidate).map_err(|e| format!("保存配置失败: {e}"))?;
+        crate::config::save_to(&self.config_path, &candidate)
+            .map_err(|e| format!("保存配置失败: {e}"))?;
         *guard = candidate;
         Ok(value)
     }
@@ -505,8 +627,13 @@ impl Daemon {
 
         let game_dir = game.effective_game_dir();
 
+        // Fetch the newest saves *before* the game can read them. Best effort on
+        // a deadline: a broken backup must never keep the user out of their game
+        // (see `sync_pull_before_launch`). `None` means sync had nothing to do.
+        let pulled = self.sync_pull_before_launch(id).await;
+
         // Watch-only: kotori never launches these, it just follows the process
-        // so clients (and later save sync) know when the game runs.
+        // so clients (and save sync) know when the game runs.
         if !game.is_launchable() {
             let Some(name) = game.process_name.as_deref() else {
                 return Err(format!(
@@ -534,6 +661,7 @@ impl Daemon {
                 "watch_only": true,
                 "process_name": name,
                 "game_dir": game_dir,
+                "sync_pull": pulled,
             }));
         }
 
@@ -569,6 +697,7 @@ impl Daemon {
             "game_dir": game_dir,
             "wine_prefix": wine_prefix,
             "prefix_source": prefix_source.label(),
+            "sync_pull": pulled,
         }))
     }
 
@@ -643,8 +772,9 @@ impl Daemon {
 }
 
 pub async fn run() -> anyhow::Result<()> {
-    let config = crate::config::load()?;
-    let daemon = Daemon::new(config);
+    let path = crate::config::config_path();
+    let config = crate::config::load_at(&path)?;
+    let daemon = Daemon::new(config).with_config_path(path);
     daemon.run().await
 }
 

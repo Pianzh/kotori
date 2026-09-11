@@ -5,11 +5,21 @@ use std::time::Duration;
 
 use tokio::process::Command;
 use tokio::sync::RwLock;
+use tokio::sync::broadcast;
 
 use crate::process;
 use crate::util::executor::find_binary;
 
-use super::{LaunchSpec, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, build_gamescope_args};
+use super::{
+    LaunchSpec, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, SessionEvent, SessionKind,
+    build_gamescope_args,
+};
+
+/// How many lifecycle events may queue up before slow subscribers miss one.
+///
+/// Only the daemon subscribes, and it handles each event in a spawned task, so
+/// this never has to be deep.
+const EVENT_BUFFER: usize = 64;
 
 /// Niri (Wayland) backend: runs gamescope as a nested compositor.
 ///
@@ -19,6 +29,8 @@ pub struct NiriScaleEngine {
     gamescope_path: String,
     wine_path: String,
     sessions: Arc<RwLock<HashMap<String, ScaleSession>>>,
+    /// Lifecycle notifications for whoever wants to react to them (save sync).
+    events: broadcast::Sender<SessionEvent>,
 }
 
 impl NiriScaleEngine {
@@ -34,7 +46,18 @@ impl NiriScaleEngine {
             gamescope_path,
             wine_path,
             sessions: Arc::new(RwLock::new(HashMap::new())),
+            events: broadcast::channel(EVENT_BUFFER).0,
         }
+    }
+
+    /// Announce something, ignoring the case where nobody is listening.
+    fn announce(&self, session: &ScaleSession, kind: SessionKind) {
+        // A send error only means "no subscribers", which is fine.
+        let _ = self.events.send(SessionEvent {
+            session_id: session.session_id.clone(),
+            game_id: session.game_id.clone(),
+            kind,
+        });
     }
 
     /// Track a game the user starts themselves: kotori launches nothing, the
@@ -65,9 +88,12 @@ impl NiriScaleEngine {
             "watching for process {name} (session {})",
             session.session_id
         );
+        self.announce(&session, SessionKind::Started);
 
         let sessions = self.sessions.clone();
+        let events = self.events.clone();
         let sid = session.session_id.clone();
+        let game_id = session.game_id.clone();
         let name = name.to_string();
         tokio::spawn(async move {
             let deadline = tokio::time::Instant::now() + process::APPEAR_TIMEOUT;
@@ -83,6 +109,8 @@ impl NiriScaleEngine {
                 if tokio::time::Instant::now() >= deadline {
                     tracing::warn!("session {sid}: {name} never appeared, giving up");
                     sessions.write().await.remove(&sid);
+                    // Deliberately no `Ended`: the game never ran, so a client
+                    // must not treat this as "a game finished, sync it".
                     return;
                 }
                 tokio::time::sleep(process::POLL_INTERVAL).await;
@@ -101,6 +129,11 @@ impl NiriScaleEngine {
 
             tracing::info!("session {sid}: {name} exited");
             sessions.write().await.remove(&sid);
+            let _ = events.send(SessionEvent {
+                session_id: sid,
+                game_id,
+                kind: SessionKind::Ended,
+            });
         });
 
         Ok(session)
@@ -191,11 +224,14 @@ impl ScaleEngine for NiriScaleEngine {
             .write()
             .await
             .insert(session.session_id.clone(), session.clone());
+        self.announce(&session, SessionKind::Started);
 
         // Watcher task: reap the child and drop the session when the game
         // exits, so we never accumulate zombies and stale sessions.
         let sessions = self.sessions.clone();
+        let events = self.events.clone();
         let sid = session.session_id.clone();
+        let game_id = session.game_id.clone();
         let watched = session.process_name.clone();
         tokio::spawn(async move {
             let status = child.wait().await;
@@ -212,6 +248,11 @@ impl ScaleEngine for NiriScaleEngine {
             }
 
             sessions.write().await.remove(&sid);
+            let _ = events.send(SessionEvent {
+                session_id: sid,
+                game_id,
+                kind: SessionKind::Ended,
+            });
         });
 
         Ok(session)
@@ -273,6 +314,10 @@ impl ScaleEngine for NiriScaleEngine {
 
     async fn list_sessions(&self) -> Vec<ScaleSession> {
         self.sessions.read().await.values().cloned().collect()
+    }
+
+    fn subscribe(&self) -> Option<broadcast::Receiver<SessionEvent>> {
+        Some(self.events.subscribe())
     }
 
     async fn toggle_fsr(&self, _session: &ScaleSession) -> Result<(), ScaleError> {
