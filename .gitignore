@@ -1,0 +1,24 @@
+/target
+**/*.rs.bk
+Cargo.lock
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Local agent working doc - deliberately untracked
+AGENTS.md
+
+# Local config / real data - NEVER commit
+config.toml
+*.local.toml
+kotori.sock
+
+# Credentials / secrets (B2 keys, kopia passwords) - NEVER commit
+*.key
+*.secret
+.env
+.env.*
+credentials*.json
+*kopia-password*
