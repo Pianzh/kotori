@@ -161,12 +161,48 @@ pub fn detect_prefixes(game_dir: &Path) -> Vec<PathBuf> {
     found
 }
 
+/// What Windows-style save paths are resolved against.
+///
+/// The same configuration has to work on both sides of a dual boot, where the
+/// "user profile" is a completely different thing: inside a wine prefix it is
+/// `drive_c/users/<name>`, on real Windows it is `%USERPROFILE%`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SaveRoot {
+    /// Linux, running the game through wine.
+    WinePrefix(PathBuf),
+    /// Real Windows: the user profile directory.
+    UserProfile(PathBuf),
+}
+
+impl SaveRoot {
+    /// The root that applies to the platform this build runs on.
+    pub fn for_platform(game: &GameConfig, config: &Config) -> (Self, PrefixSource) {
+        if cfg!(windows) {
+            let profile = std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .unwrap_or_else(home_dir);
+            // Windows has no prefix at all; the label just says so.
+            return (Self::UserProfile(profile), PrefixSource::Default);
+        }
+        let (prefix, source) = resolve_prefix(game, config);
+        (Self::WinePrefix(prefix), source)
+    }
+
+    /// A short description used in messages and logs.
+    pub fn describe(&self) -> String {
+        match self {
+            Self::WinePrefix(path) => format!("wine prefix {}", path.display()),
+            Self::UserProfile(path) => format!("Windows 用户目录 {}", path.display()),
+        }
+    }
+}
+
 /// Turn a [`SavePath`] into a real path on this machine.
 ///
 /// Returns `Err` with a user-facing message when the description cannot be
-/// resolved (unknown token).
+/// resolved (unknown token, or a drive path that is not inside the profile).
 pub fn resolve_save_path(
-    prefix: &Path,
+    root: &SaveRoot,
     game_dir: &Path,
     save: &SavePath,
 ) -> Result<PathBuf, String> {
@@ -178,23 +214,42 @@ pub fn resolve_save_path(
             }
             Ok(game_dir.join(relative))
         }
+        // Absolute paths are device-local by definition; `~` only means
+        // something on Linux, so on Windows it is passed through untouched.
         SavePathKind::Absolute => Ok(expand_home(save.path.trim())),
-        SavePathKind::Windows => resolve_windows_path(prefix, &save.path),
+        SavePathKind::Windows => resolve_windows_path(root, &save.path),
     }
 }
 
 /// Resolve a Windows-style path (`%APPDATA%\Game\save` or `C:\users\x\...`)
-/// inside a wine prefix.
-fn resolve_windows_path(prefix: &Path, path: &str) -> Result<PathBuf, String> {
+/// against the root of whichever platform we are on.
+fn resolve_windows_path(root: &SaveRoot, path: &str) -> Result<PathBuf, String> {
     let trimmed = path.trim();
     if trimmed.is_empty() {
         return Err("Windows 路径不能为空".to_string());
     }
 
-    // A literal drive path is taken relative to `drive_c` (the drive root),
-    // *not* to the user directory — the path already spells that out.
     if let Some(rest) = strip_drive_letter(trimmed) {
-        return Ok(join_windows(&prefix.join("drive_c"), rest));
+        return match root {
+            // Inside a prefix every literal drive path is relative to `drive_c`.
+            SaveRoot::WinePrefix(prefix) => Ok(join_windows(&prefix.join("drive_c"), rest)),
+            // On real Windows only paths inside the user profile are portable;
+            // anything else would be a machine-specific absolute path wearing a
+            // Windows costume.
+            SaveRoot::UserProfile(profile) => {
+                let rest = rest.trim_start_matches(['\\', '/']);
+                let segments: Vec<&str> = rest.split(['\\', '/']).collect();
+                let looks_like_profile =
+                    segments.len() >= 3 && segments[0].eq_ignore_ascii_case("users");
+                if !looks_like_profile {
+                    return Err(format!(
+                        "在 Windows 上请用 %APPDATA% / %USERPROFILE% 这类令牌，而不是 {trimmed}\
+                         （只有用户目录内的路径才能跨设备对应）"
+                    ));
+                }
+                Ok(join_windows(profile, &segments[2..].join("\\")))
+            }
+        };
     }
 
     let upper = trimmed.to_uppercase();
@@ -210,7 +265,13 @@ fn resolve_windows_path(prefix: &Path, path: &str) -> Result<PathBuf, String> {
     };
     let rest = &trimmed[token.len()..];
     let rest = rest.trim_start_matches(['\\', '/']);
-    let user_dir = windows_user_dir(prefix);
+
+    // Same token, same meaning on both platforms — this is what lets one
+    // configuration describe a save location for Linux *and* Windows.
+    let user_dir = match root {
+        SaveRoot::WinePrefix(prefix) => windows_user_dir(prefix),
+        SaveRoot::UserProfile(profile) => profile.clone(),
+    };
 
     Ok(if mapped.is_empty() {
         join_windows(&user_dir, rest)
@@ -385,7 +446,12 @@ mod tests {
         ] {
             let save = SavePath::inferred(input);
             assert_eq!(
-                resolve_save_path(&prefix.path(), Path::new("/games/demo"), &save).unwrap(),
+                resolve_save_path(
+                    &SaveRoot::WinePrefix(prefix.path()),
+                    Path::new("/games/demo"),
+                    &save
+                )
+                .unwrap(),
                 expected,
                 "for {input}"
             );
@@ -396,7 +462,7 @@ mod tests {
     fn resolves_literal_drive_paths_and_mixed_separators() {
         let prefix = FakePrefix::new("drive", &["tester"]);
         let saved = resolve_save_path(
-            &prefix.path(),
+            &SaveRoot::WinePrefix(prefix.path()),
             Path::new("/games/demo"),
             &SavePath::new(SavePathKind::Windows, "C:/users/tester/Documents/Game"),
         )
@@ -411,7 +477,7 @@ mod tests {
     fn unknown_tokens_are_reported_not_guessed() {
         let prefix = FakePrefix::new("bad-token", &["tester"]);
         let err = resolve_save_path(
-            &prefix.path(),
+            &SaveRoot::WinePrefix(prefix.path()),
             Path::new("/games/demo"),
             &SavePath::new(SavePathKind::Windows, "%PROGRAMFILES%\\Game"),
         )
@@ -427,7 +493,12 @@ mod tests {
     fn relative_paths_resolve_against_the_game_root() {
         let save = SavePath::new(SavePathKind::Relative, "savedata");
         assert_eq!(
-            resolve_save_path(Path::new("/prefix"), Path::new("/games/demo"), &save).unwrap(),
+            resolve_save_path(
+                &SaveRoot::WinePrefix("/prefix".into()),
+                Path::new("/games/demo"),
+                &save
+            )
+            .unwrap(),
             PathBuf::from("/games/demo/savedata")
         );
     }
@@ -436,15 +507,100 @@ mod tests {
     fn absolute_paths_stay_put_and_expand_home() {
         let save = SavePath::new(SavePathKind::Absolute, "/opt/saves/demo");
         assert_eq!(
-            resolve_save_path(Path::new("/prefix"), Path::new("/games/demo"), &save).unwrap(),
+            resolve_save_path(
+                &SaveRoot::WinePrefix("/prefix".into()),
+                Path::new("/games/demo"),
+                &save
+            )
+            .unwrap(),
             PathBuf::from("/opt/saves/demo")
         );
 
         let home = SavePath::new(SavePathKind::Absolute, "~/saves/demo");
-        let resolved =
-            resolve_save_path(Path::new("/prefix"), Path::new("/games/demo"), &home).unwrap();
+        let resolved = resolve_save_path(
+            &SaveRoot::WinePrefix("/prefix".into()),
+            Path::new("/games/demo"),
+            &home,
+        )
+        .unwrap();
         assert!(resolved.ends_with("saves/demo"));
         assert!(!resolved.to_string_lossy().starts_with('~'));
+    }
+
+    #[test]
+    fn the_same_token_resolves_on_both_sides_of_a_dual_boot() {
+        // One configuration, two systems: inside a wine prefix the token lands
+        // under drive_c, on real Windows under the user profile. This equality
+        // of *meaning* is what makes a save location portable.
+        let prefix = FakePrefix::new("dual", &["tester"]);
+        let save = SavePath::new(SavePathKind::Windows, "%APPDATA%\\Game\\save");
+
+        let on_linux = resolve_save_path(
+            &SaveRoot::WinePrefix(prefix.path()),
+            Path::new("/games/demo"),
+            &save,
+        )
+        .unwrap();
+        assert_eq!(
+            on_linux,
+            prefix
+                .path()
+                .join("drive_c/users/tester/AppData/Roaming/Game/save")
+        );
+
+        let on_windows = resolve_save_path(
+            &SaveRoot::UserProfile("C:/Users/tester".into()),
+            Path::new("C:/games/demo"),
+            &save,
+        )
+        .unwrap();
+        assert_eq!(
+            on_windows,
+            PathBuf::from("C:/Users/tester/AppData/Roaming/Game/save")
+        );
+
+        // Both describe the same place, which is the whole point.
+        assert_eq!(
+            on_linux
+                .strip_prefix(prefix.path().join("drive_c/users/tester"))
+                .unwrap(),
+            on_windows.strip_prefix("C:/Users/tester").unwrap()
+        );
+    }
+
+    #[test]
+    fn windows_only_accepts_portable_drive_paths() {
+        let save = SavePath::new(SavePathKind::Windows, "C:\\users\\tester\\Documents\\Game");
+        // Inside a prefix any drive path is fine (it is one machine's prefix).
+        let in_prefix = resolve_save_path(
+            &SaveRoot::WinePrefix("/prefix".into()),
+            Path::new("/games/demo"),
+            &save,
+        )
+        .unwrap();
+        assert_eq!(
+            in_prefix,
+            PathBuf::from("/prefix/drive_c/users/tester/Documents/Game")
+        );
+
+        // On real Windows a path outside the profile is rejected: it would be a
+        // machine-specific absolute path pretending to be portable.
+        let on_windows = resolve_save_path(
+            &SaveRoot::UserProfile("C:/Users/tester".into()),
+            Path::new("C:/games/demo"),
+            &save,
+        )
+        .unwrap();
+        assert_eq!(on_windows, PathBuf::from("C:/Users/tester/Documents/Game"));
+
+        let bad = SavePath::new(SavePathKind::Windows, "C:\\Program Files\\Game\\save");
+        let error = resolve_save_path(
+            &SaveRoot::UserProfile("C:/Users/tester".into()),
+            Path::new("C:/games/demo"),
+            &bad,
+        )
+        .unwrap_err();
+        assert!(error.contains("令牌"), "{error}");
     }
 
     #[test]

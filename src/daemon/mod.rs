@@ -412,10 +412,10 @@ impl Daemon {
                 if let Some(dir) = &patch.game_dir {
                     candidate.game_dir = dir.clone();
                 }
-                let (prefix, _) = crate::wine::resolve_prefix(&candidate, config);
+                let (root, _) = crate::wine::SaveRoot::for_platform(&candidate, config);
                 let game_dir = candidate.effective_game_dir();
                 for save in save_paths {
-                    crate::wine::resolve_save_path(&prefix, &game_dir, save)?;
+                    crate::wine::resolve_save_path(&root, &game_dir, save)?;
                 }
             }
 

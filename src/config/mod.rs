@@ -25,6 +25,9 @@ pub struct Config {
     /// Machine-wide wine settings; a game can override the prefix.
     #[serde(default)]
     pub wine: WineConfig,
+    /// Cloud save sync (Phase 2).
+    #[serde(default)]
+    pub sync: SyncConfig,
     #[serde(default)]
     pub games: HashMap<String, GameConfig>,
 }
@@ -78,6 +81,54 @@ pub struct GameConfig {
     pub process_name: Option<String>,
     pub scale_profile: ScaleProfile,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Cloud save sync settings.
+///
+/// **Nothing secret is stored here.** The B2 credentials and the sync password
+/// live in the OS keyring (see [`crate::secrets`]), which encrypts them at rest
+/// while still letting their owner read them back with standard tooling. This
+/// struct only holds the non-sensitive settings (ADR-010).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// S3-compatible endpoint, e.g. `s3.us-west-004.backblazeb2.com`.
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub region: String,
+    #[serde(default)]
+    pub bucket: String,
+    /// Folder inside the bucket that kotori owns.
+    #[serde(default = "default_sync_prefix")]
+    pub prefix: String,
+    /// Wrap the data in rclone's `crypt` layer. Off by default: without it the
+    /// saves are plain files, readable without kotori *and* without rclone.
+    #[serde(default)]
+    pub encryption: bool,
+    /// Version snapshots kept per save location; `0` keeps all of them, which
+    /// is the default — silently dropping an old save is worse than using space.
+    #[serde(default)]
+    pub keep_versions: u32,
+}
+
+fn default_sync_prefix() -> String {
+    "kotori".to_string()
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            endpoint: String::new(),
+            region: String::new(),
+            bucket: String::new(),
+            prefix: default_sync_prefix(),
+            encryption: false,
+            keep_versions: 0,
+        }
+    }
 }
 
 /// How a save path is interpreted. The three kinds exist so that the same

@@ -6,6 +6,14 @@ mod game;
 mod process;
 mod rpc;
 mod scale;
+// Wired up when the sync UI/daemon lands; the module and its tests
+// come first so the storage rules are locked in.
+#[allow(dead_code)]
+mod secrets;
+// Wired up by the sync orchestration next; the module and its tests come
+// first so the storage and retention rules are locked in.
+#[allow(dead_code)]
+mod sync;
 mod ui;
 mod util;
 mod wine;
