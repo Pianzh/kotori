@@ -187,14 +187,6 @@ impl SaveRoot {
         let (prefix, source) = resolve_prefix(game, config);
         (Self::WinePrefix(prefix), source)
     }
-
-    /// A short description used in messages and logs.
-    pub fn describe(&self) -> String {
-        match self {
-            Self::WinePrefix(path) => format!("wine prefix {}", path.display()),
-            Self::UserProfile(path) => format!("Windows 用户目录 {}", path.display()),
-        }
-    }
 }
 
 /// Turn a [`SavePath`] into a real path on this machine.
