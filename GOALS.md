@@ -60,14 +60,19 @@
   - **相对游戏根目录**：其他位置只要能用相对路径就用相对路径
   - **绝对路径**：仅本机有效，不参与跨平台映射
   - 每条可带排除规则（如 `*.log`、`cache/`）
-- 基于 Backblaze B2 实现增量同步（kopia，走 S3 兼容后端，见 AGENTS.md ADR-007）
-- 支持多游戏独立索引与滑动窗口版本保留
-- 启动前自动拉取（30s 超时），退出后异步上传
+- 基于 Backblaze B2 实现增量同步（**rclone** 走 S3 兼容后端；不用 kopia 的原因见 AGENTS.md ADR-010）
+- **加密是可选项，默认关闭**：不加密时存档就是 bucket 里的普通文件，B2 网页/任何 S3 工具都能读，
+  不需要 kotori、不需要 rclone，更不需要 kopia
+- 密码**由用户自己设定，我们绝不生成**；只存进系统密钥环（Linux Secret Service / Windows 凭据管理器），
+  磁盘上没有任何明文，用户随时能用系统工具把密码读回来
+- 支持多游戏独立索引与滑动窗口版本保留（默认 `keep_versions = 0` 永久保留；开启后只删云端快照）
+- 启动前自动拉取（30s 超时，用 `--update` 保证本地更新的存档不会被覆盖），退出后异步上传
+- **恢复用 `copy` 不用 `sync`**：坏备份也删不掉本地存档；恢复前会先把当前状态存成一个快照
 - 失败不阻断流程，仅提示
 - **Windows 端的主要交付内容**，同步模块平台无关（不依赖 gamescope/wine）
 
 ### 2.4 跨平台适配
-- Linux ARM64：主交付平台，内嵌 kopia + ludusavi 静态二进制
+- Linux ARM64：主交付平台，内嵌 rclone + ludusavi 静态二进制
 - Linux x86_64：复用 ARM64 全部逻辑
 - Windows x86_64：复用配置模型 + 同步模块；缩放替换为 Magpie（V2）
   - 待办：IPC（Unix Socket → Named Pipe）与进程管理（进程组 → Job Object）需抽象层，见 §8
@@ -92,7 +97,7 @@
 - B2 凭证加密存储于系统密钥环
 
 ### 3.4 外部工具集成
-- 运行时硬依赖：gamescope (Linux) / Magpie (Windows) + wine + kopia
+- 运行时硬依赖：gamescope (Linux) / Magpie (Windows) + wine + rclone（云同步）
 - 单文件分发：内嵌对应架构静态二进制，总体积 ~35MB
 - 统一执行器封装：带超时、重试、结构化错误输出
 
@@ -108,7 +113,7 @@
 | IPC | Unix Socket + JSON-RPC | 简单可靠 |
 | 缩放 | gamescope | Linux 原生微合成器 |
 | 游戏运行 | wine | Windows 游戏兼容层 |
-| 云同步 | kopia + B2 | 增量备份、加密、云存储 |
+| 云同步 | rclone + B2 | 增量备份、加密可选（不加密时存档是普通文件）、云存储 |
 | 存档发现 | ludusavi (可选) | 预填存档路径 |
 
 ---
@@ -132,12 +137,11 @@
 ### Phase 2: 云同步（3-4 周）
 **目标**：实现基于 B2 的增量云存档同步
 
-- 内嵌 kopia 二进制
-- Kopia 命令封装
-- B2 客户端
-- 启动前同步（30s 超时）
-- 退出后异步同步
-- 同步状态查询与手动触发
+- rclone 调用封装（凭证经子进程环境变量传递，磁盘零密钥）
+- 设置页：B2 凭据、同步密码、加密开关、连接测试
+- 启动前同步（30s 超时，失败不阻断）
+- 退出后异步同步（会话事件驱动）
+- 同步状态查询、手动触发、版本列表与回滚
 
 ### Phase 3: UI 打磨与跨平台（2-3 周）
 **目标**：完善 GUI 体验，准备 Windows 支持
@@ -222,7 +226,8 @@
 - [gamescope 文档](https://github.com/ValveSoftware/gamescope)
 - [Iced 文档](https://iced.rs/)
 - [Niri 配置](https://niri-wm.github.io/niri/Configuration:-Introduction)
-- [Kopia 文档](https://kopia.io/)
+- [rclone 文档](https://rclone.org/docs/)
+- [Backblaze B2 + rclone](https://rclone.org/b2/)
 - [Magpie 项目](https://github.com/Blinue/Magpie)
 
 ---

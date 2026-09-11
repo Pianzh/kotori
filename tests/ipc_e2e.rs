@@ -20,6 +20,8 @@ struct Fixture {
     child: Option<Child>,
     /// Extra directory prepended to the daemon's PATH (fake gamescope/wine).
     extra_path: Option<PathBuf>,
+    /// Extra environment for the daemon (fake rclone / secret-tool).
+    envs: Vec<(String, String)>,
 }
 
 impl Fixture {
@@ -76,7 +78,157 @@ sharpness = 4
             log,
             child: None,
             extra_path: None,
+            envs: Vec::new(),
         }
+    }
+
+    /// Stand up fake `rclone` and `secret-tool` binaries plus an on-disk
+    /// "bucket", so sync can be exercised end to end without a network or a
+    /// real keyring.
+    ///
+    /// The fake rclone really moves bytes: `kotori:<path>` mirrors to
+    /// `<dir>/<path>`, so the returned directory *is* the remote root.
+    /// `copy` copies files (moving the replaced ones into `--backup-dir`),
+    /// `lsf` lists, `purge` deletes — which makes the assertions about versions
+    /// and restores statements about actual files.
+    fn enable_fake_sync(&mut self, enabled: bool) -> PathBuf {
+        let bin = self.dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let log = self.dir.join("rclone.log");
+        let secrets = self.dir.join("secrets");
+        std::fs::create_dir_all(&secrets).unwrap();
+
+        write_script(
+            &bin.join("rclone"),
+            &format!(
+                r#"#!/bin/sh
+[ "$1" = "--kotori-warmup" ] && exit 0
+dir='{dir}'
+log='{log}'
+bucket='{bucket}'
+printf 'argv:%s\n' "$*" >> "$log"
+
+# Map a remote path onto the on-disk bucket; local paths pass through.
+remote_path() {{
+  case "$1" in
+    kotori:*) printf '%s/%s' "$bucket" "${{1#kotori:}}" ;;
+    kotorienc:*) printf '%s/%s' "$bucket" "${{1#kotorienc:}}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}}
+
+cmd="$1"; shift
+case "$cmd" in
+  obscure) echo "obscured-blob" ;;
+  mkdir) mkdir -p "$(remote_path "$1")" ;;
+  purge) rm -rf "$(remote_path "$1")" ;;
+  lsf)
+    target=''
+    for a in "$@"; do [ "$a" = '--dirs-only' ] || target="$a"; done
+    p=$(remote_path "$target")
+    if [ -d "$p" ]; then
+      for d in "$p"/*/; do [ -d "$d" ] && basename "$d"; done
+    fi
+    ;;
+  copy)
+    src=''; dst=''; backup=''; update=0
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --backup-dir) backup="$2"; shift 2 ;;
+        --suffix|--exclude) shift 2 ;;
+        --update) update=1; shift ;;
+        --create-empty-src-dirs) shift ;;
+        *) if [ -z "$src" ]; then src="$1"; else dst="$1"; fi; shift ;;
+      esac
+    done
+    sp=$(remote_path "$src"); dp=$(remote_path "$dst")
+    mkdir -p "$dp"
+    [ -d "$sp" ] || exit 3
+    cd "$sp" || exit 3
+    find . -type f | while read -r f; do
+      rel="${{f#./}}"
+      if [ -f "$dp/$rel" ]; then
+        if [ "$update" = 1 ] && [ "$dp/$rel" -nt "$sp/$rel" ]; then continue; fi
+        if [ -n "$backup" ]; then
+          bp=$(remote_path "$backup")
+          mkdir -p "$bp/$(dirname "$rel")"
+          mv "$dp/$rel" "$bp/$rel"
+        fi
+      fi
+      mkdir -p "$dp/$(dirname "$rel")"
+      cp "$sp/$rel" "$dp/$rel"
+    done
+    ;;
+esac
+exit 0
+"#,
+                dir = self.dir.display(),
+                log = log.display(),
+                bucket = self.dir.display()
+            ),
+        );
+
+        // Mirrors the parts of secret-tool kotori relies on; entries are files
+        // named after the `account` attribute.
+        write_script(
+            &bin.join("secret-tool"),
+            &format!(
+                r#"#!/bin/sh
+[ "$1" = "--kotori-warmup" ] && exit 0
+dir='{secrets}'
+name=''
+prev=''
+for a in "$@"; do
+  if [ "$prev" = "account" ]; then name="$a"; fi
+  prev="$a"
+done
+file="$dir/$name"
+case "$1" in
+  store) read -r v; printf '%s' "$v" > "$file" ;;
+  lookup) [ -s "$file" ] && cat "$file" || exit 1 ;;
+  clear) rm -f "$file" ;;
+  *) exit 2 ;;
+esac
+exit 0
+"#,
+                secrets = secrets.display()
+            ),
+        );
+
+        self.extra_path = Some(bin.clone());
+        self.envs.push((
+            "KOTORI_RCLONE".to_string(),
+            bin.join("rclone").display().to_string(),
+        ));
+        self.envs.push((
+            "KOTORI_SECRET_TOOL".to_string(),
+            bin.join("secret-tool").display().to_string(),
+        ));
+
+        let mut config = std::fs::read_to_string(&self.config).unwrap();
+        config.push_str(&format!(
+            "\n[sync]\nenabled = {enabled}\nendpoint = \"s3.test.invalid\"\nbucket = \"test-bucket\"\nprefix = \"kotori\"\n"
+        ));
+        std::fs::write(&self.config, config).unwrap();
+
+        // Where the remote root mirrors to: `<dir>/<bucket>/<prefix>`.
+        self.dir.join("test-bucket").join("kotori")
+    }
+
+    /// Add fake `gamescope`/`wine` that record how they were invoked and exit.
+    fn enable_fake_display(&mut self) -> PathBuf {
+        let bin = self.dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let probe = self.dir.join("probe.txt");
+        let script = format!(
+            "#!/bin/sh\n[ \"$1\" = \"--kotori-warmup\" ] && exit 0\n{{ echo \"argv:$*\"; echo \"cwd:$(pwd)\"; echo \"WINEPREFIX:${{WINEPREFIX:-}}\"; }} >> '{}'\nexit 0\n",
+            probe.display()
+        );
+        for name in ["gamescope", "wine"] {
+            write_script(&bin.join(name), &script);
+        }
+        self.extra_path = Some(bin);
+        probe
     }
 
     fn start(&mut self) {
@@ -96,6 +248,9 @@ sharpness = 4
         if let Some(bin) = &self.extra_path {
             let existing = std::env::var("PATH").unwrap_or_default();
             command.env("PATH", format!("{}:{existing}", bin.display()));
+        }
+        for (key, value) in &self.envs {
+            command.env(key, value);
         }
         let child = command.spawn().expect("failed to spawn kotori daemon");
         self.child = Some(child);
@@ -165,6 +320,53 @@ fn assert_is_error(response: &Value, code: i32) {
         value["error"]["code"], code,
         "expected error {code}, got {response}"
     );
+}
+
+/// Write an executable helper script and prove the kernel will run it.
+///
+/// The tests run in parallel, so another thread may fork between our write and
+/// our first exec and inherit the still-open write handle — the kernel then
+/// reports `ETXTBSY` for that inode until the child execs. Retrying converges,
+/// because once our own write handle is closed the file cannot be reopened for
+/// writing. Every fake binary answers `--kotori-warmup` with an immediate exit,
+/// so this has no side effects.
+fn write_script(path: &std::path::Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, body).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    for _ in 0..200 {
+        match Command::new(path).arg("--kotori-warmup").output() {
+            Ok(_) => return,
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(e) => panic!("cannot execute {}: {e}", path.display()),
+        }
+    }
+    panic!("{} stayed busy", path.display());
+}
+
+/// Poll `check` until it returns true or the deadline passes.
+fn wait_until(timeout: Duration, mut check: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        if check() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    check()
+}
+
+/// Every `rclone` invocation the daemon made.
+fn rclone_calls(fixture: &Fixture) -> Vec<String> {
+    std::fs::read_to_string(fixture.dir.join("rclone.log"))
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.strip_prefix("argv:"))
+        .map(str::to_string)
+        .collect()
 }
 
 #[test]
@@ -671,21 +873,17 @@ fn manual_add_and_wine_settings_over_ipc() {
 /// window-free: the fake gamescope records how it was invoked and exits.
 #[test]
 fn launch_builds_the_expected_gamescope_command() {
-    use std::os::unix::fs::PermissionsExt;
-
     let mut fixture = Fixture::new("launch");
     let bin = fixture.dir.join("bin");
     std::fs::create_dir_all(&bin).unwrap();
     let probe = fixture.dir.join("probe.txt");
 
     let script = format!(
-        "#!/bin/sh\n{{ echo \"argv:$*\"; echo \"cwd:$(pwd)\"; echo \"WINEPREFIX:${{WINEPREFIX:-}}\"; }} >> '{}'\nexit 0\n",
+        "#!/bin/sh\n[ \"$1\" = \"--kotori-warmup\" ] && exit 0\n{{ echo \"argv:$*\"; echo \"cwd:$(pwd)\"; echo \"WINEPREFIX:${{WINEPREFIX:-}}\"; }} >> '{}'\nexit 0\n",
         probe.display()
     );
     for name in ["gamescope", "wine"] {
-        let path = bin.join(name);
-        std::fs::write(&path, &script).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        write_script(&bin.join(name), &script);
     }
     fixture.extra_path = Some(bin.clone());
     fixture.start();
@@ -827,5 +1025,260 @@ fn watch_only_session_follows_the_process() {
         session_count(&fixture),
         0,
         "session should end when the watched process exits"
+    );
+}
+
+/// The whole cloud-sync chain, over IPC, against a fake rclone that really moves
+/// files: settings and credentials go in through the RPCs, an upload lands in
+/// the bucket, the previous copy is kept as a snapshot, and a restore — latest
+/// or a named snapshot — puts the saves back.
+#[test]
+fn cloud_sync_uploads_keeps_versions_and_restores_over_ipc() {
+    let mut fixture = Fixture::new("sync");
+    let remote = fixture.enable_fake_sync(true);
+    fixture.start();
+
+    // A game whose saves live in `<game_dir>/savedata`.
+    let game_dir = fixture.dir.join("SyncGame");
+    let saves = game_dir.join("savedata");
+    std::fs::create_dir_all(&saves).unwrap();
+    let exe = game_dir.join("game.exe");
+    std::fs::write(&exe, b"").unwrap();
+    std::fs::write(saves.join("cg.dat"), b"first").unwrap();
+
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Sync Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "sync-game", "{response}");
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "sync-game", "save_paths": ["savedata"] }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+
+    // Nothing is set up yet, and the status says so instead of failing.
+    let status = fixture.rpc("sync.status", json!({}));
+    assert_eq!(status["result"]["ready"], false, "{status}");
+    assert!(
+        status["result"]["problem"]
+            .as_str()
+            .unwrap()
+            .contains("B2 凭据"),
+        "{status}"
+    );
+    assert_eq!(status["result"]["games"][1]["locations"], 1, "{status}");
+
+    // --- credentials -------------------------------------------------------
+    let response = fixture.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "test-key-id", "app_key": "test-app-key" }),
+    );
+    assert_eq!(response["result"]["stored"], true, "{response}");
+
+    let status = fixture.rpc("sync.status", json!({}));
+    let status_body = status.to_string();
+    assert_eq!(status["result"]["ready"], true, "{status}");
+    assert_eq!(status["result"]["remote"], "kotori:test-bucket/kotori");
+    assert_eq!(status["result"]["secrets"][0], "b2-key-id");
+    // The status may name the secrets; it must never carry their values.
+    assert!(!status_body.contains("test-app-key"), "{status_body}");
+    assert!(!status_body.contains("test-key-id"), "{status_body}");
+
+    // The credentials reach rclone through the environment, never the argv.
+    let response = fixture.rpc("sync.test", json!({}));
+    assert_eq!(response["result"]["ok"], true, "{response}");
+    for call in rclone_calls(&fixture) {
+        assert!(!call.contains("test-app-key"), "{call}");
+    }
+
+    // --- first upload ------------------------------------------------------
+    let response = fixture.rpc("sync.now", json!({ "id": "sync-game" }));
+    assert_eq!(response["result"]["ok"], true, "{response}");
+    assert_eq!(
+        response["result"]["games"][0]["locations"][0]["action"], "uploaded",
+        "{response}"
+    );
+
+    let current = remote.join("games/sync-game/current/rel-savedata/cg.dat");
+    assert_eq!(std::fs::read_to_string(&current).unwrap(), "first");
+
+    // --- second upload keeps the replaced copy as a snapshot ---------------
+    std::fs::write(saves.join("cg.dat"), b"second").unwrap();
+    let response = fixture.rpc("sync.now", json!({ "id": "sync-game" }));
+    assert_eq!(response["result"]["ok"], true, "{response}");
+    assert_eq!(std::fs::read_to_string(&current).unwrap(), "second");
+
+    let versions = fixture.rpc("sync.versions", json!({ "id": "sync-game" }));
+    let stamps = versions["result"]["versions"].as_array().unwrap().clone();
+    assert_eq!(stamps.len(), 1, "{versions}");
+    let stamp = stamps[0].as_str().unwrap().to_string();
+    let snapshot = remote
+        .join("games/sync-game/versions")
+        .join(&stamp)
+        .join("rel-savedata/cg.dat");
+    assert_eq!(
+        std::fs::read_to_string(&snapshot).unwrap(),
+        "first",
+        "the snapshot holds what the upload replaced"
+    );
+
+    // Sync also shows up in the status, so the UI can say when it last ran.
+    let status = fixture.rpc("sync.status", json!({}));
+    assert_eq!(status["result"]["games"][1]["last"]["ok"], true, "{status}");
+    assert_eq!(status["result"]["games"][1]["last"]["action"], "上传");
+
+    // --- restore the newest state -----------------------------------------
+    std::fs::remove_dir_all(&saves).unwrap();
+    let response = fixture.rpc("sync.restore", json!({ "id": "sync-game" }));
+    assert_eq!(response["result"]["ok"], true, "{response}");
+    assert_eq!(
+        std::fs::read_to_string(saves.join("cg.dat")).unwrap(),
+        "second",
+        "a restore brings the newest backup back"
+    );
+
+    // --- roll back to the snapshot ----------------------------------------
+    let response = fixture.rpc(
+        "sync.restore",
+        json!({ "id": "sync-game", "version": stamp }),
+    );
+    assert_eq!(response["result"]["ok"], true, "{response}");
+    assert_eq!(
+        std::fs::read_to_string(saves.join("cg.dat")).unwrap(),
+        "first",
+        "a named snapshot restores the state from before that upload\n{:?}",
+        rclone_calls(&fixture)
+    );
+
+    // A snapshot name that is not ours is refused before anything runs.
+    let response = fixture.rpc(
+        "sync.restore",
+        json!({ "id": "sync-game", "version": "../../etc" }),
+    );
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("不是合法的快照名"),
+        "{response}"
+    );
+
+    // --- retention stays off unless asked for ------------------------------
+    let listing = rclone_calls(&fixture);
+    assert!(
+        !listing.iter().any(|call| call.starts_with("purge")),
+        "keep_versions = 0 must never delete a snapshot: {listing:?}"
+    );
+}
+
+/// Sync rides on the session lifecycle: the saves are fetched before a launch
+/// and pushed back after the game exits.
+#[test]
+fn save_sync_follows_the_game_lifecycle() {
+    let mut fixture = Fixture::new("sync-life");
+    let remote = fixture.enable_fake_sync(true);
+    let probe = fixture.enable_fake_display();
+    fixture.start();
+
+    let game_dir = fixture.dir.join("LifeGame");
+    let saves = game_dir.join("savedata");
+    std::fs::create_dir_all(&saves).unwrap();
+    let exe = game_dir.join("game.exe");
+    std::fs::write(&exe, b"").unwrap();
+    std::fs::write(saves.join("save.dat"), b"from-cloud").unwrap();
+
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Life Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "life-game", "{response}");
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "life-game", "save_paths": ["savedata"] }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+    let response = fixture.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+    assert_eq!(response["result"]["stored"], true, "{response}");
+
+    let cloud = remote.join("games/life-game/current/rel-savedata/save.dat");
+
+    // Put something in the cloud, then remove the local copy.
+    assert_eq!(
+        fixture.rpc("sync.now", json!({ "id": "life-game" }))["result"]["ok"],
+        true
+    );
+    std::fs::remove_dir_all(&saves).unwrap();
+    assert!(!saves.exists());
+
+    // Launching pulls it back *before* the game could read it. The fake
+    // gamescope exits at once, so the launch itself fails — the point is that
+    // the save is already back.
+    let response = fixture.rpc("game.launch", json!({ "id": "life-game" }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("gamescope")),
+        "expected the fake gamescope to exit immediately: {response}"
+    );
+    assert!(
+        probe.exists(),
+        "the launch still reached gamescope despite sync"
+    );
+    assert_eq!(
+        std::fs::read_to_string(saves.join("save.dat")).unwrap(),
+        "from-cloud",
+        "the pre-launch pull must run before the game starts"
+    );
+
+    // --- now the exit path, with a game kotori only watches -----------------
+    // A uniquely named copy of `sleep`, so nothing else on the machine can be
+    // mistaken for the game.
+    let watched = fixture.dir.join("kotori-lifecycle-proc");
+    std::fs::copy("/bin/sleep", &watched).unwrap();
+    let watched_name = watched.file_name().unwrap().to_string_lossy().to_string();
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "life-game", "watch_only": true, "process_name": watched_name }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+
+    let session = fixture.rpc("game.launch", json!({ "id": "life-game" }));
+    assert_eq!(session["result"]["watch_only"], true, "{session}");
+
+    let mut child = std::process::Command::new(&watched)
+        .arg("30")
+        .spawn()
+        .expect("spawn the watched process");
+    // Let the engine notice it, then play "for a while".
+    std::thread::sleep(Duration::from_secs(3));
+    std::fs::write(saves.join("save.dat"), b"progress-made").unwrap();
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    // The session ends, and the exit hook uploads what the game wrote.
+    assert!(
+        wait_until(Duration::from_secs(30), || {
+            std::fs::read_to_string(&cloud)
+                .map(|body| body == "progress-made")
+                .unwrap_or(false)
+        }),
+        "the saves were never uploaded after the game exited ({} calls: {:?})",
+        rclone_calls(&fixture).len(),
+        rclone_calls(&fixture)
+    );
+
+    // And the previous state is preserved as a snapshot.
+    let versions = fixture.rpc("sync.versions", json!({ "id": "life-game" }));
+    assert!(
+        !versions["result"]["versions"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{versions}"
     );
 }
