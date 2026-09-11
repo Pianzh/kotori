@@ -4,10 +4,12 @@ use std::path::Path;
 
 use crate::config::{MAX_SHARPNESS, ScaleAlgorithm, ScaleProfile};
 
-/// Everything needed to start one game.
+/// Everything needed to start (or start watching) one game.
 #[derive(Debug, Clone)]
 pub struct LaunchSpec<'a> {
-    /// Executable to run (through wine).
+    /// Id of the game this session belongs to.
+    pub game_id: &'a str,
+    /// Executable to run (through wine). Unused when `watch_only`.
     pub exe: &'a str,
     /// Extra arguments for that executable.
     pub args: &'a [String],
@@ -18,6 +20,12 @@ pub struct LaunchSpec<'a> {
     pub wine_prefix: Option<&'a Path>,
     /// Scaling to apply to this launch.
     pub profile: &'a ScaleProfile,
+    /// Process whose lifetime defines the session. Needed to make a session
+    /// outlive a launcher, and required when `watch_only`.
+    pub process_name: Option<&'a str>,
+    /// Do not launch anything: only track `process_name`. Used for games the
+    /// user starts themselves (the norm on Windows).
+    pub watch_only: bool,
 }
 
 /// ScaleEngine trait - core abstraction for scaling backends
@@ -51,14 +59,22 @@ pub trait ScaleEngine: Send + Sync {
     async fn get_status(&self, session: &ScaleSession) -> Result<ScaleStatus, ScaleError>;
 }
 
-/// A running scaling session
+/// A live session: either a game kotori launched, or a process it only watches.
 #[derive(Debug, Clone)]
 pub struct ScaleSession {
     pub session_id: String,
-    pub gamescope_pid: u32,
+    /// Which game this session belongs to, so clients can match session to game.
+    pub game_id: Option<String>,
+    /// `None` for watch-only sessions: kotori launched nothing.
+    pub gamescope_pid: Option<u32>,
     pub profile: ScaleProfile,
     pub started_at: std::time::Instant,
-    pub process_group: u32,
+    /// Process group to signal on stop; `None` when there is nothing to kill.
+    pub process_group: Option<u32>,
+    /// The process this session follows, if any.
+    pub process_name: Option<String>,
+    /// True when kotori did not launch the game, only watched it.
+    pub watch_only: bool,
 }
 
 /// Current scaling status

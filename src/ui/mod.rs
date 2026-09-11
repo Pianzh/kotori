@@ -39,12 +39,39 @@ pub struct WineStatus {
 /// "重连" always works, and resets the counter).
 const MAX_AUTO_RETRIES: u32 = 5;
 
+/// How often the UI polls the daemon for live sessions.
+const STATUS_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The three save-location kinds, as shown in the editor.
+const SAVE_PATH_KINDS: [&str; 3] = ["windows", "relative", "absolute"];
+
+/// One save location in the editor.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SavePathDraft {
+    /// `windows` | `relative` | `absolute`.
+    pub kind: String,
+    pub path: String,
+    /// Comma-separated glob patterns.
+    pub exclude: String,
+}
+
+/// A live session, as reported by `daemon.status`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SessionInfo {
+    pub session_id: String,
+    pub watch_only: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct UiGame {
     pub id: String,
     pub name: String,
     pub game_dir: String,
     pub exe: String,
+    pub save_paths: Vec<SavePathDraft>,
+    /// Watch-only games are started by the user; kotori follows the process.
+    pub watch_only: bool,
+    pub process_name: String,
     /// Profile name as stored, so saving never silently renames it.
     pub profile_name: String,
     pub algo: String,
@@ -77,6 +104,8 @@ struct Draft {
     game_dir_original: String,
     exe: String,
     exe_original: String,
+    save_paths: Vec<SavePathDraft>,
+    save_paths_original: Vec<SavePathDraft>,
     algo: String,
     sharpness: u32,
     internal_w: String,
@@ -99,6 +128,8 @@ impl Draft {
             game_dir_original: game.game_dir.clone(),
             exe: game.exe.clone(),
             exe_original: game.exe.clone(),
+            save_paths: game.save_paths.clone(),
+            save_paths_original: game.save_paths.clone(),
             algo: if ScaleAlgorithm::ALL.contains(&game.algo.as_str()) {
                 game.algo.clone()
             } else {
@@ -127,6 +158,11 @@ impl Draft {
     fn game_dir_changed(&self) -> bool {
         self.game_dir.trim() != self.game_dir_original
     }
+
+    /// Has the user changed the save locations?
+    fn save_paths_changed(&self) -> bool {
+        self.save_paths != self.save_paths_original
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +185,11 @@ pub enum Message {
     FramerateChanged(String),
     ExePathChanged(String),
     GameDirChanged(String),
+    SavePathKindChanged(usize, String),
+    SavePathChanged(usize, String),
+    SavePathExcludeChanged(usize, String),
+    AddSavePath,
+    RemoveSavePath(usize),
     SaveProfile,
     ProfileSaved(Result<(), String>),
     DeleteRequested,
@@ -165,6 +206,10 @@ pub enum Message {
     ClearWinePrefix,
     WinePrefixSaved(Result<(), String>),
     WineStatusLoaded(Result<WineStatus, String>),
+    StatusLoaded(Result<std::collections::BTreeMap<String, SessionInfo>, String>),
+    Stop(String),
+    StopDone(Result<(), String>),
+    Tick,
 }
 
 pub struct App {
@@ -194,6 +239,8 @@ pub struct App {
     wine_msg: Option<String>,
     /// Automatic reconnect bookkeeping.
     retry_attempts: u32,
+    /// Live sessions by game id (refreshed periodically).
+    running: std::collections::BTreeMap<String, SessionInfo>,
 }
 
 impl App {
@@ -224,6 +271,7 @@ impl App {
                 wine_status: None,
                 wine_msg: None,
                 retry_attempts: 0,
+                running: std::collections::BTreeMap::new(),
             },
             Task::batch([
                 Task::perform(async { connect_and_load().await }, Message::GamesLoaded),
@@ -231,6 +279,10 @@ impl App {
                     async { load_wine_status().await },
                     Message::WineStatusLoaded,
                 ),
+                // Start the periodic session poll.
+                Task::perform(async { tokio::time::sleep(STATUS_POLL).await }, |_| {
+                    Message::Tick
+                }),
             ]),
         )
     }
@@ -300,8 +352,13 @@ impl App {
                             .get("session_id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("?");
-                        tracing::info!("game launched, session={sid}");
+                        tracing::info!("game session started: {sid}");
                         self.error = None;
+                        let socket = self.daemon_socket.clone();
+                        return Task::perform(
+                            async move { load_status(&socket).await },
+                            Message::StatusLoaded,
+                        );
                     }
                     Err(e) => self.error = Some(e),
                 }
@@ -510,6 +567,98 @@ impl App {
                     draft.game_dir = value;
                 }
                 Task::none()
+            }
+            Message::SavePathKindChanged(index, kind) => {
+                if let Some(entry) = self
+                    .draft
+                    .as_mut()
+                    .and_then(|d| d.save_paths.get_mut(index))
+                {
+                    entry.kind = kind;
+                }
+                Task::none()
+            }
+            Message::SavePathChanged(index, value) => {
+                if let Some(entry) = self
+                    .draft
+                    .as_mut()
+                    .and_then(|d| d.save_paths.get_mut(index))
+                {
+                    entry.path = value;
+                }
+                Task::none()
+            }
+            Message::SavePathExcludeChanged(index, value) => {
+                if let Some(entry) = self
+                    .draft
+                    .as_mut()
+                    .and_then(|d| d.save_paths.get_mut(index))
+                {
+                    entry.exclude = value;
+                }
+                Task::none()
+            }
+            Message::AddSavePath => {
+                if let Some(draft) = &mut self.draft {
+                    draft.save_paths.push(SavePathDraft {
+                        kind: "windows".to_string(),
+                        path: "%APPDATA%\\".to_string(),
+                        exclude: String::new(),
+                    });
+                }
+                Task::none()
+            }
+            Message::RemoveSavePath(index) => {
+                if let Some(draft) = &mut self.draft
+                    && index < draft.save_paths.len()
+                {
+                    draft.save_paths.remove(index);
+                }
+                Task::none()
+            }
+            Message::Tick => {
+                let socket = self.daemon_socket.clone();
+                let poll = Task::perform(
+                    async move { load_status(&socket).await },
+                    Message::StatusLoaded,
+                );
+                let next = Task::perform(async { tokio::time::sleep(STATUS_POLL).await }, |_| {
+                    Message::Tick
+                });
+                Task::batch([poll, next])
+            }
+            Message::StatusLoaded(Ok(running)) => {
+                self.running = running;
+                self.daemon_connected = Some(true);
+                Task::none()
+            }
+            Message::StatusLoaded(Err(e)) => {
+                // Do not fight the reconnect loop for the error banner; just
+                // mark the daemon as gone and let the user see it.
+                self.daemon_connected = Some(false);
+                tracing::debug!("status poll failed: {e}");
+                Task::none()
+            }
+            Message::Stop(game_id) => {
+                let Some(session) = self.running.get(&game_id).map(|s| s.session_id.clone()) else {
+                    return Task::none();
+                };
+                let socket = self.daemon_socket.clone();
+                self.error = None;
+                Task::perform(
+                    async move { stop_session(&socket, &session).await },
+                    Message::StopDone,
+                )
+            }
+            Message::StopDone(result) => {
+                if let Err(e) = result {
+                    self.error = Some(e);
+                }
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { load_status(&socket).await },
+                    Message::StatusLoaded,
+                )
             }
             Message::SaveProfile => {
                 let Some(draft) = self.draft.clone() else {
@@ -788,44 +937,98 @@ impl App {
 
     fn game_card(&self, game: &UiGame) -> Element<'_, Message> {
         let launching = self.launching.as_deref() == Some(game.id.as_str());
-        let launch_btn = button(text(if launching { "启动中..." } else { "启动" }))
-            .padding([8, 18])
-            .on_press(Message::Launch(game.id.clone()))
-            .style(move |_t: &Theme, _s: iced::widget::button::Status| {
-                iced::widget::button::Style {
-                    background: Some(
-                        if launching {
-                            Color::from_rgb8(0x37, 0x40, 0x51)
-                        } else {
-                            Color::from_rgb8(0x2c, 0x6b, 0xbf)
-                        }
-                        .into(),
-                    ),
-                    text_color: Color::WHITE,
-                    ..Default::default()
-                }
-            });
+        let session = self.running.get(&game.id);
+
+        // A live session turns the action button into "stop"; a watch-only game
+        // that is not running yet offers "monitor" instead of "launch".
+        let action_btn = if session.is_some() {
+            button(text("停止"))
+                .padding([8, 18])
+                .on_press(Message::Stop(game.id.clone()))
+                .style(
+                    |_t: &Theme, _s: iced::widget::button::Status| iced::widget::button::Style {
+                        background: Some(Color::from_rgb8(0x8c, 0x3b, 0x3b).into()),
+                        text_color: Color::WHITE,
+                        ..Default::default()
+                    },
+                )
+        } else {
+            let label = if launching {
+                "启动中…"
+            } else if game.watch_only {
+                "监视"
+            } else {
+                "启动"
+            };
+            button(text(label))
+                .padding([8, 18])
+                .on_press(Message::Launch(game.id.clone()))
+                .style(move |_t: &Theme, _s: iced::widget::button::Status| {
+                    iced::widget::button::Style {
+                        background: Some(
+                            if launching {
+                                Color::from_rgb8(0x37, 0x40, 0x51)
+                            } else {
+                                Color::from_rgb8(0x2c, 0x6b, 0xbf)
+                            }
+                            .into(),
+                        ),
+                        text_color: Color::WHITE,
+                        ..Default::default()
+                    }
+                })
+        };
+
+        let status_badge: Element<'_, Message> = match session {
+            Some(session) if session.watch_only => text("● 监视中")
+                .size(11)
+                .color(Color::from_rgb8(0xd8, 0xa6, 0x57))
+                .into(),
+            Some(_) => text("● 运行中")
+                .size(11)
+                .color(Color::from_rgb8(0x4c, 0xaf, 0x50))
+                .into(),
+            None => iced::widget::Space::new(0, 0).into(),
+        };
 
         let edit_btn = button(text("配置"))
             .padding([8, 14])
             .on_press(Message::GameSelected(game.id.clone()));
 
+        let mut details = column![
+            text(game.name.clone()).size(15).font(ui_font()),
+            text(game.exe.clone())
+                .size(11)
+                .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
+            text(game.scale_label())
+                .size(11)
+                .color(Color::from_rgb8(0x7a, 0xaa, 0x7f)),
+        ]
+        .spacing(3)
+        .align_x(iced::Alignment::Start);
+
+        if game.watch_only {
+            details = details.push(
+                text(format!(
+                    "仅观测：由你自行启动，kotori 跟随进程 {}",
+                    if game.process_name.is_empty() {
+                        "（未设置）"
+                    } else {
+                        &game.process_name
+                    }
+                ))
+                .size(11)
+                .color(Color::from_rgb8(0xd8, 0xa6, 0x57)),
+            );
+        }
+
         container(
             row![
-                column![
-                    text(game.name.clone()).size(15).font(ui_font()),
-                    text(game.exe.clone())
-                        .size(11)
-                        .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
-                    text(game.scale_label())
-                        .size(11)
-                        .color(Color::from_rgb8(0x7a, 0xaa, 0x7f)),
-                ]
-                .spacing(3)
-                .align_x(iced::Alignment::Start),
+                details,
                 iced::widget::horizontal_space(),
+                status_badge,
                 edit_btn,
-                launch_btn,
+                action_btn,
             ]
             .align_y(iced::Alignment::Center)
             .padding([14, 14])
@@ -950,6 +1153,34 @@ impl App {
             .spacing(8)
             .into();
 
+        // Save locations: three kinds, each optionally with exclude patterns.
+        let mut save_rows = column![].spacing(6);
+        for (index, entry) in draft.save_paths.iter().enumerate() {
+            let kind_pick = pick_list(
+                SAVE_PATH_KINDS.map(str::to_string).to_vec(),
+                Some(entry.kind.clone()),
+                move |kind| Message::SavePathKindChanged(index, kind),
+            );
+            save_rows = save_rows.push(
+                row![
+                    kind_pick,
+                    text_input(kind_placeholder(&entry.kind), &entry.path)
+                        .on_input(move |value| Message::SavePathChanged(index, value))
+                        .padding([6, 8])
+                        .width(Length::Fill),
+                    text_input("排除：*.log, cache/", &entry.exclude)
+                        .on_input(move |value| Message::SavePathExcludeChanged(index, value))
+                        .padding([6, 8])
+                        .width(190),
+                    button(text("删除").size(11))
+                        .padding([6, 10])
+                        .on_press(Message::RemoveSavePath(index)),
+                ]
+                .spacing(6)
+                .align_y(iced::Alignment::Center),
+            );
+        }
+
         let mut body = column![
             row![back_btn, iced::widget::horizontal_space()],
             text(&draft.game_name)
@@ -972,6 +1203,15 @@ impl App {
                 .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
             fullscreen_toggle,
             framerate_input,
+            horizontal_rule(1),
+            text("存档位置").size(15).font(ui_font()),
+            text("windows = prefix 内的 Windows 路径，推荐用 %APPDATA% / %DOCUMENTS% / %SAVEDGAMES% 令牌（不要写 C:\\users\\<用户名>，各 prefix 的用户名不一样）；relative = 相对游戏根目录；absolute = 仅本机，不跨平台同步。")
+                .size(11)
+                .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
+            save_rows,
+            button(text("添加存档位置").size(12))
+                .padding([6, 12])
+                .on_press(Message::AddSavePath),
             horizontal_rule(1),
             {
                 let save_status: Element<'_, Message> = match &self.saved_msg {
@@ -1233,6 +1473,117 @@ fn parse_wine_status(value: &Value) -> WineStatus {
     }
 }
 
+/// Live sessions, keyed by game id.
+async fn load_status(
+    socket: &Path,
+) -> Result<std::collections::BTreeMap<String, SessionInfo>, String> {
+    let value = crate::rpc::call(socket, "daemon.status", None).await?;
+    let mut running = std::collections::BTreeMap::new();
+
+    if let Some(sessions) = value.get("sessions").and_then(|v| v.as_array()) {
+        for session in sessions {
+            let (Some(game_id), Some(session_id)) = (
+                session.get("game_id").and_then(|v| v.as_str()),
+                session.get("session_id").and_then(|v| v.as_str()),
+            ) else {
+                continue;
+            };
+            running.insert(
+                game_id.to_string(),
+                SessionInfo {
+                    session_id: session_id.to_string(),
+                    watch_only: session
+                        .get("watch_only")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false),
+                },
+            );
+        }
+    }
+
+    Ok(running)
+}
+
+async fn stop_session(socket: &Path, session_id: &str) -> Result<(), String> {
+    crate::rpc::call(
+        socket,
+        "game.stop",
+        Some(crate::rpc::params([(
+            "session_id",
+            Value::String(session_id.to_string()),
+        )])),
+    )
+    .await?;
+    Ok(())
+}
+
+/// Placeholder that shows the expected shape of each save-location kind.
+fn kind_placeholder(kind: &str) -> &'static str {
+    match kind {
+        "windows" => "%APPDATA%\\Game\\save",
+        "absolute" => "/home/user/saves/game",
+        _ => "savedata",
+    }
+}
+
+fn save_paths_to_json(paths: &[SavePathDraft]) -> Value {
+    Value::Array(
+        paths
+            .iter()
+            .map(|entry| {
+                let mut object = serde_json::Map::new();
+                object.insert("kind".into(), Value::String(entry.kind.clone()));
+                object.insert("path".into(), Value::String(entry.path.clone()));
+                let exclude: Vec<Value> = entry
+                    .exclude
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|pattern| !pattern.is_empty())
+                    .map(|pattern| Value::String(pattern.to_string()))
+                    .collect();
+                if !exclude.is_empty() {
+                    object.insert("exclude".into(), Value::Array(exclude));
+                }
+                Value::Object(object)
+            })
+            .collect(),
+    )
+}
+
+fn parse_save_paths(value: Option<&Value>) -> Vec<SavePathDraft> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .map(|item| SavePathDraft {
+                    kind: item
+                        .get("kind")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("relative")
+                        .to_string(),
+                    path: item
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    exclude: item
+                        .get("exclude")
+                        .and_then(|v| v.as_array())
+                        .map(|patterns| {
+                            patterns
+                                .iter()
+                                .filter_map(|v| v.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 async fn remove_game(socket: &Path, game_id: &str) -> Result<(), String> {
     let params = crate::rpc::params([("id", Value::String(game_id.to_string()))]);
     crate::rpc::call(socket, "game.remove", Some(params)).await?;
@@ -1263,6 +1614,9 @@ async fn save_profile(draft: Draft) -> Result<(), String> {
     }
     if draft.exe_changed() {
         params.push(("exe_path", Value::String(draft.exe.trim().to_string())));
+    }
+    if draft.save_paths_changed() {
+        params.push(("save_paths", save_paths_to_json(&draft.save_paths)));
     }
 
     crate::rpc::call(
@@ -1328,6 +1682,16 @@ fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     .to_string(),
                 game_dir: g
                     .get("game_dir")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                save_paths: parse_save_paths(g.get("save_paths")),
+                watch_only: g
+                    .get("watch_only")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                process_name: g
+                    .get("process_name")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
@@ -1453,6 +1817,8 @@ mod tests {
             game_dir_original: "/games/x".into(),
             exe: "/games/x/game.exe".into(),
             exe_original: "/games/x/game.exe".into(),
+            save_paths: Vec::new(),
+            save_paths_original: Vec::new(),
             algo: algo.into(),
             sharpness: 2,
             internal_w: "1280".into(),
@@ -1558,12 +1924,22 @@ mod tests {
         assert!(err.contains("游戏分辨率宽"), "{err}");
     }
 
+    /// A freshly parsed game must not look "edited" to the save button.
+    impl UiGame {
+        fn save_paths_changed_after_edit(&self) -> bool {
+            Draft::from_game(self).save_paths_changed()
+        }
+    }
+
     fn ui_game() -> UiGame {
         UiGame {
             id: "demo".into(),
             name: "Demo Game".into(),
             game_dir: "/games/demo".into(),
             exe: "/games/demo/game.exe".into(),
+            save_paths: Vec::new(),
+            watch_only: false,
+            process_name: String::new(),
             profile_name: "默认".into(),
             algo: "Fsr".into(),
             sharpness: 2,
@@ -1619,6 +1995,71 @@ mod tests {
     }
 
     #[test]
+    fn save_paths_round_trip_between_editor_and_daemon() {
+        let paths = vec![
+            SavePathDraft {
+                kind: "windows".into(),
+                path: "%APPDATA%\\Game".into(),
+                exclude: "*.log, cache/".into(),
+            },
+            SavePathDraft {
+                kind: "relative".into(),
+                path: "savedata".into(),
+                exclude: String::new(),
+            },
+        ];
+
+        let json = save_paths_to_json(&paths);
+        assert_eq!(json[0]["kind"], "windows");
+        assert_eq!(json[0]["exclude"][0], "*.log");
+        assert_eq!(json[0]["exclude"][1], "cache/");
+        assert!(
+            json[1].get("exclude").is_none(),
+            "an empty exclude list must not be sent"
+        );
+
+        assert_eq!(
+            parse_save_paths(Some(&json)),
+            paths,
+            "editor -> daemon -> editor must be lossless"
+        );
+        assert!(parse_save_paths(None).is_empty());
+    }
+
+    #[test]
+    fn kind_placeholders_teach_each_format() {
+        assert_eq!(kind_placeholder("windows"), "%APPDATA%\\Game\\save");
+        assert!(kind_placeholder("relative").contains("save"));
+        assert!(kind_placeholder("absolute").starts_with('/'));
+    }
+
+    #[test]
+    fn parses_watch_mode_and_save_paths_from_the_daemon() {
+        let value = json!({
+            "games": [{
+                "id": "w",
+                "name": "W",
+                "game_dir": "/games/w",
+                "exe_path": "/games/w/game.exe",
+                "watch_only": true,
+                "process_name": "game.exe",
+                "save_paths": [
+                    { "kind": "windows", "path": "%APPDATA%\\W", "exclude": ["*.log", "tmp/"] }
+                ],
+                "scale_profile": { "algorithm": "Integer" }
+            }]
+        });
+
+        let game = parse_games(&value).unwrap().remove(0);
+        assert!(game.watch_only);
+        assert_eq!(game.process_name, "game.exe");
+        assert_eq!(game.save_paths.len(), 1);
+        assert_eq!(game.save_paths[0].kind, "windows");
+        assert_eq!(game.save_paths[0].exclude, "*.log, tmp/");
+        assert!(!game.save_paths_changed_after_edit());
+    }
+
+    #[test]
     fn draft_seeds_exe_and_detects_changes() {
         let game = ui_game();
         let mut draft = Draft::from_game(&game);
@@ -1648,6 +2089,35 @@ mod tests {
         let _ = app.view();
         app.games = vec![ui_game()];
         let _ = app.view();
+
+        // A watch-only card, with and without a process name.
+        app.games = vec![UiGame {
+            watch_only: true,
+            process_name: "game.exe".into(),
+            ..ui_game()
+        }];
+        let _ = app.view();
+        app.games = vec![ui_game()];
+
+        // Live sessions (running vs. monitoring) change the action button.
+        app.running.insert(
+            "demo".into(),
+            SessionInfo {
+                session_id: "session-1".into(),
+                watch_only: false,
+            },
+        );
+        let _ = app.view();
+        app.running.insert(
+            "demo".into(),
+            SessionInfo {
+                session_id: "session-1".into(),
+                watch_only: true,
+            },
+        );
+        let _ = app.view();
+        app.running.clear();
+
         app.search = "demo".into();
         let _ = app.view();
         app.search = "zzz".into();
@@ -1658,6 +2128,30 @@ mod tests {
         app.selected = Some("demo".into());
         app.draft = Some(Draft::from_game(&ui_game()));
         let _ = app.view();
+
+        // With save locations in the editor (one of each kind).
+        app.draft = Some(Draft {
+            save_paths: vec![
+                SavePathDraft {
+                    kind: "windows".into(),
+                    path: "%APPDATA%\\Game".into(),
+                    exclude: "*.log".into(),
+                },
+                SavePathDraft {
+                    kind: "relative".into(),
+                    path: "savedata".into(),
+                    exclude: String::new(),
+                },
+                SavePathDraft {
+                    kind: "absolute".into(),
+                    path: "/saves/demo".into(),
+                    exclude: String::new(),
+                },
+            ],
+            ..Draft::from_game(&ui_game())
+        });
+        let _ = app.view();
+
         app.confirm_delete = true;
         let _ = app.view();
 

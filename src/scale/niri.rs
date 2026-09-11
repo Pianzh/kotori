@@ -6,6 +6,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::RwLock;
 
+use crate::process;
 use crate::util::executor::find_binary;
 
 use super::{LaunchSpec, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, build_gamescope_args};
@@ -36,6 +37,75 @@ impl NiriScaleEngine {
         }
     }
 
+    /// Track a game the user starts themselves: kotori launches nothing, the
+    /// session simply follows `process_name` for as long as it runs.
+    async fn start_watch_session(&self, spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError> {
+        let Some(name) = spec.process_name.filter(|name| !name.trim().is_empty()) else {
+            return Err(ScaleError::ProtocolError(
+                "「仅观测」模式必须指定要观测的进程名".to_string(),
+            ));
+        };
+
+        let session = ScaleSession {
+            session_id: uuid::Uuid::new_v4().to_string(),
+            game_id: Some(spec.game_id.to_string()),
+            gamescope_pid: None,
+            profile: spec.profile.clone(),
+            started_at: std::time::Instant::now(),
+            process_group: None,
+            process_name: Some(name.to_string()),
+            watch_only: true,
+        };
+
+        self.sessions
+            .write()
+            .await
+            .insert(session.session_id.clone(), session.clone());
+        tracing::info!(
+            "watching for process {name} (session {})",
+            session.session_id
+        );
+
+        let sessions = self.sessions.clone();
+        let sid = session.session_id.clone();
+        let name = name.to_string();
+        tokio::spawn(async move {
+            let deadline = tokio::time::Instant::now() + process::APPEAR_TIMEOUT;
+
+            // Wait for the game to show up — unless the session is stopped.
+            loop {
+                if !sessions.read().await.contains_key(&sid) {
+                    return;
+                }
+                if process::is_running(&name) {
+                    break;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    tracing::warn!("session {sid}: {name} never appeared, giving up");
+                    sessions.write().await.remove(&sid);
+                    return;
+                }
+                tokio::time::sleep(process::POLL_INTERVAL).await;
+            }
+
+            tracing::info!("session {sid}: {name} is running");
+            loop {
+                tokio::time::sleep(process::POLL_INTERVAL).await;
+                if !sessions.read().await.contains_key(&sid) {
+                    return;
+                }
+                if !process::is_running(&name) {
+                    break;
+                }
+            }
+
+            tracing::info!("session {sid}: {name} exited");
+            sessions.write().await.remove(&sid);
+        });
+
+        Ok(session)
+    }
+
     /// Wrap a game command so it runs inside gamescope via `gamescope <args> -- wine game.exe`.
     fn compose_command(&self, spec: &LaunchSpec<'_>) -> Vec<String> {
         let mut game_cmd = vec![self.wine_path.clone(), spec.exe.to_string()];
@@ -54,11 +124,13 @@ impl Default for NiriScaleEngine {
 #[async_trait::async_trait]
 impl ScaleEngine for NiriScaleEngine {
     async fn start_session(&self, spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError> {
+        if spec.watch_only {
+            return self.start_watch_session(spec).await;
+        }
+
         if find_binary("gamescope").is_none() {
             return Err(ScaleError::GamescopeNotFound);
         }
-
-        // Watch-only games are started by the user, never by us.
         if find_binary("wine").is_none() {
             return Err(ScaleError::WineNotFound);
         }
@@ -106,10 +178,13 @@ impl ScaleEngine for NiriScaleEngine {
         let pgid = child.id().unwrap_or(0);
         let session = ScaleSession {
             session_id: uuid::Uuid::new_v4().to_string(),
-            gamescope_pid: pgid,
+            game_id: Some(spec.game_id.to_string()),
+            gamescope_pid: Some(pgid),
             profile: spec.profile.clone(),
             started_at: std::time::Instant::now(),
-            process_group: pgid,
+            process_group: Some(pgid),
+            process_name: spec.process_name.map(str::to_string),
+            watch_only: false,
         };
 
         self.sessions
@@ -121,9 +196,21 @@ impl ScaleEngine for NiriScaleEngine {
         // exits, so we never accumulate zombies and stale sessions.
         let sessions = self.sessions.clone();
         let sid = session.session_id.clone();
+        let watched = session.process_name.clone();
         tokio::spawn(async move {
             let status = child.wait().await;
-            tracing::info!("session {sid} exited: {:?}", status.map(|s| s.code()));
+            tracing::info!(
+                "session {sid} gamescope exited: {:?}",
+                status.map(|s| s.code())
+            );
+
+            // Launcher games: the processes we started may hand off to the real
+            // game and exit first. Stay alive while that process still runs, so
+            // clients do not treat a running game as finished.
+            if let Some(name) = &watched {
+                process::wait_until_gone(name).await;
+            }
+
             sessions.write().await.remove(&sid);
         });
 
@@ -136,7 +223,13 @@ impl ScaleEngine for NiriScaleEngine {
             return Err(ScaleError::SessionNotFound(session.session_id.clone()));
         }
 
-        let pgid = session.process_group as i32;
+        // A watch-only session owns no process: dropping it *is* the stop.
+        let Some(pgid) = session.process_group.map(|pgid| pgid as i32) else {
+            self.sessions.write().await.remove(&session.session_id);
+            tracing::info!("stopped watch-only session {}", session.session_id);
+            return Ok(());
+        };
+
         tracing::info!("stopping session {} (pgid {})", session.session_id, pgid);
 
         unsafe {

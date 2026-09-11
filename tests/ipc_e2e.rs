@@ -534,12 +534,50 @@ fn manual_add_and_wine_settings_over_ipc() {
     assert_eq!(updated["watch_only"], true);
     assert_eq!(updated["process_name"], "MyGame.exe");
 
+    // Launching a watch-only game starts *following* its process instead.
     let response = fixture.rpc("game.launch", json!({ "id": "my-game" }));
+    assert_eq!(response["result"]["watch_only"], true, "{response}");
+    assert_eq!(response["result"]["process_name"], "MyGame.exe");
+    let session = response["result"]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let status = fixture.rpc("daemon.status", json!({}));
+    let sessions = status["result"]["sessions"].as_array().unwrap();
+    assert_eq!(sessions.len(), 1, "{status}");
+    assert_eq!(sessions[0]["game_id"], "my-game");
+    assert_eq!(sessions[0]["watch_only"], true);
+    assert_eq!(sessions[0]["process_name"], "MyGame.exe");
+    assert!(sessions[0]["gamescope_pid"].is_null());
+
+    // Stopping a watch-only session drops it (nothing to kill).
+    let response = fixture.rpc("game.stop", json!({ "session_id": session }));
+    assert_eq!(response["result"]["success"], true, "{response}");
+    assert!(
+        fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // A watch-only game without a process name cannot be tracked.
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Watchless", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "watchless", "{response}");
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "watchless", "watch_only": true }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+    let response = fixture.rpc("game.launch", json!({ "id": "watchless" }));
     assert!(
         response["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("仅观测"),
+            .contains("没有填写要观测的进程名"),
         "{response}"
     );
 
@@ -719,4 +757,75 @@ fn launch_builds_the_expected_gamescope_command() {
     assert!(parts[0].ends_with("bin/wine"), "wine first: {parts:?}");
     assert_eq!(parts[1], exe.to_string_lossy());
     assert_eq!(parts[2], "--windowed", "launch args are passed through");
+}
+
+/// Watch-only sessions follow a real process: they must survive while it runs
+/// and disappear once it exits.
+#[test]
+fn watch_only_session_follows_the_process() {
+    let mut fixture = Fixture::new("watch");
+    fixture.start();
+
+    // A uniquely named copy of `sleep`, so the process name cannot collide with
+    // anything else on the machine.
+    let watched = fixture.dir.join("kotori-watched-proc");
+    std::fs::copy("/bin/sleep", &watched).expect("copy /bin/sleep");
+    let watched_name = watched.file_name().unwrap().to_string_lossy().to_string();
+
+    let game_dir = fixture.dir.join("WatchGame");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    let exe = game_dir.join("game.exe");
+    std::fs::write(&exe, b"").unwrap();
+
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Watch Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "watch-game", "{response}");
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "watch-game", "watch_only": true, "process_name": watched_name }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+
+    // Nothing is running yet, so the session is created but still waiting.
+    let response = fixture.rpc("game.launch", json!({ "id": "watch-game" }));
+    assert_eq!(response["result"]["watch_only"], true, "{response}");
+
+    let session_count = |fixture: &Fixture| {
+        fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    assert_eq!(session_count(&fixture), 1);
+
+    // Start the game ourselves — kotori never launches it.
+    let mut child = std::process::Command::new(&watched)
+        .arg("30")
+        .spawn()
+        .expect("spawn the watched process");
+
+    // Give the watcher a couple of poll intervals; the session must still be
+    // there while the game runs.
+    std::thread::sleep(Duration::from_secs(5));
+    assert_eq!(
+        session_count(&fixture),
+        1,
+        "watching must survive a live game"
+    );
+
+    // Quitting the game ends the session.
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let deadline = Instant::now() + Duration::from_secs(15);
+    while session_count(&fixture) > 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    assert_eq!(
+        session_count(&fixture),
+        0,
+        "session should end when the watched process exits"
+    );
 }

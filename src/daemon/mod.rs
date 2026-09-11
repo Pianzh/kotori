@@ -230,7 +230,10 @@ impl Daemon {
                 .iter()
                 .map(|s| json!({
                     "session_id": s.session_id,
+                    "game_id": s.game_id,
                     "gamescope_pid": s.gamescope_pid,
+                    "process_name": s.process_name,
+                    "watch_only": s.watch_only,
                     "elapsed_secs": s.started_at.elapsed().as_secs(),
                 }))
                 .collect::<Vec<_>>(),
@@ -500,15 +503,40 @@ impl Daemon {
             (game, prefix, source)
         };
 
+        let game_dir = game.effective_game_dir();
+
+        // Watch-only: kotori never launches these, it just follows the process
+        // so clients (and later save sync) know when the game runs.
         if !game.is_launchable() {
-            return Err(format!(
-                "「{}」是「仅观测」模式，kotori 不负责启动它；请自行启动游戏，存档同步会依据进程 {} 判断运行状态",
-                game.name,
-                game.process_name.as_deref().unwrap_or("(未设置)")
-            ));
+            let Some(name) = game.process_name.as_deref() else {
+                return Err(format!(
+                    "「{}」是「仅观测」模式，但没有填写要观测的进程名；请在详情页里补上",
+                    game.name
+                ));
+            };
+            let spec = LaunchSpec {
+                game_id: id,
+                exe: "",
+                args: &[],
+                game_dir: &game_dir,
+                wine_prefix: None,
+                profile: &game.scale_profile,
+                process_name: Some(name),
+                watch_only: true,
+            };
+            let session = self
+                .engine
+                .start_session(&spec)
+                .await
+                .map_err(|e| e.to_string())?;
+            return Ok(json!({
+                "session_id": session.session_id,
+                "watch_only": true,
+                "process_name": name,
+                "game_dir": game_dir,
+            }));
         }
 
-        let game_dir = game.effective_game_dir();
         tracing::info!(
             "launching {} (cwd={} prefix={} ← {})",
             game.name,
@@ -519,11 +547,14 @@ impl Daemon {
 
         let exe = game.exe_path.to_string_lossy().to_string();
         let spec = LaunchSpec {
+            game_id: id,
             exe: &exe,
             args: &game.launch_args,
             game_dir: &game_dir,
             wine_prefix: Some(&wine_prefix),
             profile: &game.scale_profile,
+            process_name: game.process_name.as_deref(),
+            watch_only: false,
         };
 
         let session = self
