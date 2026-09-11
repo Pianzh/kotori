@@ -62,6 +62,22 @@ const KNOWN_PREFIX_DIRS: [&str; 4] = [
 
 /// Resolve the prefix to use for a game, plus where that choice came from.
 pub fn resolve_prefix(game: &GameConfig, config: &Config) -> (PathBuf, PrefixSource) {
+    resolve_prefix_with(
+        game,
+        config,
+        std::env::var_os("WINEPREFIX").map(PathBuf::from),
+    )
+}
+
+/// [`resolve_prefix`] with the environment lookup passed in.
+///
+/// Kept separate so tests can exercise the `WINEPREFIX` branch without mutating
+/// the process environment, which would race with every other test thread.
+pub fn resolve_prefix_with(
+    game: &GameConfig,
+    config: &Config,
+    wineprefix_env: Option<PathBuf>,
+) -> (PathBuf, PrefixSource) {
     if let Some(prefix) = &game.wine_prefix
         && !prefix.as_os_str().is_empty()
     {
@@ -74,10 +90,10 @@ pub fn resolve_prefix(game: &GameConfig, config: &Config) -> (PathBuf, PrefixSou
         return (prefix.clone(), PrefixSource::Global);
     }
 
-    if let Some(prefix) = std::env::var_os("WINEPREFIX")
-        && !prefix.is_empty()
+    if let Some(prefix) = wineprefix_env
+        && !prefix.as_os_str().is_empty()
     {
-        return (PathBuf::from(prefix), PrefixSource::Environment);
+        return (prefix, PrefixSource::Environment);
     }
 
     let game_dir = game.effective_game_dir();
@@ -645,16 +661,25 @@ mod tests {
         let config = Config::default();
         let game = game("/nonexistent/game", "/nonexistent/game/game.exe");
         // No WINEPREFIX, no portable prefix, nothing detected.
-        let previous = std::env::var_os("WINEPREFIX");
-        unsafe { std::env::remove_var("WINEPREFIX") };
-        let (_, source) = resolve_prefix(&game, &config);
+        let (_, source) = resolve_prefix_with(&game, &config, None);
         assert!(
             matches!(source, PrefixSource::Default | PrefixSource::Detected(_)),
             "{source:?}"
         );
-        if let Some(previous) = previous {
-            unsafe { std::env::set_var("WINEPREFIX", previous) };
-        }
+    }
+
+    #[test]
+    fn the_environment_prefix_is_used_when_nothing_else_is() {
+        let config = Config::default();
+        let game = game("/nonexistent/game", "/nonexistent/game/game.exe");
+        let (prefix, source) =
+            resolve_prefix_with(&game, &config, Some(PathBuf::from("/env/prefix")));
+        assert_eq!(prefix, PathBuf::from("/env/prefix"));
+        assert_eq!(source, PrefixSource::Environment);
+
+        // An empty value is ignored rather than becoming an empty prefix.
+        let (_, source) = resolve_prefix_with(&game, &config, Some(PathBuf::from("")));
+        assert_ne!(source, PrefixSource::Environment);
     }
 
     #[test]

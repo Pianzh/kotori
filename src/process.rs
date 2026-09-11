@@ -160,11 +160,17 @@ mod tests {
             .expect("spawn sleep");
         let pid = own.id() as i32;
 
-        let found = find_pids("sleep");
-        assert!(
-            found.contains(&pid),
-            "expected to find the spawned sleep (pid {pid}) in {found:?}"
-        );
+        // `spawn` returns on fork, before the child has necessarily exec'd, so
+        // its name can briefly still be this test binary — poll instead of
+        // asserting immediately.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !find_pids("sleep").contains(&pid) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "spawned sleep (pid {pid}) never showed up as `sleep`"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
         assert!(is_running("sleep"));
 
         // ...and disappears once it is gone.
