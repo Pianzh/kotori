@@ -37,4 +37,35 @@ pub enum Command {
         /// Directory to scan
         directory: PathBuf,
     },
+    /// Cloud save sync (B2 over rclone)
+    Sync {
+        #[command(subcommand)]
+        action: SyncCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum SyncCommand {
+    /// Show what is configured, what is missing, and when each game last synced
+    Status,
+    /// Upload saves now (one game, or every game that has save locations)
+    Now {
+        /// Game ID; omit to sync everything
+        game_id: Option<String>,
+    },
+    /// List the snapshots the cloud holds for a game
+    Versions {
+        /// Game ID
+        game_id: String,
+    },
+    /// Put a game's saves back (newest state, or one snapshot)
+    Restore {
+        /// Game ID
+        game_id: String,
+        /// Snapshot to roll back to, e.g. 20260911T101500Z
+        #[arg(long)]
+        version: Option<String>,
+    },
+    /// Check the credentials and the bucket
+    Test,
 }

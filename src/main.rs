@@ -6,13 +6,7 @@ mod game;
 mod process;
 mod rpc;
 mod scale;
-// Wired up when the sync UI/daemon lands; the module and its tests
-// come first so the storage rules are locked in.
-#[allow(dead_code)]
 mod secrets;
-// Wired up by the sync orchestration next; the module and its tests come
-// first so the storage and retention rules are locked in.
-#[allow(dead_code)]
 mod sync;
 mod ui;
 mod util;
@@ -95,7 +89,166 @@ fn main() -> anyhow::Result<()> {
                 }
             }
         }
+        cli::Command::Sync { action } => {
+            sync_cli(&rt, action)?;
+        }
     }
 
     Ok(())
+}
+
+/// `kotori sync …`: everything goes through the daemon, like the GUI does.
+///
+/// The daemon owns the keyring handle and the config, so a second process
+/// reading the config directly would be a second writer.
+fn sync_cli(rt: &tokio::runtime::Runtime, action: cli::SyncCommand) -> anyhow::Result<()> {
+    use cli::SyncCommand;
+
+    let socket = config::socket_path();
+    daemon::ensure_running(&socket)?;
+
+    let (method, params) = match action {
+        SyncCommand::Status => ("sync.status", rpc::params([])),
+        SyncCommand::Test => ("sync.test", rpc::params([])),
+        SyncCommand::Now { game_id } => (
+            "sync.now",
+            rpc::params(game_id.map(|id| ("id", serde_json::Value::String(id)))),
+        ),
+        SyncCommand::Versions { game_id } => (
+            "sync.versions",
+            rpc::params([("id", serde_json::Value::String(game_id))]),
+        ),
+        SyncCommand::Restore { game_id, version } => {
+            let mut params = rpc::params([("id", serde_json::Value::String(game_id))]);
+            if let Some(version) = version {
+                params.insert("version".into(), serde_json::Value::String(version));
+            }
+            ("sync.restore", params)
+        }
+    };
+
+    let result = rt.block_on(async { rpc::call(&socket, method, Some(params)).await });
+    match result {
+        Ok(value) => {
+            print_sync_result(method, &value);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Sync output is meant to be read by a human, not piped into `jq` — so it is
+/// summarised rather than dumped. `--json` can come later if it is ever needed.
+fn print_sync_result(method: &str, value: &serde_json::Value) {
+    match method {
+        "sync.status" => {
+            let on = |v: &serde_json::Value| v.as_bool().unwrap_or(false);
+            println!(
+                "云同步: {}",
+                if on(&value["enabled"]) {
+                    "已启用"
+                } else {
+                    "关闭"
+                }
+            );
+            println!("远端: {}", value["remote"].as_str().unwrap_or("-"));
+            println!(
+                "rclone: {}",
+                value["rclone"]
+                    .as_str()
+                    .unwrap_or("未安装（Arch: pacman -S rclone）")
+            );
+            println!(
+                "密钥环: {}",
+                value["keyring"]["backend"].as_str().unwrap_or("-")
+            );
+            if let Some(problem) = value["problem"].as_str() {
+                println!("待解决: {problem}");
+            }
+            println!(
+                "取回密码: {}",
+                value["password_hint"].as_str().unwrap_or("-")
+            );
+            if let Some(games) = value["games"].as_array() {
+                println!("游戏（{} 个）:", games.len());
+                for game in games {
+                    let last = &game["last"];
+                    let when = if last.is_null() {
+                        "还没同步过".to_string()
+                    } else {
+                        format!(
+                            "{} {} {}",
+                            last["at"].as_str().unwrap_or("-"),
+                            last["action"].as_str().unwrap_or(""),
+                            last["detail"].as_str().unwrap_or("")
+                        )
+                    };
+                    println!(
+                        "  [{}] {} — {} 个存档位置，{when}",
+                        game["id"].as_str().unwrap_or("?"),
+                        game["name"].as_str().unwrap_or("?"),
+                        game["locations"].as_u64().unwrap_or(0)
+                    );
+                    if let Some(problem) = game["location_problem"].as_str() {
+                        println!("      ⚠ {problem}");
+                    }
+                }
+            }
+        }
+        "sync.test" => println!(
+            "连接正常: {}",
+            value["remote"].as_str().unwrap_or("(未知远端)")
+        ),
+        "sync.versions" => {
+            let versions = value["versions"].as_array().cloned().unwrap_or_default();
+            if versions.is_empty() {
+                println!("云端还没有这个游戏的快照");
+            } else {
+                println!("快照（最旧在前）:");
+                for version in versions {
+                    println!("  {}", version.as_str().unwrap_or("-"));
+                }
+            }
+        }
+        "sync.now" | "sync.restore" => {
+            // A single game comes back under `game`; a bulk run under `games`.
+            let games: Vec<&serde_json::Value> = match (
+                value["games"].as_array(),
+                value.get("game").filter(|g| !g.is_null()),
+            ) {
+                (Some(games), _) => games.iter().collect(),
+                (None, Some(game)) => vec![game],
+                _ => Vec::new(),
+            };
+            let mut failed = false;
+            for game in games {
+                let name = game["name"].as_str().unwrap_or("?");
+                let id = game["game_id"].as_str().unwrap_or("?");
+                if let Some(error) = game["error"].as_str() {
+                    failed = true;
+                    println!("✗ [{id}] {name}: {error}");
+                } else {
+                    println!("✓ [{id}] {name}");
+                }
+                for location in game["locations"].as_array().into_iter().flatten() {
+                    println!(
+                        "    {} {} — {}",
+                        location["action"].as_str().unwrap_or("-"),
+                        location["configured"].as_str().unwrap_or("-"),
+                        location["detail"].as_str().unwrap_or("")
+                    );
+                }
+            }
+            if failed {
+                std::process::exit(1);
+            }
+        }
+        _ => println!(
+            "{}",
+            serde_json::to_string_pretty(value).unwrap_or_default()
+        ),
+    }
 }

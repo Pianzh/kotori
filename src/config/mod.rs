@@ -487,15 +487,23 @@ pub fn socket_path() -> PathBuf {
 /// `<path>.corrupt` and defaults are returned, so a broken config never bricks
 /// the app while the user's data stays recoverable (GOALS §6.2).
 pub fn load() -> anyhow::Result<Config> {
-    let path = config_path();
+    load_at(&config_path())
+}
+
+/// [`load`] against an explicit path.
+///
+/// The daemon remembers the file it was started with instead of re-resolving it
+/// on every write, so a config that was loaded from one path can never be saved
+/// over another.
+pub fn load_at(path: &Path) -> anyhow::Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    match load_from(&path) {
+    match load_from(path) {
         Ok(config) => Ok(config),
         Err(err) => {
             let backup = path.with_extension("toml.corrupt");
-            let moved = std::fs::rename(&path, &backup).is_ok();
+            let moved = std::fs::rename(path, &backup).is_ok();
             if moved {
                 tracing::error!(
                     "配置解析失败，已备份到 {}，本次使用默认配置: {err}",

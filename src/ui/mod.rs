@@ -55,6 +55,126 @@ pub struct SavePathDraft {
     pub exclude: String,
 }
 
+/// One game's sync situation, as reported by `sync.status`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncGameRow {
+    pub id: String,
+    pub name: String,
+    pub locations: u64,
+    /// Set when a save location cannot be resolved right now (unplugged disk,
+    /// removed prefix) — better to say so than to fail at sync time.
+    pub problem: Option<String>,
+    /// Human-readable "when and how it went" for the last sync.
+    pub last: Option<String>,
+}
+
+impl SyncGameRow {
+    /// One line describing the last sync of this game.
+    fn last_label(&self) -> String {
+        match &self.last {
+            Some(last) => last.clone(),
+            None => "还没同步过".to_string(),
+        }
+    }
+}
+
+/// Cloud-sync state for the settings page. Never carries a secret *value*.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SyncStatus {
+    /// The non-secret settings, as stored (`[sync]` in the config).
+    pub settings: Value,
+    pub remote: String,
+    pub rclone: Option<String>,
+    pub keyring: String,
+    pub ephemeral: bool,
+    pub secrets: Vec<String>,
+    pub ready: bool,
+    pub problem: Option<String>,
+    pub password_hint: String,
+    pub games: Vec<SyncGameRow>,
+}
+
+/// Which sync input a keystroke went to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyncField {
+    Endpoint,
+    Region,
+    Bucket,
+    Prefix,
+    KeepVersions,
+    KeyId,
+    AppKey,
+    Password,
+    PasswordAgain,
+}
+
+/// The editable half of the sync settings.
+#[derive(Debug, Clone, Default)]
+struct SyncForm {
+    loaded: bool,
+    enabled: bool,
+    endpoint: String,
+    region: String,
+    bucket: String,
+    prefix: String,
+    keep_versions: String,
+    encryption: bool,
+    key_id: String,
+    app_key: String,
+    password: String,
+    password_again: String,
+    /// An encryption change needs one more click: it decides whether existing
+    /// data in the bucket can still be read.
+    confirm_encryption: Option<bool>,
+    msg: Option<String>,
+    busy: bool,
+}
+
+impl SyncForm {
+    /// Fill the form from what the daemon reports. Secrets are never echoed, so
+    /// those inputs always start empty.
+    fn apply(&mut self, status: &SyncStatus, settings: &Value) {
+        self.loaded = true;
+        self.enabled = settings["enabled"].as_bool().unwrap_or(false);
+        self.endpoint = str_field(settings, "endpoint");
+        self.region = str_field(settings, "region");
+        self.bucket = str_field(settings, "bucket");
+        self.prefix = str_field(settings, "prefix");
+        self.keep_versions = settings["keep_versions"].as_u64().unwrap_or(0).to_string();
+        self.encryption = settings["encryption"].as_bool().unwrap_or(false);
+        self.confirm_encryption = None;
+        self.key_id.clear();
+        self.app_key.clear();
+        self.password.clear();
+        self.password_again.clear();
+        let _ = status;
+    }
+
+    /// The patch sent to `sync.set_settings`.
+    fn patch(&self, force: bool) -> Value {
+        let keep = self.keep_versions.trim().parse::<u32>().unwrap_or(0);
+        serde_json::json!({
+            "enabled": self.enabled,
+            "endpoint": self.endpoint.trim(),
+            "region": self.region.trim(),
+            "bucket": self.bucket.trim(),
+            "prefix": self.prefix.trim(),
+            "keep_versions": keep,
+            "encryption": self.encryption,
+            "force": force,
+        })
+    }
+}
+
+/// Text field of a JSON object, or empty when absent.
+fn str_field(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
 /// A live session, as reported by `daemon.status`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SessionInfo {
@@ -210,6 +330,27 @@ pub enum Message {
     Stop(String),
     StopDone(Result<(), String>),
     Tick,
+
+    // --- cloud sync (settings tab) ---
+    SyncStatusLoaded(Result<SyncStatus, String>),
+    SyncToggleEnabled(bool),
+    SyncEncryptionToggled(bool),
+    SyncConfirmEncryption,
+    SyncCancelEncryption,
+    SyncField(SyncField, String),
+    SyncSaveSettings,
+    SyncSettingsSaved(Result<(), String>),
+    SyncSaveCredentials,
+    SyncCredentialsSaved(Result<(), String>),
+    SyncSavePassword,
+    SyncPasswordSaved(Result<(), String>),
+    SyncTest,
+    SyncTested(Result<String, String>),
+    SyncNow(Option<String>),
+    SyncNowDone(Result<String, String>),
+    SyncRestoreRequested(String, Option<String>),
+    SyncRestoreCancelled,
+    SyncRestoreConfirmed,
 }
 
 pub struct App {
@@ -241,6 +382,11 @@ pub struct App {
     retry_attempts: u32,
     /// Live sessions by game id (refreshed periodically).
     running: std::collections::BTreeMap<String, SessionInfo>,
+    /// Settings tab: cloud sync.
+    sync_status: Option<SyncStatus>,
+    sync_form: SyncForm,
+    /// Restore waiting for a second click: (game id, snapshot).
+    sync_restore_pending: Option<(String, Option<String>)>,
 }
 
 impl App {
@@ -272,12 +418,19 @@ impl App {
                 wine_msg: None,
                 retry_attempts: 0,
                 running: std::collections::BTreeMap::new(),
+                sync_status: None,
+                sync_form: SyncForm::default(),
+                sync_restore_pending: None,
             },
             Task::batch([
                 Task::perform(async { connect_and_load().await }, Message::GamesLoaded),
                 Task::perform(
                     async { load_wine_status().await },
                     Message::WineStatusLoaded,
+                ),
+                Task::perform(
+                    async { load_sync_status().await },
+                    Message::SyncStatusLoaded,
                 ),
                 // Start the periodic session poll.
                 Task::perform(async { tokio::time::sleep(STATUS_POLL).await }, |_| {
@@ -296,11 +449,17 @@ impl App {
                 self.confirm_delete = false;
                 self.error = None;
                 if tab == Tab::Settings {
-                    // Re-read the prefix situation, it may have changed on disk.
-                    return Task::perform(
-                        async { load_wine_status().await },
-                        Message::WineStatusLoaded,
-                    );
+                    // Re-read both, they may have changed on disk.
+                    return Task::batch([
+                        Task::perform(
+                            async { load_wine_status().await },
+                            Message::WineStatusLoaded,
+                        ),
+                        Task::perform(
+                            async { load_sync_status().await },
+                            Message::SyncStatusLoaded,
+                        ),
+                    ]);
                 }
                 Task::none()
             }
@@ -639,6 +798,186 @@ impl App {
                 tracing::debug!("status poll failed: {e}");
                 Task::none()
             }
+
+            Message::SyncStatusLoaded(Ok(status)) => {
+                self.sync_form.apply(&status, &status.settings);
+                self.sync_status = Some(status);
+                Task::none()
+            }
+            Message::SyncStatusLoaded(Err(e)) => {
+                self.sync_form.loaded = true;
+                self.sync_form.msg = Some(format!("读取同步状态失败: {e}"));
+                Task::none()
+            }
+            Message::SyncToggleEnabled(value) => {
+                self.sync_form.enabled = value;
+                Task::none()
+            }
+            // Flipping encryption decides whether data already in the bucket can
+            // be read at all, so it asks once more instead of taking effect.
+            Message::SyncEncryptionToggled(value) => {
+                if value == self.sync_form.encryption {
+                    self.sync_form.confirm_encryption = None;
+                } else {
+                    self.sync_form.confirm_encryption = Some(value);
+                    self.sync_form.msg = Some(if value {
+                        "开启加密后，bucket 里已有的明文存档将读不出来（除非换一个 prefix）。再点一次「确认开启」才会生效。".to_string()
+                    } else {
+                        "关闭加密后，之前加密上传的存档将无法解密。再点一次「确认关闭」才会生效。"
+                            .to_string()
+                    });
+                }
+                Task::none()
+            }
+            Message::SyncConfirmEncryption => {
+                if let Some(value) = self.sync_form.confirm_encryption.take() {
+                    self.sync_form.encryption = value;
+                    self.sync_form.msg = Some("已勾选，记得点「保存设置」".to_string());
+                }
+                Task::none()
+            }
+            Message::SyncCancelEncryption => {
+                self.sync_form.confirm_encryption = None;
+                self.sync_form.msg = None;
+                Task::none()
+            }
+            Message::SyncField(field, value) => {
+                let form = &mut self.sync_form;
+                match field {
+                    SyncField::Endpoint => form.endpoint = value,
+                    SyncField::Region => form.region = value,
+                    SyncField::Bucket => form.bucket = value,
+                    SyncField::Prefix => form.prefix = value,
+                    SyncField::KeepVersions => form.keep_versions = value,
+                    SyncField::KeyId => form.key_id = value,
+                    SyncField::AppKey => form.app_key = value,
+                    SyncField::Password => form.password = value,
+                    SyncField::PasswordAgain => form.password_again = value,
+                }
+                Task::none()
+            }
+            Message::SyncSaveSettings => {
+                let force = self.sync_form.confirm_encryption.is_some()
+                    || self.sync_form.encryption != self.stored_encryption();
+                let form = self.sync_form.clone();
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { save_sync_settings(&socket, form.patch(force)).await },
+                    Message::SyncSettingsSaved,
+                )
+            }
+            Message::SyncSettingsSaved(result) => {
+                self.sync_form.busy = false;
+                self.sync_form.msg = Some(match &result {
+                    // The daemon refuses an encryption flip that is not confirmed;
+                    // show its words rather than a generic failure.
+                    Ok(()) => "已保存".to_string(),
+                    Err(e) => format!("保存失败: {e}"),
+                });
+                if result.is_err() {
+                    self.sync_form.confirm_encryption = None;
+                }
+                self.reload_sync()
+            }
+            Message::SyncSaveCredentials => {
+                let key_id = self.sync_form.key_id.trim().to_string();
+                let app_key = self.sync_form.app_key.trim().to_string();
+                if key_id.is_empty() && app_key.is_empty() {
+                    self.sync_form.msg = Some("两个字段都空着：这只会清掉已保存的凭据".to_string());
+                    return Task::none();
+                }
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { save_sync_credentials(&socket, &key_id, &app_key).await },
+                    Message::SyncCredentialsSaved,
+                )
+            }
+            Message::SyncCredentialsSaved(result) => {
+                self.sync_form.busy = false;
+                self.sync_form.msg = Some(match &result {
+                    Ok(()) => "凭据已存入系统密钥环（磁盘上没有明文）".to_string(),
+                    Err(e) => format!("保存凭据失败: {e}"),
+                });
+                self.reload_sync()
+            }
+            Message::SyncSavePassword => {
+                let password = self.sync_form.password.clone();
+                if !password.is_empty() && password != self.sync_form.password_again {
+                    self.sync_form.msg = Some("两次输入的密码不一样".to_string());
+                    return Task::none();
+                }
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { save_sync_password(&socket, &password).await },
+                    Message::SyncPasswordSaved,
+                )
+            }
+            Message::SyncPasswordSaved(result) => {
+                self.sync_form.busy = false;
+                self.sync_form.msg = Some(match &result {
+                    Ok(()) if self.sync_form.password.is_empty() => "已清除同步密码".to_string(),
+                    Ok(()) => "密码已存入系统密钥环（我们不会替你生成密码）".to_string(),
+                    Err(e) => format!("保存密码失败: {e}"),
+                });
+                self.reload_sync()
+            }
+            Message::SyncTest => {
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(async move { sync_test(&socket).await }, Message::SyncTested)
+            }
+            Message::SyncTested(result) => {
+                self.sync_form.busy = false;
+                self.sync_form.msg = Some(match result {
+                    Ok(remote) => format!("连接正常：{remote}"),
+                    Err(e) => format!("连接失败: {e}"),
+                });
+                Task::none()
+            }
+            Message::SyncNow(game_id) => {
+                self.sync_form.busy = true;
+                self.sync_form.msg = Some("正在同步…".to_string());
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { sync_now(&socket, game_id).await },
+                    Message::SyncNowDone,
+                )
+            }
+            Message::SyncNowDone(result) => {
+                self.sync_form.busy = false;
+                self.sync_form.msg = Some(match result {
+                    Ok(summary) => summary,
+                    Err(e) => format!("同步失败: {e}"),
+                });
+                self.reload_sync()
+            }
+            Message::SyncRestoreRequested(game_id, version) => {
+                self.sync_restore_pending = Some((game_id, version));
+                Task::none()
+            }
+            Message::SyncRestoreCancelled => {
+                self.sync_restore_pending = None;
+                Task::none()
+            }
+            Message::SyncRestoreConfirmed => {
+                let Some((game_id, version)) = self.sync_restore_pending.take() else {
+                    return Task::none();
+                };
+                self.sync_form.busy = true;
+                self.sync_form.msg = Some("正在恢复…".to_string());
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { sync_restore(&socket, &game_id, version.as_deref()).await },
+                    Message::SyncNowDone,
+                )
+            }
             Message::Stop(game_id) => {
                 let Some(session) = self.running.get(&game_id).map(|s| s.session_id.clone()) else {
                     return Task::none();
@@ -688,6 +1027,24 @@ impl App {
                 Task::none()
             }
         }
+    }
+
+    /// Encryption as last reported by the daemon, used to decide whether a save
+    /// is an encryption *change* (which the daemon will ask about).
+    fn stored_encryption(&self) -> bool {
+        self.sync_status
+            .as_ref()
+            .and_then(|status| status.settings.get("encryption"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+    }
+
+    /// Re-read the sync status after a change.
+    fn reload_sync(&self) -> Task<Message> {
+        Task::perform(
+            async { load_sync_status().await },
+            Message::SyncStatusLoaded,
+        )
     }
 
     pub fn view(&self) -> Element<'_, Message> {
@@ -1335,9 +1692,12 @@ impl App {
             text("自动探测到的 prefix：").size(11).color(dim),
             detected_list,
             horizontal_rule(1),
-            text("云同步设置即将上线。").size(13).color(gray),
         ]
         .spacing(10);
+
+        for section in self.sync_sections(gray, dim) {
+            body = body.push(section);
+        }
 
         if let Some(err) = &self.error {
             body = body.push(
@@ -1349,6 +1709,378 @@ impl App {
 
         scrollable(body).into()
     }
+
+    /// The cloud-sync half of the settings page.
+    ///
+    /// Built as separate pieces so each one can be read on its own: what state
+    /// the account is in, what the settings are, the two secrets, and what has
+    /// been synced.
+    fn sync_sections(&self, gray: Color, dim: Color) -> Vec<Element<'_, Message>> {
+        let form = &self.sync_form;
+        let status = self.sync_status.as_ref();
+        let ok = Color::from_rgb8(0x9e, 0xda, 0xa5);
+        let warn = Color::from_rgb8(0xef, 0xc0, 0x7a);
+
+        let mut sections = vec![
+            text("云存档同步").size(15).font(ui_font()).into(),
+            text(
+                "存档通过 rclone 传到 Backblaze B2。默认不加密：bucket 里的存档就是普通文件，                 用任何 S3 工具都能取回，不需要 kotori，也不需要 rclone。",
+            )
+            .size(12)
+            .color(gray)
+            .into(),
+        ];
+
+        // --- state ---------------------------------------------------------
+        let mut state = column![row![
+            text("启用云同步").size(13),
+            toggler(form.enabled)
+                .on_toggle(Message::SyncToggleEnabled)
+                .size(16),
+            iced::widget::Space::new(Length::Fill, 0),
+            button(text("测试连接"))
+                .padding([6, 12])
+                .on_press_maybe((!form.busy).then_some(Message::SyncTest)),
+            button(text("立即同步全部"))
+                .padding([6, 12])
+                .on_press_maybe((!form.busy).then_some(Message::SyncNow(None))),
+        ]]
+        .spacing(10);
+
+        match status {
+            None => {
+                state = state.push(text("读取中…").size(11).color(dim));
+            }
+            Some(status) => {
+                state = state.push(text(format!("远端：{}", status.remote)).size(11).color(dim));
+                match &status.rclone {
+                    Some(path) => {
+                        state = state.push(text(format!("rclone：{path}")).size(11).color(dim))
+                    }
+                    None => {
+                        state = state.push(
+                            text("rclone 未安装（Arch：sudo pacman -S rclone）")
+                                .size(11)
+                                .color(warn),
+                        )
+                    }
+                }
+                state = state.push(
+                    text(format!("密钥环：{}", status.keyring))
+                        .size(11)
+                        .color(if status.ephemeral { warn } else { dim }),
+                );
+                if status.ephemeral {
+                    state = state.push(
+                        text("⚠ 这台机器上没有可用的系统密钥环，密码只保存在内存里，重启后需要重新输入。")
+                            .size(11)
+                            .color(warn),
+                    );
+                }
+                if let Some(problem) = &status.problem {
+                    state = state.push(text(format!("待解决：{problem}")).size(11).color(warn));
+                } else if status.ready {
+                    state = state.push(text("✓ 已就绪").size(11).color(ok));
+                }
+            }
+        }
+        sections.push(state.into());
+
+        // --- settings ------------------------------------------------------
+        sections.push(horizontal_rule(1).into());
+        sections.push(text("连接与保留").size(13).font(ui_font()).into());
+        sections.push(sync_input_row(
+            "S3 endpoint",
+            "s3.us-west-004.backblazeb2.com",
+            &form.endpoint,
+            SyncField::Endpoint,
+            false,
+        ));
+        sections.push(
+            row![
+                text("bucket").size(13).width(120),
+                text_input("kotori-saves", &form.bucket)
+                    .on_input(|v| Message::SyncField(SyncField::Bucket, v))
+                    .padding([7, 10])
+                    .width(Length::Fill),
+                text("prefix").size(13).width(50),
+                text_input("kotori", &form.prefix)
+                    .on_input(|v| Message::SyncField(SyncField::Prefix, v))
+                    .padding([7, 10])
+                    .width(Length::Fill),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into(),
+        );
+        sections.push(sync_input_row(
+            "region",
+            "us-west-004",
+            &form.region,
+            SyncField::Region,
+            false,
+        ));
+        sections.push(
+            row![
+                text("保留版本数").size(13).width(120),
+                text_input("0 = 永久保留", &form.keep_versions)
+                    .on_input(|v| Message::SyncField(SyncField::KeepVersions, v))
+                    .padding([7, 10])
+                    .width(120),
+                text("0 表示永不删除云端快照；填写后只清理旧快照，绝不动本地存档。")
+                    .size(11)
+                    .color(dim),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into(),
+        );
+
+        let mut encryption = row![
+            text("加密上传（rclone crypt）").size(13),
+            toggler(form.encryption)
+                .on_toggle(Message::SyncEncryptionToggled)
+                .size(16),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center);
+        if let Some(pending) = form.confirm_encryption {
+            encryption = encryption.push(
+                button(text(if pending {
+                    "确认开启"
+                } else {
+                    "确认关闭"
+                }))
+                .padding([6, 12])
+                .on_press(Message::SyncConfirmEncryption),
+            );
+            encryption = encryption.push(
+                button(text("取消"))
+                    .padding([6, 12])
+                    .on_press(Message::SyncCancelEncryption),
+            );
+        }
+        sections.push(encryption.into());
+        sections.push(
+            text("关闭时存档是明文文件（推荐）；开启后必须记住密码，忘了就打不开自己的备份。")
+                .size(11)
+                .color(dim)
+                .into(),
+        );
+
+        sections.push(
+            row![
+                button(text("保存设置"))
+                    .padding([7, 16])
+                    .on_press_maybe((!form.busy).then_some(Message::SyncSaveSettings)),
+                {
+                    let msg: Element<'_, Message> = match &form.msg {
+                        Some(msg) => text(msg.clone()).size(11).color(ok).into(),
+                        None => iced::widget::Space::new(0, 0).into(),
+                    };
+                    msg
+                },
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center)
+            .into(),
+        );
+
+        // --- credentials ---------------------------------------------------
+        sections.push(horizontal_rule(1).into());
+        sections.push(text("B2 凭据").size(13).font(ui_font()).into());
+        let known = |account: &str| {
+            status
+                .map(|s| s.secrets.iter().any(|a| a == account))
+                .unwrap_or(false)
+        };
+        sections.push(
+            text(format!(
+                "只存进系统密钥环，配置文件里没有明文。当前状态：key id {}，application key {}。",
+                if known("b2-key-id") {
+                    "已保存"
+                } else {
+                    "未保存"
+                },
+                if known("b2-app-key") {
+                    "已保存"
+                } else {
+                    "未保存"
+                }
+            ))
+            .size(11)
+            .color(dim)
+            .into(),
+        );
+        sections.push(sync_input_row(
+            "key id",
+            "留空则清除已保存的凭据",
+            &form.key_id,
+            SyncField::KeyId,
+            false,
+        ));
+        sections.push(sync_input_row(
+            "application key",
+            "在 B2 后台创建，只能看一次",
+            &form.app_key,
+            SyncField::AppKey,
+            true,
+        ));
+        sections.push(
+            row![
+                button(text("保存凭据"))
+                    .padding([7, 16])
+                    .on_press_maybe((!form.busy).then_some(Message::SyncSaveCredentials)),
+                text("两个都留空再点保存 = 清除凭据").size(11).color(dim),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center)
+            .into(),
+        );
+
+        // --- password ------------------------------------------------------
+        sections.push(horizontal_rule(1).into());
+        sections.push(
+            text("同步密码（仅在开启加密时使用）")
+                .size(13)
+                .font(ui_font())
+                .into(),
+        );
+        sections.push(
+            text(
+                "密码由你自己设定，我们不会替你生成——你从没见过的密码就等于把备份锁在别人手里。                 它只进系统密钥环；忘了也能自己取回来：",
+            )
+            .size(11)
+            .color(dim)
+            .into(),
+        );
+        sections.push(
+            text(status.map(|s| s.password_hint.clone()).unwrap_or_default())
+                .size(11)
+                .color(gray)
+                .font(iced::Font::MONOSPACE)
+                .into(),
+        );
+        sections.push(
+            row![
+                text("密码").size(13).width(120),
+                text_input("留空 = 清除密码", &form.password)
+                    .on_input(|v| Message::SyncField(SyncField::Password, v))
+                    .secure(true)
+                    .padding([7, 10])
+                    .width(Length::Fill),
+                text("再输一次").size(13).width(70),
+                text_input("确认", &form.password_again)
+                    .on_input(|v| Message::SyncField(SyncField::PasswordAgain, v))
+                    .secure(true)
+                    .padding([7, 10])
+                    .width(Length::Fill),
+                button(text("保存密码"))
+                    .padding([7, 16])
+                    .on_press_maybe((!form.busy).then_some(Message::SyncSavePassword)),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center)
+            .into(),
+        );
+        sections.push(
+            text(format!(
+                "密码状态：{}",
+                if known("sync-password") {
+                    "已保存在密钥环（改密码会让已加密上传的存档无法解密，会再确认一次）"
+                } else {
+                    "未设置"
+                }
+            ))
+            .size(11)
+            .color(dim)
+            .into(),
+        );
+
+        // --- per game ------------------------------------------------------
+        sections.push(horizontal_rule(1).into());
+        sections.push(text("各游戏存档").size(13).font(ui_font()).into());
+        let games = status.map(|s| s.games.clone()).unwrap_or_default();
+        if games.is_empty() {
+            sections.push(text("还没有游戏").size(11).color(dim).into());
+        }
+        for game in games {
+            let pending = self
+                .sync_restore_pending
+                .as_ref()
+                .is_some_and(|(id, _)| *id == game.id);
+            let mut line = row![
+                text(game.name.clone())
+                    .size(12)
+                    .width(Length::FillPortion(3)),
+                text(format!("{} 个位置", game.locations))
+                    .size(11)
+                    .color(dim)
+                    .width(Length::FillPortion(1)),
+                text(game.last_label())
+                    .size(11)
+                    .color(dim)
+                    .width(Length::FillPortion(3)),
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+
+            if game.locations > 0 && !game.problem.is_some() {
+                line = line.push(button(text("同步")).padding([4, 10]).on_press_maybe(
+                    (!form.busy).then_some(Message::SyncNow(Some(game.id.clone()))),
+                ));
+                if pending {
+                    line = line.push(
+                        button(text("确认恢复（会覆盖本地存档）"))
+                            .padding([4, 10])
+                            .on_press(Message::SyncRestoreConfirmed),
+                    );
+                    line = line.push(
+                        button(text("取消"))
+                            .padding([4, 10])
+                            .on_press(Message::SyncRestoreCancelled),
+                    );
+                } else {
+                    line = line.push(
+                        button(text("恢复")).padding([4, 10]).on_press_maybe(
+                            (!form.busy)
+                                .then_some(Message::SyncRestoreRequested(game.id.clone(), None)),
+                        ),
+                    );
+                }
+            } else if game.locations == 0 {
+                line = line.push(text("还没配置存档位置").size(11).color(dim));
+            }
+
+            sections.push(line.into());
+            if let Some(problem) = &game.problem {
+                sections.push(text(format!("    ⚠ {problem}")).size(11).color(warn).into());
+            }
+        }
+
+        sections
+    }
+}
+
+/// Label + (optionally masked) input row for the sync form.
+fn sync_input_row<'a>(
+    label: &'static str,
+    placeholder: &'static str,
+    value: &'a str,
+    field: SyncField,
+    secret: bool,
+) -> Element<'a, Message> {
+    row![
+        text(label).size(13).width(120),
+        text_input(placeholder, value)
+            .on_input(move |v| Message::SyncField(field, v))
+            .secure(secret)
+            .padding([7, 10])
+            .width(Length::Fill),
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center)
+    .into()
 }
 
 /// Label + text input row used by the add form.
@@ -1471,6 +2203,202 @@ fn parse_wine_status(value: &Value) -> WineStatus {
             })
             .unwrap_or_default(),
     }
+}
+
+/// Read the cloud-sync status. Secrets are never returned by the daemon, so
+/// this can be held in the UI without any caution.
+async fn load_sync_status() -> Result<SyncStatus, String> {
+    let socket = crate::config::socket_path();
+    let value = crate::rpc::call(&socket, "sync.status", None).await?;
+    parse_sync_status(&value)
+}
+
+fn parse_sync_status(value: &Value) -> Result<SyncStatus, String> {
+    if value.get("settings").is_none() {
+        return Err("守护进程没有返回同步设置".to_string());
+    }
+    let games = value
+        .get("games")
+        .and_then(|v| v.as_array())
+        .map(|rows| {
+            rows.iter()
+                .map(|row| SyncGameRow {
+                    id: str_field(row, "id"),
+                    name: str_field(row, "name"),
+                    locations: row.get("locations").and_then(|v| v.as_u64()).unwrap_or(0),
+                    problem: row
+                        .get("location_problem")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string),
+                    last: row.get("last").and_then(|last| {
+                        if last.is_null() {
+                            return None;
+                        }
+                        let action = last.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                        let detail = last.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+                        let when = last
+                            .get("at")
+                            .and_then(|v| v.as_str())
+                            .map(|at| at.chars().take(16).collect::<String>())
+                            .unwrap_or_default();
+                        let mark = if last.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+                            "✓"
+                        } else {
+                            "✗"
+                        };
+                        Some(format!("{mark} {when} {action} {detail}"))
+                    }),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(SyncStatus {
+        settings: value.get("settings").cloned().unwrap_or(Value::Null),
+        remote: str_field(value, "remote"),
+        rclone: value
+            .get("rclone")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        keyring: value
+            .get("keyring")
+            .map(|keyring| str_field(keyring, "backend"))
+            .unwrap_or_default(),
+        ephemeral: value
+            .get("keyring")
+            .and_then(|v| v.get("ephemeral"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        secrets: string_list(value.get("secrets")),
+        ready: value
+            .get("ready")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        problem: value
+            .get("problem")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        password_hint: str_field(value, "password_hint"),
+        games,
+    })
+}
+
+fn string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Persist the sync settings. The daemon validates and may refuse (an
+/// unconfirmed encryption change, an impossible prefix), so its message is
+/// surfaced verbatim.
+async fn save_sync_settings(socket: &Path, patch: Value) -> Result<(), String> {
+    let params = patch
+        .as_object()
+        .cloned()
+        .ok_or_else(|| "内部错误：设置补丁不是对象".to_string())?;
+    crate::rpc::call(socket, "sync.set_settings", Some(params)).await?;
+    Ok(())
+}
+
+async fn save_sync_credentials(socket: &Path, key_id: &str, app_key: &str) -> Result<(), String> {
+    crate::rpc::call(
+        socket,
+        "sync.set_credentials",
+        Some(crate::rpc::params([
+            ("key_id", Value::String(key_id.to_string())),
+            ("app_key", Value::String(app_key.to_string())),
+        ])),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn save_sync_password(socket: &Path, password: &str) -> Result<(), String> {
+    crate::rpc::call(
+        socket,
+        "sync.set_password",
+        Some(crate::rpc::params([
+            ("password", Value::String(password.to_string())),
+            // Changing an existing password under encryption is confirmed in
+            // the UI; the daemon only insists on an explicit intent.
+            ("force", Value::Bool(true)),
+        ])),
+    )
+    .await?;
+    Ok(())
+}
+
+async fn sync_test(socket: &Path) -> Result<String, String> {
+    let value = crate::rpc::call(socket, "sync.test", None).await?;
+    Ok(str_field(&value, "remote"))
+}
+
+/// Upload now, and turn the daemon's per-location report into one line.
+async fn sync_now(socket: &Path, game_id: Option<String>) -> Result<String, String> {
+    let params = crate::rpc::params(game_id.map(|id| ("id", Value::String(id))));
+    let value = crate::rpc::call(socket, "sync.now", Some(params)).await?;
+    Ok(describe_sync_outcome(&value))
+}
+
+async fn sync_restore(
+    socket: &Path,
+    game_id: &str,
+    version: Option<&str>,
+) -> Result<String, String> {
+    let mut params = crate::rpc::params([("id", Value::String(game_id.to_string()))]);
+    if let Some(version) = version {
+        params.insert("version".into(), Value::String(version.to_string()));
+    }
+    let value = crate::rpc::call(socket, "sync.restore", Some(params)).await?;
+    Ok(describe_sync_outcome(&value["game"]))
+}
+
+/// One line summarising a sync result: how many locations moved, or what broke.
+fn describe_sync_outcome(value: &Value) -> String {
+    let outcomes: Vec<&Value> = match (
+        value.get("games").and_then(|v| v.as_array()),
+        value.get("game").filter(|v| !v.is_null()),
+    ) {
+        (Some(games), _) => games.iter().collect(),
+        (None, Some(game)) => vec![game],
+        _ => vec![value],
+    };
+
+    let mut moved = 0usize;
+    let mut skipped = 0usize;
+    let mut problems = Vec::new();
+    for outcome in &outcomes {
+        if let Some(error) = outcome.get("error").and_then(|v| v.as_str()) {
+            problems.push(error.to_string());
+        }
+        for location in outcome
+            .get("locations")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+        {
+            match location.get("action").and_then(|v| v.as_str()) {
+                Some("skipped") => skipped += 1,
+                Some("failed") => {}
+                _ => moved += 1,
+            }
+        }
+    }
+
+    if !problems.is_empty() {
+        return format!("失败：{}", problems.join("；"));
+    }
+    if moved == 0 {
+        return format!("没有需要同步的变化（跳过 {skipped} 个位置）");
+    }
+    format!("完成：{moved} 个位置已同步，跳过 {skipped} 个")
 }
 
 /// Live sessions, keyed by game id.
@@ -2080,6 +3008,157 @@ mod tests {
 
     /// Building the widget tree must not panic in any reachable state. This
     /// covers the empty-list / no-search-hit branches of the new pages.
+    /// A `sync.status` payload as the daemon sends it.
+    fn sync_payload() -> Value {
+        serde_json::json!({
+            "settings": {
+                "enabled": true,
+                "endpoint": "s3.us-west-004.backblazeb2.com",
+                "region": "us-west-004",
+                "bucket": "kotori-saves",
+                "prefix": "kotori",
+                "encryption": false,
+                "keep_versions": 0
+            },
+            "enabled": true,
+            "rclone": "/usr/bin/rclone",
+            "keyring": {
+                "backend": "Secret Service (libsecret) (/usr/bin/secret-tool)",
+                "ephemeral": false
+            },
+            "secrets": ["b2-key-id", "b2-app-key", "sync-password"],
+            "ready": true,
+            "problem": null,
+            "remote": "kotori:kotori-saves/kotori",
+            "password_hint": "secret-tool lookup service kotori account sync-password",
+            "games": [
+                {
+                    "id": "demo",
+                    "name": "Demo",
+                    "locations": 2,
+                    "location_problem": null,
+                    "last": {
+                        "at": "2026-09-11T10:15:00Z",
+                        "ok": true,
+                        "action": "上传",
+                        "detail": "2 个位置已上传"
+                    }
+                },
+                {
+                    "id": "other",
+                    "name": "Other",
+                    "locations": 0,
+                    "location_problem": null,
+                    "last": null
+                }
+            ]
+        })
+    }
+
+    fn sync_status_fixture() -> SyncStatus {
+        parse_sync_status(&sync_payload()).unwrap()
+    }
+
+    #[test]
+    fn parses_the_sync_status() {
+        let status = sync_status_fixture();
+        assert!(status.ready);
+        assert!(!status.ephemeral);
+        assert_eq!(status.remote, "kotori:kotori-saves/kotori");
+        assert_eq!(status.rclone.as_deref(), Some("/usr/bin/rclone"));
+        assert!(status.problem.is_none());
+        assert!(status.keyring.contains("Secret Service"));
+        assert!(
+            status.password_hint.contains("secret-tool"),
+            "the user must be able to read the password back without kotori"
+        );
+
+        assert_eq!(status.games.len(), 2);
+        assert_eq!(status.games[0].locations, 2);
+        let last = status.games[0].last_label();
+        assert!(last.contains("✓") && last.contains("上传"), "{last}");
+        assert_eq!(status.games[1].last_label(), "还没同步过");
+
+        // A malformed payload is an error, not a silently empty page.
+        assert!(parse_sync_status(&Value::Null).is_err());
+    }
+
+    #[test]
+    fn the_sync_form_seeds_from_settings_and_never_from_secrets() {
+        let payload = sync_payload();
+        let mut form = SyncForm::default();
+        form.apply(&sync_status_fixture(), &payload["settings"]);
+
+        assert!(form.loaded);
+        assert!(form.enabled);
+        assert_eq!(form.endpoint, "s3.us-west-004.backblazeb2.com");
+        assert_eq!(form.bucket, "kotori-saves");
+        assert_eq!(form.prefix, "kotori");
+        assert_eq!(form.keep_versions, "0");
+        assert!(!form.encryption);
+
+        // The daemon reports *which* secrets exist, never their values, so the
+        // inputs must start empty even though three are stored.
+        assert!(form.key_id.is_empty());
+        assert!(form.app_key.is_empty());
+        assert!(form.password.is_empty());
+        assert!(form.password_again.is_empty());
+
+        // The patch mirrors the form, trimmed.
+        form.bucket = "  spaced  ".into();
+        form.confirm_encryption = Some(true);
+        let patch = form.patch(true);
+        assert_eq!(patch["bucket"], "spaced");
+        assert_eq!(patch["force"], true);
+        assert_eq!(patch["enabled"], true);
+        assert!(
+            patch.get("key_id").is_none() && patch.get("password").is_none(),
+            "settings patches must carry no secrets: {patch}"
+        );
+    }
+
+    #[test]
+    fn sync_outcomes_are_summarised_for_a_human() {
+        // A bulk upload: one location moved, one skipped.
+        let value = serde_json::json!({
+            "ok": true,
+            "games": [{
+                "game_id": "demo",
+                "name": "Demo",
+                "ok": true,
+                "locations": [
+                    { "configured": "savedata", "local": "/g/savedata", "action": "uploaded", "detail": "已上传" },
+                    { "configured": "%APPDATA%\\\\X", "local": "/w/X", "action": "skipped", "detail": "本地没有这个目录" }
+                ]
+            }]
+        });
+        let summary = describe_sync_outcome(&value);
+        assert!(summary.contains("1 个位置已同步"), "{summary}");
+        assert!(summary.contains("跳过 1"), "{summary}");
+
+        // Nothing changed is not a failure.
+        let value = serde_json::json!({
+            "ok": true,
+            "games": [{ "game_id": "demo", "name": "Demo", "ok": true, "locations": [] }]
+        });
+        assert!(describe_sync_outcome(&value).contains("没有需要同步的变化"));
+
+        // A failure names the location that broke.
+        let value = serde_json::json!({
+            "ok": false,
+            "game": {
+                "game_id": "demo",
+                "name": "Demo",
+                "ok": false,
+                "error": "savedata: rclone 执行失败",
+                "locations": []
+            }
+        });
+        let summary = describe_sync_outcome(&value);
+        assert!(summary.contains("失败"), "{summary}");
+        assert!(summary.contains("savedata"), "{summary}");
+    }
+
     #[test]
     fn views_construct_for_every_tab_and_state() {
         let (mut app, _task) = App::new();
@@ -2179,6 +3258,44 @@ mod tests {
             detected: vec!["/home/user/.wine".into()],
         });
         app.wine_msg = Some("已保存".into());
+        let _ = app.view();
+
+        // Sync section: nothing loaded yet, then a ready setup, then the two
+        // states that ask for a decision (a restore and an encryption flip).
+        app.sync_status = None;
+        app.sync_form = SyncForm::default();
+        let _ = app.view();
+
+        app.sync_status = Some(sync_status_fixture());
+        app.sync_form.apply(
+            app.sync_status.as_ref().unwrap(),
+            &sync_payload()["settings"],
+        );
+        let _ = app.view();
+
+        app.sync_form.confirm_encryption = Some(true);
+        let _ = app.view();
+        app.sync_form.confirm_encryption = None;
+
+        app.sync_restore_pending = Some(("demo".into(), None));
+        let _ = app.view();
+        app.sync_restore_pending = None;
+
+        // A machine with no keyring, no rclone and an unresolvable save path.
+        app.sync_status = Some(SyncStatus {
+            rclone: None,
+            ephemeral: true,
+            keyring: "内存（没有系统密钥环，重启后需重新输入）".into(),
+            problem: Some("密钥环里还没有 B2 凭据".into()),
+            games: vec![SyncGameRow {
+                id: "demo".into(),
+                name: "Demo".into(),
+                locations: 0,
+                problem: Some("存档位置「%NOPE%」解析不了".into()),
+                last: Some("✗ 2026-09-11T10:15 ✓".into()),
+            }],
+            ..sync_status_fixture()
+        });
         let _ = app.view();
 
         // Settings, plus the disconnected sidebar with its reconnect button.
