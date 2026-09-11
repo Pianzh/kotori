@@ -135,6 +135,39 @@ cargo run -- sync restore <游戏id> --version 20260911T101500Z-1a2b3c4d  # 回�
 > 如果这台机器没有可用的系统密钥环，kotori 会把密码**只放在内存里**（重启后要重新输入），
 > 而不是退回明文写文件。设置页会明确提示这一点。
 
+## 6.5 本机没有密钥环怎么办
+
+凭据默认存进**系统凭据库**（Linux 是 Secret Service，也就是 KDE 钱包 / GNOME keyring）。
+但有些环境**不会自动启动它**：niri / sway 这类只有窗管没有桌面的会话、容器、纯 TTY。
+
+kotori 会如实告诉你当前状态（`kotori sync status` 看「密钥环」那一行）：
+
+| 状态 | 含义 | 怎么办 |
+|------|------|--------|
+| `Secret Service (libsecret)` | 正常 | 不用管 |
+| `内存（…重启后需要重新输入）` | 本机没有运行中的密钥环 | 见下面两条路 |
+| `主密码加密文件 …（已锁定）` | 用主密码保的凭据，需要解锁 | `kotori sync unlock` 或设置页里解锁 |
+
+**路子一：把密钥环跑起来**（推荐，一次配置永久生效）。在 niri 配置里加一行自启动：
+
+```kdl
+spawn-at-startup "kwalletd6"        // KDE 钱包；GNOME 那边是 gnome-keyring-daemon
+```
+
+**路子二：用主密码加密文件**（跨平台、不依赖桌面环境）。设置页「凭据存储」一节里输入主密码点
+「加密保存凭据」，或者命令行：
+
+```bash
+cargo run -- sync master-password   # 提示输入两次，密码不回显、不进 shell 历史
+cargo run -- sync unlock            # 下次开机解锁一次即可
+```
+
+凭据会用 Argon2id 派生 + ChaCha20-Poly1305 加密后写到 `~/.config/kotori/secrets.json`（权限 0600），
+**里面没有明文**。主密码由你自己保管，我们不会存它——忘了就打不开这个文件（重新填一次 B2 凭据即可，
+云端数据不受影响）。
+
+> Windows 端目前还没有接上凭据管理器，所以那边也是靠主密码文件这条路；等移植时会补上。
+
 ## 7. 加密（可选）
 
 默认关闭。开启后 rclone 会套一层 `crypt`，bucket 里的文件名和内容都是密文。
