@@ -36,6 +36,16 @@
 //! Nothing in here may block launching a game: every failure is logged and the
 //! feature degrades to "no hotkeys", which is exactly the state before it
 //! existed.
+//!
+//! One thing has to happen before either portal call: the portal needs an **app
+//! id** for kotori. It works one out for apps a launcher started (from the
+//! systemd unit in the cgroup), but a daemon that `ensure_running` spawned from
+//! a terminal has none, and `GlobalShortcuts` refuses to work without one
+//! ("An app id is required"). [`ensure_app_id`] registers [`APP_ID`] through
+//! `org.freedesktop.host.portal.Registry`, the documented way for an
+//! unsandboxed application to say who it is — and the portal looks that id up
+//! in the desktop-file database, so `assets/<APP_ID>.desktop` has to be
+//! installed or registration fails with "App info not found".
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -59,6 +69,13 @@ const KEY_GAP: Duration = Duration::from_millis(20);
 
 /// File under the data dir that remembers the portal's consent token.
 const RESTORE_TOKEN_FILE: &str = "portal-restore-token";
+
+/// The app id the portal knows kotori by.
+///
+/// It has to be the basename of the `.desktop` file we ship (`assets/`), and it
+/// is also what the desktop stores the shortcuts under. Change one, change both
+/// — there is a test for that.
+pub const APP_ID: &str = "io.github.kotori";
 
 /// Set this to keep the portal out of the picture entirely.
 ///
@@ -113,32 +130,42 @@ impl GamescopeAction {
         Self::ALL.into_iter().find(|action| action.id() == id)
     }
 
-    /// Shown in the portal's consent dialog, so it is user-facing text.
+    /// The name of this shortcut, as the desktop will show it in its shortcut
+    /// list — so it names the *action*, never the chord kotori presses on the
+    /// user's behalf. The chord is an implementation detail; it lives in
+    /// [`Self::shortcut_hint`] for logs and error messages.
     ///
-    /// The two sharpness steps name the *effect*, which is the opposite way
-    /// round from gamescope's own help text — see [`Self::for_sharpness_delta`].
+    /// The two sharpness steps name the effect, which is the opposite way round
+    /// from gamescope's own help text — see [`Self::for_sharpness_delta`].
     pub fn description(self) -> &'static str {
         match self {
-            Self::ToggleFsr => "开启/关闭 FSR 放大（Super+U）",
-            Self::ToggleNis => "开启/关闭 NIS 放大（Super+Y）",
-            Self::ToggleNearest => "切换最近邻放大（Super+N）",
-            Self::ToggleLinear => "切回双线性过滤，关掉放大滤镜（Super+B）",
-            Self::Soften => "降低锐度 1 级（Super+I）",
-            Self::Sharpen => "提高锐度 1 级（Super+O）",
-            Self::ToggleFullscreen => "切换游戏全屏（Super+F）",
+            Self::ToggleFsr => "开启/关闭 FSR 放大",
+            Self::ToggleNis => "开启/关闭 NIS 放大",
+            Self::ToggleNearest => "切换最近邻放大",
+            Self::ToggleLinear => "切回双线性过滤",
+            Self::Soften => "降低锐度 1 级",
+            Self::Sharpen => "提高锐度 1 级",
+            Self::ToggleFullscreen => "切换游戏全屏",
         }
     }
 
-    /// Trigger suggested to the portal. The user may rebind it in its dialog.
-    pub fn preferred_trigger(self) -> &'static str {
+    /// Trigger suggested to the portal, or `None` for "leave it unbound until
+    /// the user asks for it".
+    ///
+    /// Only the two that matter mid-game come with a default; everything else
+    /// is registered so that it *can* be bound, but bound by choice. Every one
+    /// of them is rebindable, from the desktop's shortcut settings today and
+    /// from kotori's own settings once it has a page for it.
+    ///
+    /// A hint is a convenience, never a promise: desktops may ignore it — KDE
+    /// does, the string is not even in its portal binary — so the truth is what
+    /// the portal reports back (see [`HotkeyStatus::unbound`]).
+    pub fn preferred_trigger(self) -> Option<&'static str> {
         match self {
-            Self::ToggleFsr => "<Control><Alt>u",
-            Self::ToggleNis => "<Control><Alt>y",
-            Self::ToggleNearest => "<Control><Alt>n",
-            Self::ToggleLinear => "<Control><Alt>b",
-            Self::Soften => "<Control><Alt>i",
-            Self::Sharpen => "<Control><Alt>o",
-            Self::ToggleFullscreen => "<Control><Alt>f",
+            // Flipping the upscaling on and off while playing.
+            Self::ToggleFsr => Some("<Shift><Alt>q"),
+            Self::ToggleFullscreen => Some("<Shift><Control>a"),
+            _ => None,
         }
     }
 
@@ -207,6 +234,9 @@ pub enum PortalError {
     #[error("portal 不可用（没有 D-Bus、没有后端，或用户拒绝了授权）：{0}")]
     Portal(#[from] ashpd::Error),
 
+    #[error("portal 认不出 kotori 这个程序，热键无法注册：{0}")]
+    AppId(String),
+
     #[error("授权令牌 {path} 读写失败：{source}")]
     Token {
         path: PathBuf,
@@ -217,6 +247,44 @@ pub enum PortalError {
         "运行时缩放热键还没就绪：启动一次游戏让 portal 弹授权框，或者直接按 gamescope 自带热键"
     )]
     NotReady,
+}
+
+/// Tell the portal which application this is.
+///
+/// Unsandboxed applications normally have no app id at all — the portal only
+/// works one out for apps it can trace back to a launcher's systemd unit. That
+/// is enough for the GUI opened from the menu and not for a daemon that
+/// `ensure_running` spawned from a terminal, so we say it ourselves through
+/// `org.freedesktop.host.portal.Registry`.
+///
+/// The portal requires this **before any other portal call on this D-Bus
+/// connection**, and ashpd shares one connection process-wide, so this is the
+/// first thing every portal path in this module does. Inside a sandbox
+/// (flatpak/snap) there is nothing to do and ashpd returns early.
+async fn ensure_app_id() -> Result<(), PortalError> {
+    static REGISTERED: std::sync::LazyLock<tokio::sync::OnceCell<Result<(), String>>> =
+        std::sync::LazyLock::new(tokio::sync::OnceCell::new);
+
+    let outcome = REGISTERED
+        .get_or_init(|| async {
+            let app_id = ashpd::AppID::try_from(APP_ID)
+                .map_err(|err| format!("应用 ID {APP_ID} 本身不合法：{err}"))?;
+            ashpd::register_host_app(app_id).await.map_err(|err| {
+                format!(
+                    "{err}（portal 要按名字在桌面文件库里找 kotori：\n\
+                     ① 先把 kotori 装上 PATH（cargo install --path .）\n\
+                     ② 再把 assets/{APP_ID}.desktop 装进 ~/.local/share/applications/\n\
+                     ③ 重启守护进程。注意 Exec 指向的程序不存在时，\
+                     GIO 会把整份桌面文件当作不存在）"
+                )
+            })
+        })
+        .await;
+
+    match outcome {
+        Ok(()) => Ok(()),
+        Err(message) => Err(PortalError::AppId(message.clone())),
+    }
 }
 
 /// Where the "already consented" token lives inside the data dir.
@@ -265,11 +333,16 @@ static SERVICE: std::sync::OnceLock<std::sync::Arc<Hotkeys>> = std::sync::OnceLo
 struct State {
     requested: bool,
     error: Option<String>,
+    /// Granted by the desktop but with no key behind it. Pressing nothing is
+    /// what the user experiences, and silence about it is how a working feature
+    /// comes to look broken.
+    unbound: Vec<String>,
 }
 
 static STATE: std::sync::Mutex<State> = std::sync::Mutex::new(State {
     requested: false,
     error: None,
+    unbound: Vec::new(),
 });
 
 /// Run `f` on the state, ignoring poisoning: a panic elsewhere has no bearing on
@@ -285,12 +358,44 @@ fn set_error(message: String) {
     with_state(|state| state.error = Some(message));
 }
 
+/// Did the desktop grant a shortcut without binding a key to it?
+///
+/// The trigger comes back as free-form text, so this only reads what desktops
+/// actually send: KDE answers "none", others may answer nothing at all.
+fn looks_unbound(trigger: &str) -> bool {
+    let trigger = trigger.trim();
+    trigger.is_empty() || trigger.eq_ignore_ascii_case("none")
+}
+
+/// Where the user has to go to give a shortcut a key.
+///
+/// Since no desktop is obliged to read our hint, this is a real step for the
+/// user — and advice for the wrong desktop is worse than none (ADR-011).
+pub fn assign_hint() -> String {
+    assign_hint_for(&std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default())
+}
+
+fn assign_hint_for(desktop: &str) -> String {
+    let desktop = desktop.to_ascii_lowercase();
+    if desktop.contains("kde") {
+        "系统设置 → 快捷键 → kotori，给要用的那几条各指定一个按键".to_string()
+    } else if desktop.contains("gnome") {
+        "设置 → 键盘 → 查看及自定义快捷键，给 kotori 的条目指定按键".to_string()
+    } else {
+        "在系统的快捷键设置里给 kotori 的条目指定按键".to_string()
+    }
+}
+
 /// What the daemon can tell a user (or the CLI) about the hotkeys.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HotkeyStatus {
     pub requested: bool,
     pub ready: bool,
     pub error: Option<String>,
+    /// Shortcut ids the desktop granted without binding a key to them.
+    pub unbound: Vec<String>,
+    /// Where this desktop keeps its shortcut settings, for the user to act on.
+    pub assign_hint: String,
 }
 
 /// Current hotkey state, for `daemon.status`.
@@ -299,6 +404,8 @@ pub fn status() -> HotkeyStatus {
         requested: with_state(|state| state.requested),
         ready: ready(),
         error: with_state(|state| state.error.clone()),
+        unbound: with_state(|state| state.unbound.clone()),
+        assign_hint: assign_hint(),
     }
 }
 
@@ -349,6 +456,7 @@ pub fn request_once(data_dir: &Path) -> bool {
         }
         state.requested = true;
         state.error = None;
+        state.unbound.clear();
         true
     });
     if !start {
@@ -380,6 +488,7 @@ impl Hotkeys {
     /// Bind the shortcuts. This is the call that pops the portal's consent
     /// dialog listing every action below.
     async fn register(token_path: PathBuf) -> Result<Self, PortalError> {
+        ensure_app_id().await?;
         let shortcuts = GlobalShortcuts::new().await?;
         let session = shortcuts
             .create_session(CreateSessionOptions::default())
@@ -408,6 +517,34 @@ impl Hotkeys {
                 );
             }
         }
+
+        // Being *granted* is not the same as being *usable*. BindShortcuts
+        // returns what each shortcut is actually triggered by, and a desktop is
+        // free to hand them all back with nothing bound — KDE does exactly that
+        // and leaves the assignment to its own settings. Saying "registered"
+        // here would be a lie the user only finds out by pressing a key that
+        // does nothing.
+        for shortcut in bound.shortcuts() {
+            tracing::info!(
+                "热键 {} 的触发键：portal 报告为 “{}”",
+                shortcut.id(),
+                shortcut.trigger_description()
+            );
+        }
+        let unbound: Vec<String> = bound
+            .shortcuts()
+            .iter()
+            .filter(|shortcut| looks_unbound(shortcut.trigger_description()))
+            .map(|shortcut| shortcut.id().to_string())
+            .collect();
+        if !unbound.is_empty() {
+            tracing::warn!(
+                "这些动作还没有按键，按了不会有反应：{} —— {}",
+                unbound.join(", "),
+                assign_hint()
+            );
+        }
+        with_state(|state| state.unbound = unbound);
         tracing::info!("运行时缩放热键已注册：{}", granted.join(", "));
 
         let remote = RemoteDesktop::new().await?;
@@ -471,6 +608,10 @@ impl Hotkeys {
     /// Ask for keyboard injection rights. This is the second (and, with a
     /// stored token, the only other) consent dialog.
     async fn open_desktop_session(&self) -> Result<Session<RemoteDesktop>, PortalError> {
+        // A no-op after the first success, but it must never be skipped: the
+        // portal rejects a late registration.
+        ensure_app_id().await?;
+
         let token = read_restore_token(&self.token_path);
         if token.is_some() {
             tracing::debug!("复用已有的 portal 授权令牌");
@@ -538,7 +679,7 @@ mod tests {
         let ids: Vec<&str> = GamescopeAction::ALL.iter().map(|a| a.id()).collect();
         let triggers: Vec<&str> = GamescopeAction::ALL
             .iter()
-            .map(|a| a.preferred_trigger())
+            .filter_map(|a| a.preferred_trigger())
             .collect();
         let keysyms: Vec<i32> = GamescopeAction::ALL.iter().map(|a| a.keysym()).collect();
         for set in [&ids, &triggers] {
@@ -588,6 +729,69 @@ mod tests {
     }
 
     #[test]
+    fn only_the_two_that_matter_mid_game_come_with_a_default() {
+        // Everything is registered so that everything *can* be bound, but only
+        // these two are suggested: the rest are bound by choice, from the
+        // desktop's shortcut settings or kotori's own page.
+        assert_eq!(
+            GamescopeAction::ToggleFsr.preferred_trigger(),
+            Some("<Shift><Alt>q")
+        );
+        assert_eq!(
+            GamescopeAction::ToggleFullscreen.preferred_trigger(),
+            Some("<Shift><Control>a")
+        );
+        for action in GamescopeAction::ALL {
+            if !matches!(
+                action,
+                GamescopeAction::ToggleFsr | GamescopeAction::ToggleFullscreen
+            ) {
+                assert_eq!(
+                    action.preferred_trigger(),
+                    None,
+                    "{} 不该有默认键",
+                    action.id()
+                );
+            }
+        }
+        // Registered in full, still pressable one by one.
+        for action in GamescopeAction::ALL {
+            assert!(GamescopeAction::from_id(action.id()).is_some());
+        }
+    }
+
+    #[test]
+    fn a_shortcut_granted_without_a_key_is_not_called_usable() {
+        assert!(looks_unbound(""));
+        assert!(looks_unbound("   "));
+        assert!(looks_unbound("none"));
+        assert!(looks_unbound("None"));
+        assert!(!looks_unbound("<Shift><Alt>q"));
+        assert!(!looks_unbound("Shift+Alt+Q"));
+
+        // The hint has to match the desktop that is actually running.
+        assert!(assign_hint_for("KDE").contains("系统设置"));
+        assert!(assign_hint_for("ubuntu:GNOME").contains("键盘"));
+        assert!(!assign_hint_for("sway").contains("系统设置"));
+    }
+
+    #[test]
+    fn the_app_id_matches_the_desktop_file_we_ship() {
+        // The portal looks the id up in the desktop-file database: if the file
+        // name and the id drift apart, registration fails with "App info not
+        // found" and the whole feature degrades with no clue as to why.
+        let expected = format!("{APP_ID}.desktop");
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets")
+            .join(&expected);
+        assert!(path.is_file(), "assets/{expected} 不见了：{path:?}");
+        assert!(
+            ashpd::AppID::try_from(APP_ID).is_ok(),
+            "{APP_ID} 不是合法的应用 ID"
+        );
+    }
+
+    #[test]
     fn the_restore_token_is_stored_privately() {
         let path = restore_token_path(&temp_path().join("data"));
         assert!(read_restore_token(&path).is_none(), "还没写过就读到了东西");
@@ -611,17 +815,22 @@ mod tests {
     }
 
     #[test]
-    fn descriptions_name_the_chord_they_inject() {
-        // The portal dialog is the only place the user learns the trigger, so a
-        // description that drifts from the chord would be actively misleading.
+    fn descriptions_name_the_action_not_the_key_it_presses() {
+        // The description becomes the shortcut's *name* in the desktop's
+        // shortcut settings. Putting "（Super+U）" in it reads as a binding the
+        // user is supposed to press, when in fact kotori presses it for them
+        // and the trigger is theirs to choose.
         for action in GamescopeAction::ALL {
+            assert!(!action.description().is_empty());
             assert!(
-                action.description().contains(action.shortcut_hint()),
-                "{} 的描述里没写快捷键：{}",
+                !action.description().contains("Super") && !action.description().contains('+'),
+                "{} 的描述里有按键：{}",
                 action.id(),
                 action.description()
             );
         }
+        // ...but the chord is still on hand for logs and error messages.
+        assert!(GamescopeAction::ToggleFsr.shortcut_hint().contains("Super"));
     }
 
     #[tokio::test]
@@ -638,5 +847,6 @@ mod tests {
         assert!(!status.ready);
         assert!(!status.requested, "没有测试调用过 request_once");
         assert!(status.error.is_none());
+        assert!(status.unbound.is_empty());
     }
 }

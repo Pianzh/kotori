@@ -263,6 +263,7 @@ fn print_scale_status(status: &serde_json::Value) {
         _ => "还没申请（启动一次游戏，或跑 kotori scale hotkeys）".to_string(),
     };
     println!("运行时缩放热键：{state}");
+    print_unbound(hotkeys);
 
     let sessions = status["sessions"].as_array().cloned().unwrap_or_default();
     if sessions.is_empty() {
@@ -280,6 +281,25 @@ fn print_scale_status(status: &serde_json::Value) {
     }
 }
 
+/// A shortcut the desktop granted without a key behind it looks exactly like
+/// success and does nothing. Say which ones, and where to give them a key.
+fn print_unbound(hotkeys: &serde_json::Value) {
+    let unbound: Vec<&str> = hotkeys["unbound"]
+        .as_array()
+        .map(|list| list.iter().filter_map(|id| id.as_str()).collect())
+        .unwrap_or_default();
+    if unbound.is_empty() {
+        return;
+    }
+    println!(
+        "  ⚠ 这些动作还没有按键，按了不会有反应：{}",
+        unbound.join(", ")
+    );
+    if let Some(hint) = hotkeys["assign_hint"].as_str() {
+        println!("    {hint}");
+    }
+}
+
 /// Ask the portal for the hotkeys, and optionally wait for the user to approve
 /// the dialog.
 ///
@@ -294,6 +314,7 @@ fn ask_for_hotkeys(
     let value = call_daemon(rt, socket, "scale.hotkeys", None)?;
     if value["ready"].as_bool() == Some(true) {
         println!("运行时缩放热键已就绪");
+        print_unbound(&value);
         return Ok(());
     }
     if let Some(err) = value["error"].as_str() {
@@ -316,6 +337,7 @@ fn ask_for_hotkeys(
         let hotkeys = &status["hotkeys"];
         if hotkeys["ready"].as_bool() == Some(true) {
             println!("运行时缩放热键已就绪");
+            print_unbound(hotkeys);
             return Ok(());
         }
         if let Some(err) = hotkeys["error"].as_str() {

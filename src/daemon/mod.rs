@@ -389,6 +389,10 @@ impl Daemon {
                 "requested": hotkeys.requested,
                 "ready": hotkeys.ready,
                 "error": hotkeys.error,
+                // Granted but keyless is the difference between "the hotkeys
+                // work" and "pressing them does nothing".
+                "unbound": hotkeys.unbound,
+                "assign_hint": hotkeys.assign_hint,
             },
             "sessions": sessions
                 .iter()
@@ -863,6 +867,8 @@ impl Daemon {
             "requested": status.requested,
             "ready": status.ready,
             "error": status.error,
+            "unbound": status.unbound,
+            "assign_hint": status.assign_hint,
         })
     }
 }
