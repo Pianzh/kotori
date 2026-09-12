@@ -9,7 +9,7 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, RwLock};
 
 use crate::config::{self, Config};
-use crate::scale::niri::NiriScaleEngine;
+use crate::scale::niri::GamescopeScaleEngine;
 use crate::scale::{LaunchSpec, ScaleEngine, ScaleSession, SessionKind};
 
 mod sync_rpc;
@@ -26,7 +26,7 @@ pub struct Daemon {
     /// Single source of truth for live sessions. There is deliberately no
     /// second session list here: a duplicate copy used to go stale and report
     /// already-exited games as running.
-    engine: Arc<NiriScaleEngine>,
+    engine: Arc<GamescopeScaleEngine>,
     shutdown: Arc<Notify>,
     /// Keyring handle and the last sync result per game.
     sync: Arc<SyncState>,
@@ -66,7 +66,7 @@ impl Daemon {
         Self {
             config: Arc::new(RwLock::new(config)),
             config_path: Arc::new(config::config_path()),
-            engine: Arc::new(NiriScaleEngine::new()),
+            engine: Arc::new(GamescopeScaleEngine::new()),
             shutdown: Arc::new(Notify::new()),
             sync: Arc::new(sync),
         }
@@ -325,6 +325,16 @@ impl Daemon {
                 Err(e) => rpc_err(id, -32602, e),
             },
             "scale.hotkeys" => respond(id, Ok(self.rpc_scale_hotkeys())),
+            "scale.action" => match (
+                param_str(&req.params, "session_id"),
+                param_str(&req.params, "action"),
+            ) {
+                (Ok(sid), Ok(action)) => match crate::scale::ScaleAction::from_id(action) {
+                    Some(action) => respond(id, self.rpc_scale_action(sid, action).await),
+                    None => rpc_err(id, -32602, format!("未知的缩放动作：{action}")),
+                },
+                (Err(e), _) | (_, Err(e)) => rpc_err(id, -32602, e),
+            },
             "sync.status" => respond(id, self.rpc_sync_status().await),
             "sync.set_settings" => {
                 match serde_json::from_value::<sync_rpc::SettingsPatch>(Value::Object(
@@ -867,7 +877,20 @@ impl Daemon {
         Ok(json!({ "success": true, "steps": steps }))
     }
 
-    /// Apply one action to the live sessions and describe what happened.
+    /// Run any registered action by id.
+    ///
+    /// What `kotori scale up|down|reset|fullscreen` uses, and the same ids a hotkey
+    /// arrives with — so a key binding and the CLI can never drift apart.
+    async fn rpc_scale_action(
+        &self,
+        session_id: &str,
+        action: crate::scale::ScaleAction,
+    ) -> Result<Value, String> {
+        self.lookup_session(session_id).await?;
+        self.run_action(action).await
+    }
+
+    /// Run one action against the live sessions and describe what happened.
     ///
     /// "Nothing to do" is an error the caller can act on ("start a game first"),
     /// while a partial success reports both halves — silence about the session that
@@ -890,7 +913,11 @@ impl Daemon {
         Ok(json!({
             "success": true,
             "action": action.id(),
-            "sessions": outcome.applied.iter().map(|a| &a.session_id).collect::<Vec<_>>(),
+            "sessions": outcome
+                .applied
+                .iter()
+                .map(|a| json!({ "session": a.session_id, "detail": a.detail }))
+                .collect::<Vec<_>>(),
             "failed": outcome
                 .failed
                 .iter()

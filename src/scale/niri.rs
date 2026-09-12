@@ -13,7 +13,7 @@ use crate::util::executor::find_binary;
 use super::x11::{GamescopeDisplay, Settings};
 use super::{
     LaunchSpec, ScaleAction, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, SessionEvent,
-    SessionKind, build_gamescope_args,
+    SessionKind, build_gamescope_args, profile_ratio,
 };
 
 /// How many lifecycle events may queue up before slow subscribers miss one.
@@ -22,11 +22,15 @@ use super::{
 /// this never has to be deep.
 const EVENT_BUFFER: usize = 64;
 
-/// Niri (Wayland) backend: runs gamescope as a nested compositor.
+/// The gamescope backend: runs a game inside a nested gamescope.
+///
+/// Named for what it drives rather than for a desktop, because that is what it is:
+/// the same engine runs on niri and on KDE (where the window control in
+/// `crate::desktop::kde` joins in).
 ///
 /// `sessions` only stores session metadata; the live `Child` is owned by a
 /// spawned watcher task that reaps it on exit, preventing zombie accumulation.
-pub struct NiriScaleEngine {
+pub struct GamescopeScaleEngine {
     gamescope_path: String,
     wine_path: String,
     sessions: Arc<RwLock<HashMap<String, ScaleSession>>>,
@@ -34,7 +38,7 @@ pub struct NiriScaleEngine {
     events: broadcast::Sender<SessionEvent>,
 }
 
-impl NiriScaleEngine {
+impl GamescopeScaleEngine {
     pub fn new() -> Self {
         let gamescope_path = find_binary("gamescope")
             .map(|p| p.to_string_lossy().to_string())
@@ -75,6 +79,7 @@ impl NiriScaleEngine {
             game_id: Some(spec.game_id.to_string()),
             gamescope_pid: None,
             profile: spec.profile.clone(),
+            runtime_ratio: profile_ratio(spec.profile),
             started_at: std::time::Instant::now(),
             process_group: None,
             process_name: Some(name.to_string()),
@@ -170,6 +175,9 @@ impl NiriScaleEngine {
     /// two games open is rare enough that "both changed" (which the answer says)
     /// beats "the wrong one changed". Watch-only sessions are skipped — kotori
     /// launched nothing there, so there is no gamescope of ours to talk to.
+    ///
+    /// Filter actions and window actions live in different places: the filter is a
+    /// property on gamescope's own Xwayland, the window belongs to the compositor.
     pub async fn apply_action(&self, action: ScaleAction) -> ActionOutcome {
         let sessions: Vec<ScaleSession> = self.sessions.read().await.values().cloned().collect();
         let mut outcome = ActionOutcome::default();
@@ -177,12 +185,17 @@ impl NiriScaleEngine {
             let Some(pid) = session.gamescope_pid else {
                 continue;
             };
-            match self.apply_to(pid, &session, action) {
-                Ok(Some(settings)) => outcome.applied.push(AppliedAction {
+            let result = if action.is_filter() {
+                self.apply_filter(pid, &session, action)
+                    .map(|it| describe(&it))
+            } else {
+                self.apply_window(pid, &session, action).await
+            };
+            match result {
+                Ok(detail) => outcome.applied.push(AppliedAction {
                     session_id: session.session_id.clone(),
-                    settings,
+                    detail,
                 }),
-                Ok(None) => {}
                 Err(err) => outcome
                     .failed
                     .push((session.session_id.clone(), err.to_string())),
@@ -191,15 +204,15 @@ impl NiriScaleEngine {
         outcome
     }
 
-    fn apply_to(
+    /// Filter, scaler and sharpness: properties gamescope watches on its Xwayland.
+    fn apply_filter(
         &self,
         pid: u32,
         session: &ScaleSession,
         action: ScaleAction,
-    ) -> Result<Option<Settings>, super::x11::X11Error> {
+    ) -> Result<Settings, ApplyError> {
         let Some(gs) = GamescopeDisplay::discover(pid)? else {
-            // gamescope is gone, or its Xwayland has not come up yet.
-            return Ok(None);
+            return Err(ApplyError::NoGamescope);
         };
         let current = gs
             .read()?
@@ -207,23 +220,91 @@ impl NiriScaleEngine {
         let next = current.applied(action);
         gs.apply(next)?;
         tracing::info!(
-            "session {} ({}): {} → filter {:?} / scaler {:?} / 锐度 {}",
+            "session {} ({}): {} → {}",
             session.session_id,
             gs.display(),
             action.id(),
-            next.filter,
-            next.scaler,
-            next.sharpness
+            describe(&next)
         );
-        Ok(Some(next))
+        Ok(next)
     }
+
+    /// Window size and fullscreen: the compositor's business, KDE only.
+    ///
+    /// A hotkey changes the *scale ratio*, which is what the user is looking at:
+    /// the game keeps rendering at its own resolution, and gamescope's output — the
+    /// window — grows, so the upscaling ratio grows with it. The ratio is the
+    /// session's own record; the geometry itself belongs to KWin.
+    async fn apply_window(
+        &self,
+        pid: u32,
+        session: &ScaleSession,
+        action: ScaleAction,
+    ) -> Result<String, ApplyError> {
+        if !crate::desktop::is_kde() {
+            return Err(ApplyError::Unsupported(
+                "窗口缩放与全屏暂只在 KDE 上实现（niri 是平铺合成器，窗口尺寸由布局决定）"
+                    .to_string(),
+            ));
+        }
+
+        if action == ScaleAction::ToggleFullscreen {
+            crate::desktop::kde::toggle_fullscreen(pid).await?;
+            return Ok("全屏开关（方向由 KWin 决定）".to_string());
+        }
+
+        let index = super::ladder_index_for(session.runtime_ratio);
+        let ratio = super::SCALE_LADDER[match action {
+            ScaleAction::ScaleUp => super::ladder_step(index, true),
+            ScaleAction::ScaleDown => super::ladder_step(index, false),
+            _ => 0, // ResetScale, and anything else that reaches here
+        }];
+        let width = (session.profile.internal_width as f32 * ratio).round() as u32;
+        let height = (session.profile.internal_height as f32 * ratio).round() as u32;
+        crate::desktop::kde::resize_window(pid, width, height).await?;
+
+        // Remember where we are, so the next press steps from here. The window is
+        // the compositor's and its geometry cannot be read back without a D-Bus
+        // service of our own, so this is the record.
+        if let Some(stored) = self.sessions.write().await.get_mut(&session.session_id) {
+            stored.runtime_ratio = ratio;
+        }
+        tracing::info!(
+            "session {}: {} → 输出 {width}x{height}（{ratio}×）",
+            session.session_id,
+            action.id()
+        );
+        Ok(format!("输出 {width}x{height}（{ratio}×）"))
+    }
+}
+
+/// Human-readable summary of a filter setting, for logs and RPC answers.
+fn describe(settings: &Settings) -> String {
+    format!(
+        "filter {:?} / scaler {:?} / 锐度 {}",
+        settings.filter, settings.scaler, settings.sharpness
+    )
+}
+
+/// Why an action could not be applied.
+#[derive(Debug, thiserror::Error)]
+pub enum ApplyError {
+    #[error("gamescope 已经不在了（或者它的 Xwayland 还没起来）")]
+    NoGamescope,
+    #[error("{0}")]
+    Unsupported(String),
+    #[error(transparent)]
+    X11(#[from] super::x11::X11Error),
+    #[error(transparent)]
+    Kde(#[from] crate::desktop::kde::KdeError),
 }
 
 /// One session whose runtime settings changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedAction {
     pub session_id: String,
-    pub settings: Settings,
+    /// What actually changed, in the words the CLI prints.
+    pub detail: String,
 }
 
 /// What a runtime action did, session by session.
@@ -235,14 +316,14 @@ pub struct ActionOutcome {
     pub failed: Vec<(String, String)>,
 }
 
-impl Default for NiriScaleEngine {
+impl Default for GamescopeScaleEngine {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait::async_trait]
-impl ScaleEngine for NiriScaleEngine {
+impl ScaleEngine for GamescopeScaleEngine {
     async fn start_session(&self, spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError> {
         if spec.watch_only {
             return self.start_watch_session(spec).await;
@@ -315,6 +396,7 @@ impl ScaleEngine for NiriScaleEngine {
             game_id: Some(spec.game_id.to_string()),
             gamescope_pid: Some(pgid),
             profile: spec.profile.clone(),
+            runtime_ratio: profile_ratio(spec.profile),
             started_at: std::time::Instant::now(),
             process_group: Some(pgid),
             process_name: spec.process_name.map(str::to_string),

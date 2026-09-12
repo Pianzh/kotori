@@ -1,6 +1,7 @@
 mod cli;
 mod config;
 mod daemon;
+mod desktop;
 mod display;
 mod game;
 mod hotkeys;
@@ -203,8 +204,35 @@ fn scale_cli(rt: &tokio::runtime::Runtime, action: cli::ScaleCommand) -> anyhow:
             session_id,
             Some(delta),
         )?,
+        ScaleCommand::Up { session_id } => scale_action(rt, &socket, "scale-up", session_id)?,
+        ScaleCommand::Down { session_id } => scale_action(rt, &socket, "scale-down", session_id)?,
+        ScaleCommand::Reset { session_id } => scale_action(rt, &socket, "reset-scale", session_id)?,
+        ScaleCommand::Fullscreen { session_id } => {
+            scale_action(rt, &socket, "toggle-fullscreen", session_id)?
+        }
     }
 
+    Ok(())
+}
+
+/// `kotori scale up|down|reset|fullscreen`: one named action, by id.
+///
+/// The same ids the portal hands back for a hotkey, so a key and this command
+/// cannot drift apart.
+fn scale_action(
+    rt: &tokio::runtime::Runtime,
+    socket: &std::path::Path,
+    action: &str,
+    session_id: Option<String>,
+) -> anyhow::Result<()> {
+    let status = call_daemon(rt, socket, "daemon.status", None)?;
+    let session = resolve_session(&status, session_id)?;
+    let params = rpc::params([
+        ("session_id", serde_json::json!(session)),
+        ("action", serde_json::json!(action)),
+    ]);
+    let result = call_daemon(rt, socket, "scale.action", Some(params))?;
+    report_action(&result, action);
     Ok(())
 }
 
@@ -366,16 +394,30 @@ fn press(
         params.insert("delta".into(), serde_json::json!(delta));
     }
     let result = call_daemon(rt, socket, method, Some(params))?;
+    report_action(&result, method);
+    Ok(())
+}
+
+/// Print what a scaling action did, for every path that runs one.
+fn report_action(result: &serde_json::Value, fallback: &str) {
     let action = result
         .get("action")
         .and_then(|a| a.as_str())
-        .unwrap_or(method);
+        .unwrap_or(fallback);
     let sessions = result
         .get("sessions")
         .and_then(|s| s.as_array())
         .map(|list| {
             list.iter()
-                .filter_map(|s| s.as_str())
+                .map(|entry| {
+                    let session = entry.get("session").and_then(|v| v.as_str()).unwrap_or("?");
+                    let detail = entry.get("detail").and_then(|v| v.as_str()).unwrap_or("");
+                    if detail.is_empty() {
+                        session.to_string()
+                    } else {
+                        format!("{session}（{detail}）")
+                    }
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         })
@@ -392,7 +434,6 @@ fn press(
             );
         }
     }
-    Ok(())
 }
 
 /// `kotori sync …`: everything goes through the daemon, like the GUI does.

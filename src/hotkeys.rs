@@ -448,16 +448,21 @@ mod tests {
     }
 
     #[test]
-    fn only_the_one_that_matters_mid_game_comes_with_a_default() {
-        // Everything is registered so that everything *can* be bound, but only
-        // FSR is suggested: the rest are bound by choice, from the desktop's
-        // shortcut settings or kotori's own page.
+    fn only_the_two_that_matter_mid_game_come_with_a_default() {
+        // Everything is registered so that everything *can* be bound, but only the
+        // two a player reaches for without leaving the game are suggested: the rest
+        // are bound by choice, from the desktop's shortcut settings or kotori's own
+        // page.
         assert_eq!(
-            ScaleAction::ToggleFsr.preferred_trigger(),
+            ScaleAction::ScaleUp.preferred_trigger(),
             Some("<Shift><Alt>q")
         );
+        assert_eq!(
+            ScaleAction::ToggleFullscreen.preferred_trigger(),
+            Some("<Shift><Control>a")
+        );
         for action in ScaleAction::ALL {
-            if action != ScaleAction::ToggleFsr {
+            if !matches!(action, ScaleAction::ScaleUp | ScaleAction::ToggleFullscreen) {
                 assert_eq!(
                     action.preferred_trigger(),
                     None,

@@ -20,11 +20,79 @@ pub enum ScaleAction {
     ToggleLinear,
     Soften,
     Sharpen,
+    /// Step the upscale ratio up: gamescope's output — and with it the window —
+    /// grows, so the game is drawn larger than its own resolution.
+    ScaleUp,
+    /// Step the ratio back down.
+    ScaleDown,
+    /// Back to 1:1: the game at its own resolution, no upscaling at all.
+    ResetScale,
+    /// Fullscreen, as the compositor understands it.
+    ToggleFullscreen,
+}
+
+/// The ratios a window-scale hotkey steps through.
+///
+/// 1.0 is the game at its own resolution, and each step is a quarter until 2×;
+/// above that the steps get bigger because the point is "as large as the screen
+/// allows", not precision. Sizes are clamped to the screen by the compositor
+/// anyway, so the top of the ladder is a ceiling rather than a promise.
+pub const SCALE_LADDER: [f32; 7] = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+
+/// The ladder position closest to `ratio`, which is where a session starts (from
+/// its profile) and what a hotkey steps away from.
+pub fn ladder_index_for(ratio: f32) -> usize {
+    SCALE_LADDER
+        .iter()
+        .enumerate()
+        .min_by(|(_, a), (_, b)| {
+            (*a - ratio)
+                .abs()
+                .partial_cmp(&(*b - ratio).abs())
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|(index, _)| index)
+        .unwrap_or(0)
+}
+
+/// One step along the ladder, staying on it.
+pub fn ladder_step(index: usize, up: bool) -> usize {
+    let last = SCALE_LADDER.len() - 1;
+    if up {
+        (index + 1).min(last)
+    } else {
+        index.saturating_sub(1)
+    }
+}
+
+/// The upscale ratio a profile launches with: output pixels ÷ the game's own
+/// resolution.
+///
+/// The width decides when the two disagree (only rounding can make that happen),
+/// and a profile without an internal size falls back to 1.0 — the game at its own
+/// size, which is exactly what the ladder's first step means. This is where a
+/// session's ratio starts, so the first hotkey press steps from what the user is
+/// looking at rather than from a default.
+pub fn profile_ratio(profile: &ScaleProfile) -> f32 {
+    if profile.internal_width == 0 {
+        return 1.0;
+    }
+    let (width, _) = profile.output_size();
+    let ratio = width as f32 / profile.internal_width as f32;
+    if ratio.is_finite() && ratio > 0.0 {
+        ratio
+    } else {
+        1.0
+    }
 }
 
 impl ScaleAction {
     /// Every action kotori registers, in the order the portal lists them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
+        Self::ScaleUp,
+        Self::ScaleDown,
+        Self::ResetScale,
+        Self::ToggleFullscreen,
         Self::ToggleFsr,
         Self::ToggleNis,
         Self::ToggleNearest,
@@ -36,6 +104,10 @@ impl ScaleAction {
     /// Stable id: the portal shortcut id, and what the RPC/CLI layer sends.
     pub fn id(self) -> &'static str {
         match self {
+            Self::ScaleUp => "scale-up",
+            Self::ScaleDown => "scale-down",
+            Self::ResetScale => "reset-scale",
+            Self::ToggleFullscreen => "toggle-fullscreen",
             Self::ToggleFsr => "toggle-fsr",
             Self::ToggleNis => "toggle-nis",
             Self::ToggleNearest => "toggle-nearest",
@@ -59,6 +131,10 @@ impl ScaleAction {
     /// from gamescope's own help text — see [`Self::for_sharpness_delta`].
     pub fn description(self) -> &'static str {
         match self {
+            Self::ScaleUp => "放大游戏窗口（提高缩放比例）",
+            Self::ScaleDown => "缩小游戏窗口（降低缩放比例）",
+            Self::ResetScale => "缩放比例回到 1:1（原始像素）",
+            Self::ToggleFullscreen => "切换游戏全屏",
             Self::ToggleFsr => "开启/关闭 FSR 放大",
             Self::ToggleNis => "开启/关闭 NIS 放大",
             Self::ToggleNearest => "切换最近邻放大",
@@ -71,7 +147,7 @@ impl ScaleAction {
     /// Trigger suggested to the portal, or `None` for "leave it unbound until
     /// the user asks for it".
     ///
-    /// Only the one that matters mid-game comes with a default; everything else
+    /// Only the two that matter mid-game come with a default; everything else
     /// is registered so that it *can* be bound, but bound by choice. Every one
     /// of them is rebindable, from the desktop's shortcut settings today and
     /// from kotori's own settings once it has a page for it.
@@ -81,8 +157,9 @@ impl ScaleAction {
     /// the portal reports back (see `crate::hotkeys::HotkeyStatus::unbound`).
     pub fn preferred_trigger(self) -> Option<&'static str> {
         match self {
-            // Flipping the upscaling on and off while playing.
-            Self::ToggleFsr => Some("<Shift><Alt>q"),
+            // The two things a player reaches for without leaving the game.
+            Self::ScaleUp => Some("<Shift><Alt>q"),
+            Self::ToggleFullscreen => Some("<Shift><Control>a"),
             _ => None,
         }
     }
@@ -104,6 +181,23 @@ impl ScaleAction {
             d if d < 0 => Some(Self::Soften),
             _ => None,
         }
+    }
+
+    /// Does this action change gamescope's filter rather than its window?
+    ///
+    /// The split matters because the two live in different places: filters are
+    /// root-window properties on gamescope's own Xwayland ([`x11`]), while the
+    /// window size is the compositor's ([`crate::desktop::kde`]).
+    pub fn is_filter(self) -> bool {
+        matches!(
+            self,
+            Self::ToggleFsr
+                | Self::ToggleNis
+                | Self::ToggleNearest
+                | Self::ToggleLinear
+                | Self::Soften
+                | Self::Sharpen
+        )
     }
 }
 
@@ -163,7 +257,7 @@ pub trait ScaleEngine: Send + Sync {
 
     // Runtime scaling control is deliberately *not* part of this trait: it is
     // gamescope's own state, reachable only through the properties gamescope
-    // watches on its internal Xwayland ([`x11`]). `NiriScaleEngine` implements it
+    // watches on its internal Xwayland ([`x11`]). `GamescopeScaleEngine` implements it
     // as an inherent method, because that is the only backend with a gamescope to
     // talk to — a backend with a real API of its own would grow its own method
     // here.
@@ -200,6 +294,15 @@ pub struct ScaleSession {
     /// `None` for watch-only sessions: kotori launched nothing.
     pub gamescope_pid: Option<u32>,
     pub profile: ScaleProfile,
+    /// The upscale ratio this session is running at *now*: output pixels ÷ the
+    /// game's own resolution. It starts as whatever the profile asked for and is
+    /// stepped by the window-scale hotkeys.
+    ///
+    /// Tracked rather than read back: the window belongs to the compositor, and
+    /// while its geometry can be queried, doing so needs a D-Bus service of our own
+    /// for every keypress. The number only has to be good enough for "one step
+    /// further", and a session is rebuilt from its profile every launch.
+    pub runtime_ratio: f32,
     pub started_at: std::time::Instant,
     /// Process group to signal on stop; `None` when there is nothing to kill.
     pub process_group: Option<u32>,
@@ -475,5 +578,49 @@ mod tests {
         assert_eq!(&args[sep + 1..], ["/usr/bin/wine", "/games/x/game.exe"]);
         // Nothing after the separator may look like a gamescope flag.
         assert_eq!(args.len(), sep + 3);
+    }
+
+    #[test]
+    fn the_ladder_starts_at_one_and_stops_at_its_ends() {
+        assert_eq!(SCALE_LADDER[0], 1.0);
+        assert_eq!(ladder_step(0, true), 1);
+        assert_eq!(SCALE_LADDER[ladder_step(0, true)], 1.25);
+        // Down from the bottom, and up from the top, stay on the ladder.
+        assert_eq!(ladder_step(0, false), 0);
+        let top = SCALE_LADDER.len() - 1;
+        assert_eq!(ladder_step(top, true), top);
+        assert_eq!(ladder_step(top, false), top - 1);
+    }
+
+    #[test]
+    fn a_profile_ratio_lands_on_its_ladder_step() {
+        // The user's own profile: 1280x720 upscaled to a 2560x1440 output.
+        assert_eq!(ladder_index_for(2.0), 4);
+        assert_eq!(SCALE_LADDER[ladder_index_for(2.0)], 2.0);
+        // A ratio between steps picks the nearer one, and a silly one clamps.
+        assert_eq!(ladder_index_for(1.3), 1);
+        assert_eq!(ladder_index_for(0.0), 0);
+        assert_eq!(ladder_index_for(99.0), SCALE_LADDER.len() - 1);
+        // One press of "smaller" from the launch ratio is the next step down.
+        let step = ladder_step(ladder_index_for(2.0), false);
+        assert_eq!(SCALE_LADDER[step], 1.75);
+    }
+
+    #[test]
+    fn profile_ratio_is_the_one_the_launch_arguments_encode() {
+        let profile = profile(ScaleAlgorithm::Fsr { sharpness: 2 });
+        // `profile()` is 1280x720 into the display resolution; whatever that is,
+        // the ratio is what the output size says it is.
+        let (width, _) = profile.output_size();
+        assert_eq!(profile_ratio(&profile), width as f32 / 1280.0);
+
+        let mut unscaled = profile;
+        unscaled.scale_ratio = Some(1.25);
+        assert_eq!(profile_ratio(&unscaled), 1.25);
+        assert_eq!(ladder_index_for(profile_ratio(&unscaled)), 1);
+
+        let mut broken = unscaled;
+        broken.internal_width = 0;
+        assert_eq!(profile_ratio(&broken), 1.0);
     }
 }

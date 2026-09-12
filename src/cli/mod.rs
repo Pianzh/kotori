@@ -76,6 +76,26 @@ pub enum ScaleCommand {
         /// Session to act on; only needed with more than one game running
         session_id: Option<String>,
     },
+    /// Step the upscale ratio up (the game window grows)
+    Up {
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
+    /// Step the upscale ratio down (the game window shrinks)
+    Down {
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
+    /// Back to 1:1 — the game at its own resolution, no upscaling
+    Reset {
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
+    /// Toggle the game window's fullscreen state (KDE only)
+    Fullscreen {
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
