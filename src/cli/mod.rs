@@ -76,6 +76,11 @@ pub enum ScaleCommand {
         /// Session to act on; only needed with more than one game running
         session_id: Option<String>,
     },
+    /// Scale to the profile's ratio, or back to 1:1 (what the hotkey does)
+    Toggle {
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
     /// Step the upscale ratio up (the game window grows)
     Up {
         /// Session to act on; only needed with more than one game running

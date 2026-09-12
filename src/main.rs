@@ -204,6 +204,9 @@ fn scale_cli(rt: &tokio::runtime::Runtime, action: cli::ScaleCommand) -> anyhow:
             session_id,
             Some(delta),
         )?,
+        ScaleCommand::Toggle { session_id } => {
+            scale_action(rt, &socket, "toggle-scale", session_id)?
+        }
         ScaleCommand::Up { session_id } => scale_action(rt, &socket, "scale-up", session_id)?,
         ScaleCommand::Down { session_id } => scale_action(rt, &socket, "scale-down", session_id)?,
         ScaleCommand::Reset { session_id } => scale_action(rt, &socket, "reset-scale", session_id)?,

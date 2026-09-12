@@ -20,6 +20,10 @@ pub enum ScaleAction {
     ToggleLinear,
     Soften,
     Sharpen,
+    /// One press: draw the game at the ratio its profile configures; press again
+    /// and it is back at its own pixels. This is the user's key — the ladder
+    /// below exists for the CLI and for anyone who wants more than two states.
+    ToggleScale,
     /// Step the upscale ratio up: gamescope's output — and with it the window —
     /// grows, so the game is drawn larger than its own resolution.
     ScaleUp,
@@ -86,12 +90,40 @@ pub fn profile_ratio(profile: &ScaleProfile) -> f32 {
     }
 }
 
+/// How close two ratios have to be before they count as the same size.
+///
+/// The ratio is remembered, not measured: 1.25 stays exactly 1.25 through the
+/// round trip, so this only absorbs float noise, not a real difference.
+pub const RATIO_EPSILON: f32 = 0.001;
+
+/// The ratio one press of the scaling hotkey scales to — 「设定比例」.
+///
+/// That is the profile's own ratio: `scale_ratio` when the profile sets one, and
+/// otherwise the ratio its `output_*` pair encodes. It is the same number the
+/// launch used, so the key always means "the size this game is configured for".
+pub fn toggle_target(profile: &ScaleProfile) -> f32 {
+    profile_ratio(profile)
+}
+
+/// One press of the scaling hotkey: to the configured ratio, or back to 1:1.
+///
+/// A toggle rather than a ladder, because the user asked for *one* key: press and
+/// the game is drawn at the ratio the profile configures, press again and it is
+/// back at its own pixels. Being at the target is what tells the two apart —
+/// which also covers a game that was launched straight into the target size, so
+/// the first press cancels rather than doing nothing visible.
+pub fn toggled_ratio(current: f32, target: f32) -> f32 {
+    if (current - target).abs() < RATIO_EPSILON {
+        1.0
+    } else {
+        target
+    }
+}
+
 impl ScaleAction {
     /// Every action kotori registers, in the order the portal lists them.
-    pub const ALL: [Self; 10] = [
-        Self::ScaleUp,
-        Self::ScaleDown,
-        Self::ResetScale,
+    pub const ALL: [Self; 11] = [
+        Self::ToggleScale,
         Self::ToggleFullscreen,
         Self::ToggleFsr,
         Self::ToggleNis,
@@ -99,11 +131,15 @@ impl ScaleAction {
         Self::ToggleLinear,
         Self::Soften,
         Self::Sharpen,
+        Self::ScaleUp,
+        Self::ScaleDown,
+        Self::ResetScale,
     ];
 
     /// Stable id: the portal shortcut id, and what the RPC/CLI layer sends.
     pub fn id(self) -> &'static str {
         match self {
+            Self::ToggleScale => "toggle-scale",
             Self::ScaleUp => "scale-up",
             Self::ScaleDown => "scale-down",
             Self::ResetScale => "reset-scale",
@@ -131,6 +167,7 @@ impl ScaleAction {
     /// from gamescope's own help text — see [`Self::for_sharpness_delta`].
     pub fn description(self) -> &'static str {
         match self {
+            Self::ToggleScale => "按设定比例缩放／取消缩放（一键开关）",
             Self::ScaleUp => "放大游戏窗口（提高缩放比例）",
             Self::ScaleDown => "缩小游戏窗口（降低缩放比例）",
             Self::ResetScale => "缩放比例回到 1:1（原始像素）",
@@ -157,9 +194,12 @@ impl ScaleAction {
     /// the portal reports back (see `crate::hotkeys::HotkeyStatus::unbound`).
     pub fn preferred_trigger(self) -> Option<&'static str> {
         match self {
-            // The two things a player reaches for without leaving the game.
-            Self::ScaleUp => Some("<Shift><Alt>q"),
-            Self::ToggleFullscreen => Some("<Shift><Control>a"),
+            // The two things a player reaches for without leaving the game: one
+            // key that turns the configured scaling on and off, one that decides
+            // whether the game owns the screen. The user asked for exactly these
+            // two chords (2026-09-12); everything else is bound by choice.
+            Self::ToggleScale => Some("<Shift><Alt>q"),
+            Self::ToggleFullscreen => Some("<Shift><Alt>a"),
             _ => None,
         }
     }
@@ -622,5 +662,33 @@ mod tests {
         let mut broken = unscaled;
         broken.internal_width = 0;
         assert_eq!(profile_ratio(&broken), 1.0);
+    }
+
+    #[test]
+    fn one_key_flips_between_the_configured_ratio_and_one_to_one() {
+        let mut configured = profile(ScaleAlgorithm::Fsr { sharpness: 2 });
+        configured.internal_width = 1280;
+        configured.internal_height = 720;
+        configured.scale_ratio = Some(1.25);
+
+        // The target is what the profile configures, not the ladder's next step.
+        assert_eq!(toggle_target(&configured), 1.25);
+
+        // Launched straight into the configured size: the first press cancels,
+        // which is the only reading of "press again to turn it off" that works
+        // when there is nothing to grow into.
+        assert_eq!(toggled_ratio(1.25, 1.25), 1.0);
+        // And from there it comes back.
+        assert_eq!(toggled_ratio(1.0, 1.25), 1.25);
+        // Pressing from a size nobody asked for (a ladder step, a dragged
+        // window) still lands on the configured ratio rather than toggling off.
+        assert_eq!(toggled_ratio(1.75, 1.25), 1.25);
+        // A profile without an explicit ratio uses the one its output size
+        // encodes, so the same key works for games configured the old way.
+        let legacy = profile(ScaleAlgorithm::Integer);
+        let expected = profile_ratio(&legacy);
+        assert_eq!(toggle_target(&legacy), expected);
+        assert_eq!(toggled_ratio(expected, expected), 1.0);
+        assert_eq!(toggled_ratio(1.0, expected), expected);
     }
 }

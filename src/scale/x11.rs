@@ -187,7 +187,9 @@ impl Settings {
             // The window actions never reach here: the engine routes by
             // `is_filter()` first, and a filter setting has nothing to say about
             // them. Listed explicitly so a new action cannot arrive unnoticed.
-            A::ScaleUp | A::ScaleDown | A::ResetScale | A::ToggleFullscreen => self,
+            A::ScaleUp | A::ScaleDown | A::ResetScale | A::ToggleScale | A::ToggleFullscreen => {
+                self
+            }
         }
     }
 }

@@ -454,15 +454,18 @@ mod tests {
         // are bound by choice, from the desktop's shortcut settings or kotori's own
         // page.
         assert_eq!(
-            ScaleAction::ScaleUp.preferred_trigger(),
+            ScaleAction::ToggleScale.preferred_trigger(),
             Some("<Shift><Alt>q")
         );
         assert_eq!(
             ScaleAction::ToggleFullscreen.preferred_trigger(),
-            Some("<Shift><Control>a")
+            Some("<Shift><Alt>a")
         );
         for action in ScaleAction::ALL {
-            if !matches!(action, ScaleAction::ScaleUp | ScaleAction::ToggleFullscreen) {
+            if !matches!(
+                action,
+                ScaleAction::ToggleScale | ScaleAction::ToggleFullscreen
+            ) {
                 assert_eq!(
                     action.preferred_trigger(),
                     None,

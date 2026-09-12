@@ -333,6 +333,7 @@ pub enum Message {
     InternalHChanged(String),
     OutputWChanged(String),
     OutputHChanged(String),
+    ScaleRatioChanged(String),
     FullscreenToggled(bool),
     FramerateChanged(String),
     ExePathChanged(String),
@@ -623,6 +624,12 @@ impl App {
             Message::OutputHChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.output_h = v;
+                }
+                Task::none()
+            }
+            Message::ScaleRatioChanged(v) => {
+                if let Some(d) = &mut self.draft {
+                    d.scale_ratio = v;
                 }
                 Task::none()
             }
@@ -1740,7 +1747,11 @@ impl App {
             num_input("游戏分辨率高", draft.internal_h.clone(), Message::InternalHChanged),
             num_input("输出分辨率宽", draft.output_w.clone(), Message::OutputWChanged),
             num_input("输出分辨率高", draft.output_h.clone(), Message::OutputHChanged),
-            text("提示：在 Niri 等平铺桌面下游戏会铺满整块显示器，输出分辨率主要影响缩放计算；KDE 浮动桌面将支持自由调整窗口尺寸实现自定义缩放。")
+            num_input("缩放倍数", draft.scale_ratio.clone(), Message::ScaleRatioChanged),
+            text("缩放倍数 = 输出像素 ÷ 游戏自身分辨率，填了它就以它为准（输出分辨率宽/高只作为参考显示）。启动游戏时按这个倍数开窗，快捷键「按设定比例缩放／取消缩放」（默认 Shift+Alt+Q）也是在这个倍数和 1:1 之间来回切。留空则沿用输出分辨率。")
+                .size(11)
+                .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
+            text("提示：在 Niri 等平铺桌面下游戏会铺满整块显示器，输出分辨率主要影响缩放计算；窗口缩放在 KDE 上通过 KWin 完成。")
                 .size(11)
                 .color(Color::from_rgb8(0x8a, 0x8a, 0x8a)),
             fullscreen_toggle,
