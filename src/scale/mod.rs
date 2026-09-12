@@ -58,14 +58,11 @@ pub trait ScaleEngine: Send + Sync {
         None
     }
 
-    /// Toggle FSR
-    async fn toggle_fsr(&self, session: &ScaleSession) -> Result<(), ScaleError>;
-
-    /// Adjust sharpness
-    async fn adjust_sharpness(&self, session: &ScaleSession, delta: i32) -> Result<(), ScaleError>;
-
-    /// Toggle integer scaling
-    async fn toggle_integer(&self, session: &ScaleSession) -> Result<(), ScaleError>;
+    // Runtime scaling control is deliberately *not* part of this trait. gamescope
+    // has no API for it, so the only way to change scaling mid-game is to press
+    // gamescope's own shortcuts — which lives in `crate::hotkeys` (portal
+    // injection, ADR-015) and is therefore backend-independent. A backend that
+    // gained a native API would add its own method here.
 
     /// Get current status
     async fn get_status(&self, session: &ScaleSession) -> Result<ScaleStatus, ScaleError>;

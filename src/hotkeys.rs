@@ -140,6 +140,18 @@ impl GamescopeAction {
             (KEYSYM_SUPER_L, KeyState::Released),
         ]
     }
+
+    /// gamescope's own chord, for logs, docs and error messages.
+    pub fn shortcut_hint(self) -> &'static str {
+        match self {
+            Self::ToggleFsr => "Super+U",
+            Self::ToggleNis => "Super+Y",
+            Self::ToggleNearest => "Super+N",
+            Self::SharpnessUp => "Super+I",
+            Self::SharpnessDown => "Super+O",
+            Self::ToggleFullscreen => "Super+F",
+        }
+    }
 }
 
 /// Anything that can go wrong on the way to the portal.
@@ -153,6 +165,11 @@ pub enum PortalError {
         path: PathBuf,
         source: std::io::Error,
     },
+
+    #[error(
+        "运行时缩放热键还没就绪：启动一次游戏让 portal 弹授权框，或者直接按 gamescope 自带热键"
+    )]
+    NotReady,
 }
 
 /// Where the "already consented" token lives inside the data dir.
@@ -189,6 +206,9 @@ pub struct Hotkeys {
     token_path: PathBuf,
 }
 
+/// The live service, once the portal has granted the shortcuts.
+static SERVICE: std::sync::OnceLock<std::sync::Arc<Hotkeys>> = std::sync::OnceLock::new();
+
 /// Ask the portal for the hotkeys, then run the injection loop.
 ///
 /// Runs in its own task on purpose: binding the shortcuts pops a consent
@@ -199,7 +219,14 @@ pub fn spawn(data_dir: &Path) -> tokio::task::JoinHandle<()> {
     let token_path = restore_token_path(data_dir);
     tokio::spawn(async move {
         match Hotkeys::register(token_path).await {
-            Ok(hotkeys) => hotkeys.run().await,
+            Ok(hotkeys) => {
+                let hotkeys = std::sync::Arc::new(hotkeys);
+                // Published before the loop so `inject_now` can serve the RPCs as
+                // soon as the shortcuts exist. `set` failing would mean another
+                // task got here first, which `request_once` rules out.
+                let _ = SERVICE.set(std::sync::Arc::clone(&hotkeys));
+                hotkeys.run().await;
+            }
             Err(err) => tracing::warn!("运行时缩放热键不可用，游戏不受影响：{err}"),
         }
     })
@@ -216,6 +243,24 @@ pub fn request_once(data_dir: &Path) -> bool {
     }
     spawn(data_dir);
     true
+}
+
+/// Inject one action right now — this is what the `scale.*` RPCs and the GUI
+/// buttons go through.
+///
+/// Without granted hotkeys there is no way to press the key (gamescope listens
+/// to nothing else), so that case answers with [`PortalError::NotReady`] rather
+/// than pretending to have changed anything.
+pub async fn inject_now(action: GamescopeAction) -> Result<(), PortalError> {
+    match SERVICE.get() {
+        Some(hotkeys) => hotkeys.inject(action).await,
+        None => Err(PortalError::NotReady),
+    }
+}
+
+/// Has the portal granted the hotkeys, i.e. can the daemon inject at all?
+pub fn ready() -> bool {
+    SERVICE.get().is_some()
 }
 
 impl Hotkeys {
@@ -262,7 +307,7 @@ impl Hotkeys {
     }
 
     /// Wait for triggers and inject the matching chord.
-    async fn run(self) {
+    async fn run(self: std::sync::Arc<Self>) {
         let mut stream = match self.shortcuts.receive_activated().await {
             Ok(stream) => Box::pin(stream),
             Err(err) => {
@@ -428,5 +473,28 @@ mod tests {
         assert!(read_restore_token(&path).is_none());
 
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn descriptions_name_the_chord_they_inject() {
+        // The portal dialog is the only place the user learns the trigger, so a
+        // description that drifts from the chord would be actively misleading.
+        for action in GamescopeAction::ALL {
+            assert!(
+                action.description().contains(action.shortcut_hint()),
+                "{} 的描述里没写快捷键：{}",
+                action.id(),
+                action.description()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn injection_without_granted_hotkeys_says_so() {
+        // No test registers the portal service, so this is exactly the state a
+        // fresh daemon is in: the RPCs must report it rather than claim success.
+        assert!(!ready());
+        let err = inject_now(GamescopeAction::ToggleFsr).await.unwrap_err();
+        assert!(err.to_string().contains("还没就绪"), "{err}");
     }
 }

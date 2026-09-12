@@ -770,41 +770,63 @@ impl Daemon {
             .get_status(&session)
             .await
             .map_err(|e| e.to_string())?;
-        serde_json::to_value(status).map_err(|e| e.to_string())
+        let mut value = serde_json::to_value(status).map_err(|e| e.to_string())?;
+        // These numbers describe the profile the game was launched with; the live
+        // state can be changed by a hotkey and cannot be read back. Report whether
+        // the runtime hotkeys are usable so callers can explain themselves.
+        if let Some(object) = value.as_object_mut() {
+            object.insert("hotkeys_ready".to_string(), json!(crate::hotkeys::ready()));
+        }
+        Ok(value)
     }
 
+    /// Runtime scaling changes are gamescope's own hotkeys, pressed for the user
+    /// through the RemoteDesktop portal (ADR-015) — while a game runs, gamescope
+    /// accepts nothing else. A live session is required either way: without one
+    /// there is nothing to rescale, and saying that beats a portal error nobody
+    /// can act on.
+    ///
+    /// Note that `scale.get_status` keeps reporting the *launch* profile: we
+    /// cannot read gamescope's current state back, so after a hotkey — ours or
+    /// the user's own — that report is stale by design.
     async fn rpc_scale_toggle_fsr(&self, session_id: &str) -> Result<Value, String> {
-        let session = self.lookup_session(session_id).await?;
-        self.engine
-            .toggle_fsr(&session)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(json!({ "success": true }))
+        self.lookup_session(session_id).await?;
+        Self::inject(crate::hotkeys::GamescopeAction::ToggleFsr).await
     }
 
-    /// gamescope has no external runtime API, so this surfaces the backend's
-    /// "use the built-in hotkey" guidance as an error.
+    /// Nearest-neighbour is the runtime counterpart of integer scaling: both stop
+    /// the filter from inventing pixels.
     async fn rpc_scale_toggle_integer(&self, session_id: &str) -> Result<Value, String> {
-        let session = self.lookup_session(session_id).await?;
-        self.engine
-            .toggle_integer(&session)
-            .await
-            .map_err(|e| e.to_string())?;
-        Ok(json!({ "success": true }))
+        self.lookup_session(session_id).await?;
+        Self::inject(crate::hotkeys::GamescopeAction::ToggleNearest).await
     }
 
-    /// See [`Self::rpc_scale_toggle_integer`].
+    /// gamescope moves sharpness one step per keypress, so a bigger delta means
+    /// pressing the key more than once (capped at gamescope's 0..20 range).
     async fn rpc_scale_adjust_sharpness(
         &self,
         session_id: &str,
         delta: i32,
     ) -> Result<Value, String> {
-        let session = self.lookup_session(session_id).await?;
-        self.engine
-            .adjust_sharpness(&session, delta)
+        self.lookup_session(session_id).await?;
+        let action = match delta {
+            step if step > 0 => crate::hotkeys::GamescopeAction::SharpnessUp,
+            step if step < 0 => crate::hotkeys::GamescopeAction::SharpnessDown,
+            _ => return Err("锐度步长不能为 0".to_string()),
+        };
+        let steps = delta.unsigned_abs().min(20);
+        for _ in 0..steps {
+            Self::inject(action).await?;
+        }
+        Ok(json!({ "success": true, "steps": steps }))
+    }
+
+    /// Press one of gamescope's shortcuts for the user.
+    async fn inject(action: crate::hotkeys::GamescopeAction) -> Result<Value, String> {
+        crate::hotkeys::inject_now(action)
             .await
-            .map_err(|e| e.to_string())?;
-        Ok(json!({ "success": true }))
+            .map(|()| json!({ "success": true, "action": action.id() }))
+            .map_err(|err| format!("{err}（也可以直接按 {}）", action.shortcut_hint()))
     }
 
     async fn lookup_session(&self, session_id: &str) -> Result<ScaleSession, String> {

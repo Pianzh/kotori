@@ -320,28 +320,6 @@ impl ScaleEngine for NiriScaleEngine {
         Some(self.events.subscribe())
     }
 
-    async fn toggle_fsr(&self, _session: &ScaleSession) -> Result<(), ScaleError> {
-        Err(ScaleError::ProtocolError(
-            "gamescope 不支持外部运行时控制，请聚焦游戏窗口后按 Super+U 切换 FSR".to_string(),
-        ))
-    }
-
-    async fn adjust_sharpness(
-        &self,
-        _session: &ScaleSession,
-        _delta: i32,
-    ) -> Result<(), ScaleError> {
-        Err(ScaleError::ProtocolError(
-            "gamescope 不支持外部运行时控制，请用 Super+I / Super+O 调整锐度".to_string(),
-        ))
-    }
-
-    async fn toggle_integer(&self, _session: &ScaleSession) -> Result<(), ScaleError> {
-        Err(ScaleError::ProtocolError(
-            "gamescope 不支持外部运行时控制，请用 Super+N 切换最近邻滤波".to_string(),
-        ))
-    }
-
     async fn get_status(&self, session: &ScaleSession) -> Result<ScaleStatus, ScaleError> {
         Ok(ScaleStatus {
             fsr_enabled: matches!(
