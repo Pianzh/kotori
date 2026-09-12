@@ -1,28 +1,19 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+mod paths;
+mod profile;
 
-/// Default *internal* (game render) resolution used for new games.
-pub const DEFAULT_INTERNAL_WIDTH: u32 = 1280;
-pub const DEFAULT_INTERNAL_HEIGHT: u32 = 720;
-
-/// Last-resort output resolution when no display can be queried.
-pub const FALLBACK_OUTPUT_WIDTH: u32 = 1920;
-pub const FALLBACK_OUTPUT_HEIGHT: u32 = 1080;
-
-/// Accepted range for any resolution field coming from a client.
-pub const MAX_RESOLUTION: u32 = 16384;
-
-/// Accepted range for the scaling ratio (output ÷ internal resolution).
-/// 1.0 means "no upscaling"; the product is additionally capped by
-/// `MAX_RESOLUTION`, so the ceiling here only catches nonsense.
-pub const MIN_SCALE_RATIO: f32 = 0.25;
-pub const MAX_SCALE_RATIO: f32 = 8.0;
-/// Accepted range for the frame rate limit.
-pub const MAX_FRAMERATE: u32 = 1000;
-
-/// Internal sharpness range (0 = softest, 5 = sharpest). Mirrors the UI slider.
-pub const MAX_SHARPNESS: u32 = 5;
+// Only what the rest of the crate actually names. Everything else stays reachable
+// through `config::profile` / `config::paths` — a re-export nobody uses is a
+// warning, and a re-export list that lies about the surface is worse.
+pub use paths::{
+    config_path, data_dir, default_socket_path, load, load_at, log_dir, resolve_socket, save,
+    save_to, secrets_path, socket_path,
+};
+pub use profile::{
+    FALLBACK_OUTPUT_HEIGHT, FALLBACK_OUTPUT_WIDTH, MAX_SHARPNESS, ScaleAlgorithm, ScaleProfile,
+};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -302,197 +293,6 @@ impl GameConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ScaleProfile {
-    pub name: String,
-    pub algorithm: ScaleAlgorithm,
-    pub internal_width: u32,
-    pub internal_height: u32,
-    pub output_width: u32,
-    pub output_height: u32,
-    /// Upscale factor relative to the internal resolution. When present it
-    /// *wins* over `output_*` — those stay for profiles written before ratios
-    /// existed, and for the UI, which still edits them.
-    #[serde(default)]
-    pub scale_ratio: Option<f32>,
-    /// `true` (default) means the window decides the output size, so dragging
-    /// the window rescales live — which is what gamescope does anyway.
-    /// `false` means the output is pinned to `internal × scale_ratio` and the
-    /// backend has to stop the window from being resized: gamescope itself
-    /// never sets a min/max content size, so this is compositor work.
-    #[serde(default = "default_true")]
-    pub follow_window: bool,
-    #[serde(default)]
-    pub framerate_limit: Option<u32>,
-    #[serde(default)]
-    pub force_fullscreen: bool,
-}
-
-fn default_true() -> bool {
-    true
-}
-
-/// Scaling algorithm bound to a game.
-///
-/// NOTE: gamescope (>= 3.16) only provides `linear`, `nearest`, `fsr`, `nis`
-/// and `pixel` filters — there is no Lanczos filter, so no such variant is
-/// offered here (a variant that silently degrades to bilinear is a lie).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum ScaleAlgorithm {
-    Fsr { sharpness: u32 },
-    Nis { sharpness: u32 },
-    Integer,
-    Bilinear,
-}
-
-impl ScaleAlgorithm {
-    /// Names shown in the UI / accepted by [`ScaleAlgorithm::from_label`].
-    pub const ALL: [&'static str; 4] = ["Fsr", "Nis", "Integer", "Bilinear"];
-
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Fsr { .. } => "Fsr",
-            Self::Nis { .. } => "Nis",
-            Self::Integer => "Integer",
-            Self::Bilinear => "Bilinear",
-        }
-    }
-
-    /// Sharpness for the algorithms that support it (clamped to 0..=MAX_SHARPNESS).
-    pub fn sharpness(&self) -> Option<u32> {
-        match self {
-            Self::Fsr { sharpness } | Self::Nis { sharpness } => {
-                Some((*sharpness).min(MAX_SHARPNESS))
-            }
-            Self::Integer | Self::Bilinear => None,
-        }
-    }
-
-    /// Rebuild this algorithm with a new sharpness value (no-op for the
-    /// algorithms that ignore sharpness).
-    pub fn with_sharpness(self, sharpness: u32) -> Self {
-        let sharpness = sharpness.min(MAX_SHARPNESS);
-        match self {
-            Self::Fsr { .. } => Self::Fsr { sharpness },
-            Self::Nis { .. } => Self::Nis { sharpness },
-            other => other,
-        }
-    }
-
-    pub fn from_label(label: &str) -> Option<Self> {
-        match label {
-            "Fsr" => Some(Self::Fsr { sharpness: 2 }),
-            "Nis" => Some(Self::Nis { sharpness: 2 }),
-            "Integer" => Some(Self::Integer),
-            "Bilinear" => Some(Self::Bilinear),
-            _ => None,
-        }
-    }
-}
-
-impl ScaleProfile {
-    /// Sensible default profile for a game on an output of `output` resolution.
-    pub fn default_for(output: (u32, u32)) -> Self {
-        Self {
-            name: "默认".to_string(),
-            algorithm: ScaleAlgorithm::Fsr { sharpness: 2 },
-            internal_width: DEFAULT_INTERNAL_WIDTH,
-            internal_height: DEFAULT_INTERNAL_HEIGHT,
-            output_width: output.0,
-            output_height: output.1,
-            scale_ratio: None,
-            follow_window: true,
-            framerate_limit: None,
-            force_fullscreen: true,
-        }
-    }
-
-    /// Output size in *physical* pixels for this profile.
-    ///
-    /// `scale_ratio` wins when it is usable; otherwise the stored `output_*`
-    /// pair is used, so old profiles behave exactly as before. gamescope's
-    /// `-W/-H` expect physical pixels and divide by the compositor's
-    /// fractional scale themselves, so no desktop-scale maths belongs here.
-    pub fn output_size(&self) -> (u32, u32) {
-        let Some(ratio) = self.scale_ratio.filter(|r| r.is_finite() && *r > 0.0) else {
-            return (self.output_width, self.output_height);
-        };
-        let upscale = |value: u32| -> u32 {
-            ((value as f32 * ratio).round() as i64).clamp(1, MAX_RESOLUTION as i64) as u32
-        };
-        (upscale(self.internal_width), upscale(self.internal_height))
-    }
-
-    /// Clamp values that are representable but outside the supported range.
-    pub fn normalize(&mut self) {
-        match self.algorithm {
-            ScaleAlgorithm::Fsr { sharpness } => {
-                self.algorithm = ScaleAlgorithm::Fsr {
-                    sharpness: sharpness.min(MAX_SHARPNESS),
-                };
-            }
-            ScaleAlgorithm::Nis { sharpness } => {
-                self.algorithm = ScaleAlgorithm::Nis {
-                    sharpness: sharpness.min(MAX_SHARPNESS),
-                };
-            }
-            ScaleAlgorithm::Integer | ScaleAlgorithm::Bilinear => {}
-        }
-    }
-
-    /// Validate a profile that arrived from a client before it is persisted.
-    /// Returns a message that is safe to show to the user.
-    pub fn validate(&self) -> Result<(), String> {
-        for (label, value) in [
-            ("游戏分辨率宽", self.internal_width),
-            ("游戏分辨率高", self.internal_height),
-            ("输出分辨率宽", self.output_width),
-            ("输出分辨率高", self.output_height),
-        ] {
-            if value == 0 || value > MAX_RESOLUTION {
-                return Err(format!(
-                    "{label} 必须在 1..={MAX_RESOLUTION} 之间（当前 {value}）"
-                ));
-            }
-        }
-
-        if let Some(fps) = self.framerate_limit
-            && (fps == 0 || fps > MAX_FRAMERATE)
-        {
-            return Err(format!(
-                "帧率限制必须在 1..={MAX_FRAMERATE} 之间（当前 {fps}）"
-            ));
-        }
-
-        if let Some(ratio) = self.scale_ratio {
-            if !ratio.is_finite() || !(MIN_SCALE_RATIO..=MAX_SCALE_RATIO).contains(&ratio) {
-                return Err(format!(
-                    "缩放比例必须在 {MIN_SCALE_RATIO}..={MAX_SCALE_RATIO} 之间（当前 {ratio}）"
-                ));
-            }
-            // Checked before `output_size()` clamps, so a ratio that only looks
-            // fine because of the clamp is still rejected here.
-            let wide = self.internal_width as f64 * ratio as f64;
-            let high = self.internal_height as f64 * ratio as f64;
-            if wide > MAX_RESOLUTION as f64 || high > MAX_RESOLUTION as f64 {
-                return Err(format!(
-                    "缩放比例 {ratio} 会把输出分辨率变成 {:.0}x{:.0}，超过上限 {MAX_RESOLUTION}",
-                    wide.round(),
-                    high.round()
-                ));
-            }
-        }
-
-        Ok(())
-    }
-}
-
-fn default_socket_path() -> PathBuf {
-    dirs::runtime_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("kotori.sock")
-}
-
 fn default_log_level() -> String {
     "info".to_string()
 }
@@ -505,122 +305,6 @@ impl Default for DaemonConfig {
         }
     }
 }
-
-/// Path of the config file. `KOTORI_CONFIG` overrides it (used by tests and
-/// portable installs).
-pub fn config_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("KOTORI_CONFIG") {
-        return PathBuf::from(p);
-    }
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("kotori")
-        .join("config.toml")
-}
-
-/// Path of the master-password credential file.
-///
-/// It lives next to the config rather than in the data directory because it is
-/// configuration-shaped: one per machine, not per dataset. `KOTORI_SECRETS_FILE`
-/// overrides it (tests rely on that).
-pub fn secrets_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("KOTORI_SECRETS_FILE") {
-        return PathBuf::from(p);
-    }
-    config_path()
-        .parent()
-        .map(|dir| dir.join("secrets.json"))
-        .unwrap_or_else(|| PathBuf::from("secrets.json"))
-}
-
-/// Data directory (`~/.local/share/kotori`). `KOTORI_DATA_DIR` overrides it.
-pub fn data_dir() -> PathBuf {
-    if let Some(p) = std::env::var_os("KOTORI_DATA_DIR") {
-        return PathBuf::from(p);
-    }
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("kotori")
-}
-
-/// Directory holding daemon logs (`<data_dir>/logs`).
-pub fn log_dir() -> PathBuf {
-    data_dir().join("logs")
-}
-
-/// Resolve the daemon socket for a given config.
-/// `KOTORI_SOCKET` overrides the config value.
-pub fn resolve_socket(config: &Config) -> PathBuf {
-    if let Some(p) = std::env::var_os("KOTORI_SOCKET") {
-        return PathBuf::from(p);
-    }
-    config.daemon.socket_path.clone()
-}
-
-/// Resolve the daemon socket, loading the config (falling back to defaults).
-pub fn socket_path() -> PathBuf {
-    resolve_socket(&load().unwrap_or_default())
-}
-
-/// Load the user config.
-///
-/// A missing file yields defaults. A *corrupt* file is moved aside to
-/// `<path>.corrupt` and defaults are returned, so a broken config never bricks
-/// the app while the user's data stays recoverable (GOALS §6.2).
-pub fn load() -> anyhow::Result<Config> {
-    load_at(&config_path())
-}
-
-/// [`load`] against an explicit path.
-///
-/// The daemon remembers the file it was started with instead of re-resolving it
-/// on every write, so a config that was loaded from one path can never be saved
-/// over another.
-pub fn load_at(path: &Path) -> anyhow::Result<Config> {
-    if !path.exists() {
-        return Ok(Config::default());
-    }
-    match load_from(path) {
-        Ok(config) => Ok(config),
-        Err(err) => {
-            let backup = path.with_extension("toml.corrupt");
-            let moved = std::fs::rename(path, &backup).is_ok();
-            if moved {
-                tracing::error!(
-                    "配置解析失败，已备份到 {}，本次使用默认配置: {err}",
-                    backup.display()
-                );
-            } else {
-                tracing::error!("配置解析失败，本次使用默认配置: {err}");
-            }
-            Ok(Config::default())
-        }
-    }
-}
-
-/// Load and parse a config from an explicit path (strict: no fallback).
-pub fn load_from(path: &Path) -> anyhow::Result<Config> {
-    let content = std::fs::read_to_string(path)?;
-    let mut config: Config = toml::from_str(&content)?;
-    config.normalize();
-    Ok(config)
-}
-
-/// Save the config to the default path.
-pub fn save(config: &Config) -> anyhow::Result<()> {
-    save_to(&config_path(), config)
-}
-
-/// Save the config to an explicit path, creating parent directories.
-pub fn save_to(path: &Path, config: &Config) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let content = toml::to_string_pretty(config)?;
-    std::fs::write(path, content)?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,7 +350,7 @@ mod tests {
         let config = sample_config();
 
         save_to(&path, &config).unwrap();
-        let loaded = load_from(&path).unwrap();
+        let loaded = paths::load_from(&path).unwrap();
 
         assert_eq!(loaded.games.len(), 1);
         let game = &loaded.games["demo"];
@@ -688,7 +372,7 @@ mod tests {
         assert!(!path.exists());
         // load_from is strict; the lenient behaviour lives in `load()` and is
         // covered by `corrupt_config_is_backed_up`.
-        assert!(load_from(&path).is_err());
+        assert!(paths::load_from(&path).is_err());
     }
 
     #[test]
@@ -696,7 +380,7 @@ mod tests {
         let path = temp_path("corrupt");
         std::fs::write(&path, "this is not = valid toml {{{").unwrap();
 
-        let parsed = load_from(&path);
+        let parsed = paths::load_from(&path);
         assert!(parsed.is_err());
 
         // Emulate `load()`'s backup step without touching the real config path.
@@ -736,29 +420,6 @@ algorithm = "Lanczos"
     }
 
     #[test]
-    fn sharpness_is_clamped_and_rebuilt() {
-        let algo = ScaleAlgorithm::Fsr { sharpness: 99 };
-        assert_eq!(algo.sharpness(), Some(MAX_SHARPNESS));
-        assert_eq!(
-            ScaleAlgorithm::Integer.with_sharpness(3),
-            ScaleAlgorithm::Integer
-        );
-        assert_eq!(
-            ScaleAlgorithm::Nis { sharpness: 1 }.with_sharpness(5),
-            ScaleAlgorithm::Nis { sharpness: 5 }
-        );
-    }
-
-    #[test]
-    fn algorithm_labels_round_trip() {
-        for label in ScaleAlgorithm::ALL {
-            let algo = ScaleAlgorithm::from_label(label).expect(label);
-            assert_eq!(algo.label(), label);
-        }
-        assert!(ScaleAlgorithm::from_label("Lanczos").is_none());
-    }
-
-    #[test]
     fn partial_game_config_uses_serde_defaults() {
         // Missing optional fields must not break loading an older config.
         let toml = r#"
@@ -786,100 +447,5 @@ output_height = 1440
         assert_eq!(game.scale_profile.scale_ratio, None);
         assert!(game.scale_profile.follow_window);
         assert_eq!(config.daemon.socket_path, default_socket_path());
-    }
-
-    #[test]
-    fn a_scaling_ratio_decides_the_output_size() {
-        let mut profile = ScaleProfile::default_for((2560, 1440));
-        // No ratio: the stored output pair is what gamescope is told.
-        assert_eq!(profile.output_size(), (2560, 1440));
-
-        profile.scale_ratio = Some(2.0);
-        assert_eq!(profile.output_size(), (2560, 1440));
-        profile.scale_ratio = Some(1.5);
-        assert_eq!(profile.output_size(), (1920, 1080));
-
-        // Odd ratios round to whole pixels and never collapse to zero.
-        profile.internal_width = 1000;
-        profile.internal_height = 999;
-        profile.scale_ratio = Some(0.25);
-        assert_eq!(profile.output_size(), (250, 250));
-
-        // An unusable ratio falls back instead of producing a zero-size window.
-        profile.scale_ratio = Some(0.0);
-        assert_eq!(profile.output_size(), (2560, 1440));
-        // ...and an absurd one is clamped rather than overflowing.
-        profile.scale_ratio = Some(1e30);
-        assert_eq!(profile.output_size(), (MAX_RESOLUTION, MAX_RESOLUTION));
-    }
-
-    #[test]
-    fn profile_validation_bounds_the_scaling_ratio() {
-        let mut profile = ScaleProfile::default_for((2560, 1440));
-
-        profile.scale_ratio = Some(MIN_SCALE_RATIO / 2.0);
-        assert!(profile.validate().unwrap_err().contains("缩放比例"));
-        profile.scale_ratio = Some(MAX_SCALE_RATIO + 1.0);
-        assert!(profile.validate().is_err());
-        profile.scale_ratio = Some(f32::NAN);
-        assert!(profile.validate().is_err());
-        profile.scale_ratio = Some(2.0);
-        assert!(profile.validate().is_ok());
-
-        // In range, but the product blows past the resolution ceiling: rejected
-        // here rather than silently clamped by `output_size()`.
-        profile.internal_width = MAX_RESOLUTION;
-        profile.scale_ratio = Some(2.0);
-        let err = profile.validate().unwrap_err();
-        assert!(err.contains("输出分辨率"), "{err}");
-    }
-
-    #[test]
-    fn profile_validation_rejects_impossible_values() {
-        let ok = ScaleProfile::default_for((2560, 1440));
-        assert!(ok.validate().is_ok());
-
-        let mut zero = ok.clone();
-        zero.internal_width = 0;
-        assert!(zero.validate().unwrap_err().contains("游戏分辨率宽"));
-
-        let mut huge = ok.clone();
-        huge.output_height = MAX_RESOLUTION + 1;
-        assert!(huge.validate().unwrap_err().contains("输出分辨率高"));
-
-        let mut fps = ok.clone();
-        fps.framerate_limit = Some(0);
-        assert!(fps.validate().unwrap_err().contains("帧率限制"));
-
-        let mut fps_high = ok.clone();
-        fps_high.framerate_limit = Some(MAX_FRAMERATE + 1);
-        assert!(fps_high.validate().is_err());
-
-        assert!(
-            ok.validate().is_ok(),
-            "validation must not mutate the profile"
-        );
-    }
-
-    #[test]
-    fn normalize_clamps_sharpness_only() {
-        let mut profile = ScaleProfile {
-            algorithm: ScaleAlgorithm::Nis { sharpness: 99 },
-            ..ScaleProfile::default_for((1920, 1080))
-        };
-        profile.normalize();
-        assert_eq!(
-            profile.algorithm,
-            ScaleAlgorithm::Nis {
-                sharpness: MAX_SHARPNESS
-            }
-        );
-
-        let mut unit = ScaleProfile {
-            algorithm: ScaleAlgorithm::Integer,
-            ..ScaleProfile::default_for((1920, 1080))
-        };
-        unit.normalize();
-        assert_eq!(unit.algorithm, ScaleAlgorithm::Integer);
     }
 }
