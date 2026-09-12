@@ -11,8 +11,14 @@
 //! | `Super+U` | toggle FSR upscaling |
 //! | `Super+Y` | toggle NIS upscaling |
 //! | `Super+N` | toggle nearest-neighbour |
-//! | `Super+I` / `Super+O` | sharpness ±1 |
+//! | `Super+B` | back to bilinear (no upscale filter) |
+//! | `Super+I` / `Super+O` | one step softer / one step sharper |
 //! | `Super+F` | toggle fullscreen |
+//!
+//! That list is read off `CWaylandInputThread::HandleKey` in
+//! `src/Backends/WaylandBackend.cpp` — the nested backend, which is the one
+//! kotori uses. The filter changes on key *release* and the key is swallowed
+//! rather than forwarded to the game.
 //!
 //! A Wayland client cannot synthesise keys — KWin implements neither
 //! `zwp_virtual_keyboard_manager_v1` nor anything equivalent — but the
@@ -54,25 +60,38 @@ const KEY_GAP: Duration = Duration::from_millis(20);
 /// File under the data dir that remembers the portal's consent token.
 const RESTORE_TOKEN_FILE: &str = "portal-restore-token";
 
+/// Set this to keep the portal out of the picture entirely.
+///
+/// The end-to-end tests launch games through a *real* daemon on the developer's
+/// own desktop, so without a switch they would pop a consent dialog on every
+/// `cargo test`.
+const DISABLE_ENV: &str = "KOTORI_NO_HOTKEYS";
+
+fn disabled() -> bool {
+    matches!(std::env::var(DISABLE_ENV), Ok(value) if !value.is_empty() && value != "0")
+}
+
 /// One runtime scaling action — that is, one of gamescope's own shortcuts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GamescopeAction {
     ToggleFsr,
     ToggleNis,
     ToggleNearest,
-    SharpnessUp,
-    SharpnessDown,
+    ToggleLinear,
+    Soften,
+    Sharpen,
     ToggleFullscreen,
 }
 
 impl GamescopeAction {
     /// Every action kotori registers, in the order the portal lists them.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 7] = [
         Self::ToggleFsr,
         Self::ToggleNis,
         Self::ToggleNearest,
-        Self::SharpnessUp,
-        Self::SharpnessDown,
+        Self::ToggleLinear,
+        Self::Soften,
+        Self::Sharpen,
         Self::ToggleFullscreen,
     ];
 
@@ -82,8 +101,9 @@ impl GamescopeAction {
             Self::ToggleFsr => "toggle-fsr",
             Self::ToggleNis => "toggle-nis",
             Self::ToggleNearest => "toggle-nearest",
-            Self::SharpnessUp => "sharpness-up",
-            Self::SharpnessDown => "sharpness-down",
+            Self::ToggleLinear => "toggle-linear",
+            Self::Soften => "soften",
+            Self::Sharpen => "sharpen",
             Self::ToggleFullscreen => "toggle-fullscreen",
         }
     }
@@ -94,13 +114,17 @@ impl GamescopeAction {
     }
 
     /// Shown in the portal's consent dialog, so it is user-facing text.
+    ///
+    /// The two sharpness steps name the *effect*, which is the opposite way
+    /// round from gamescope's own help text — see [`Self::for_sharpness_delta`].
     pub fn description(self) -> &'static str {
         match self {
             Self::ToggleFsr => "开启/关闭 FSR 放大（Super+U）",
             Self::ToggleNis => "开启/关闭 NIS 放大（Super+Y）",
             Self::ToggleNearest => "切换最近邻放大（Super+N）",
-            Self::SharpnessUp => "提高锐度 1 级（Super+I）",
-            Self::SharpnessDown => "降低锐度 1 级（Super+O）",
+            Self::ToggleLinear => "切回双线性过滤，关掉放大滤镜（Super+B）",
+            Self::Soften => "降低锐度 1 级（Super+I）",
+            Self::Sharpen => "提高锐度 1 级（Super+O）",
             Self::ToggleFullscreen => "切换游戏全屏（Super+F）",
         }
     }
@@ -111,8 +135,9 @@ impl GamescopeAction {
             Self::ToggleFsr => "<Control><Alt>u",
             Self::ToggleNis => "<Control><Alt>y",
             Self::ToggleNearest => "<Control><Alt>n",
-            Self::SharpnessUp => "<Control><Alt>i",
-            Self::SharpnessDown => "<Control><Alt>o",
+            Self::ToggleLinear => "<Control><Alt>b",
+            Self::Soften => "<Control><Alt>i",
+            Self::Sharpen => "<Control><Alt>o",
             Self::ToggleFullscreen => "<Control><Alt>f",
         }
     }
@@ -123,8 +148,9 @@ impl GamescopeAction {
             Self::ToggleFsr => 0x75,        // u
             Self::ToggleNis => 0x79,        // y
             Self::ToggleNearest => 0x6e,    // n
-            Self::SharpnessUp => 0x69,      // i
-            Self::SharpnessDown => 0x6f,    // o
+            Self::ToggleLinear => 0x62,     // b
+            Self::Soften => 0x69,           // i
+            Self::Sharpen => 0x6f,          // o
             Self::ToggleFullscreen => 0x66, // f
         }
     }
@@ -147,9 +173,30 @@ impl GamescopeAction {
             Self::ToggleFsr => "Super+U",
             Self::ToggleNis => "Super+Y",
             Self::ToggleNearest => "Super+N",
-            Self::SharpnessUp => "Super+I",
-            Self::SharpnessDown => "Super+O",
+            Self::ToggleLinear => "Super+B",
+            Self::Soften => "Super+I",
+            Self::Sharpen => "Super+O",
             Self::ToggleFullscreen => "Super+F",
+        }
+    }
+
+    /// Which key nudges kotori's sharpness scale (0 = softest, 5 = sharpest,
+    /// see `config::MAX_SHARPNESS`) by `delta` steps.
+    ///
+    /// The direction is the opposite of what gamescope's `--help` says, and the
+    /// two statements there even contradict each other: `--sharpness` is
+    /// documented as "0 (max) to 20 (min)", while `Super+I` is documented as
+    /// "increase FSR sharpness by 1" although it does
+    /// `g_upscaleFilterSharpness + 1`. The code is the authority — gamescope
+    /// hands that number to RCAS as `sharpness / 10`, and FSR's own header says
+    /// "0.0 := maximum sharpness, to N>0 … reduction of sharpness"
+    /// (`src/shaders/ffx_fsr1.h`). So the *number* is a softness: `Super+I`
+    /// softens, `Super+O` sharpens.
+    pub fn for_sharpness_delta(delta: i32) -> Option<Self> {
+        match delta {
+            d if d > 0 => Some(Self::Sharpen),
+            d if d < 0 => Some(Self::Soften),
+            _ => None,
         }
     }
 }
@@ -209,6 +256,52 @@ pub struct Hotkeys {
 /// The live service, once the portal has granted the shortcuts.
 static SERVICE: std::sync::OnceLock<std::sync::Arc<Hotkeys>> = std::sync::OnceLock::new();
 
+/// Whether an attempt is in flight, and — when the last one failed — why.
+///
+/// A bare `false` in `daemon.status` would leave a user with a dead feature and
+/// nothing to act on, which is exactly the kind of silence this project tries
+/// not to ship.
+#[derive(Default)]
+struct State {
+    requested: bool,
+    error: Option<String>,
+}
+
+static STATE: std::sync::Mutex<State> = std::sync::Mutex::new(State {
+    requested: false,
+    error: None,
+});
+
+/// Run `f` on the state, ignoring poisoning: a panic elsewhere has no bearing on
+/// two booleans, and refusing to answer would be worse.
+fn with_state<T>(f: impl FnOnce(&mut State) -> T) -> T {
+    match STATE.lock() {
+        Ok(mut state) => f(&mut state),
+        Err(poisoned) => f(&mut poisoned.into_inner()),
+    }
+}
+
+fn set_error(message: String) {
+    with_state(|state| state.error = Some(message));
+}
+
+/// What the daemon can tell a user (or the CLI) about the hotkeys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotkeyStatus {
+    pub requested: bool,
+    pub ready: bool,
+    pub error: Option<String>,
+}
+
+/// Current hotkey state, for `daemon.status`.
+pub fn status() -> HotkeyStatus {
+    HotkeyStatus {
+        requested: with_state(|state| state.requested),
+        ready: ready(),
+        error: with_state(|state| state.error.clone()),
+    }
+}
+
 /// Ask the portal for the hotkeys, then run the injection loop.
 ///
 /// Runs in its own task on purpose: binding the shortcuts pops a consent
@@ -227,18 +320,38 @@ pub fn spawn(data_dir: &Path) -> tokio::task::JoinHandle<()> {
                 let _ = SERVICE.set(std::sync::Arc::clone(&hotkeys));
                 hotkeys.run().await;
             }
-            Err(err) => tracing::warn!("运行时缩放热键不可用，游戏不受影响：{err}"),
+            Err(err) => {
+                set_error(err.to_string());
+                tracing::warn!("运行时缩放热键不可用，游戏不受影响：{err}");
+            }
         }
     })
 }
 
-/// Request the hotkeys at most once per process (the dialog must not reappear
-/// on every launch). Returns whether this call was the one that started it.
+/// Request the hotkeys, unless they are already granted or a request is in
+/// flight. Returns whether this call was the one that started it.
+///
+/// A previous *failed* attempt may be retried: the consent dialog appears while
+/// a game is starting (easy to miss, easy to dismiss by accident) and a daemon
+/// lives for weeks, so one stray click must not disable the feature until the
+/// next restart.
 pub fn request_once(data_dir: &Path) -> bool {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    static REQUESTED: AtomicBool = AtomicBool::new(false);
-
-    if REQUESTED.swap(true, Ordering::SeqCst) {
+    if disabled() {
+        set_error(format!("运行时缩放热键被 {DISABLE_ENV} 关闭"));
+        return false;
+    }
+    if ready() {
+        return false;
+    }
+    let start = with_state(|state| {
+        if state.requested && state.error.is_none() {
+            return false; // already in flight
+        }
+        state.requested = true;
+        state.error = None;
+        true
+    });
+    if !start {
         return false;
     }
     spawn(data_dir);
@@ -311,6 +424,7 @@ impl Hotkeys {
         let mut stream = match self.shortcuts.receive_activated().await {
             Ok(stream) => Box::pin(stream),
             Err(err) => {
+                set_error(format!("无法监听热键触发：{err}"));
                 tracing::warn!("无法监听热键触发：{err}");
                 return;
             }
@@ -326,9 +440,12 @@ impl Hotkeys {
                     action.id(),
                     action.keysym() as u8 as char
                 ),
+                // Deliberately not recorded as the service error: the hotkeys
+                // themselves still work, only this press did not land.
                 Err(err) => tracing::warn!("缩放热键 {} 注入失败：{err}", action.id()),
             }
         }
+        set_error("portal 会话已关闭，缩放热键失效（重启守护进程可重新申请）".to_string());
         tracing::warn!("热键监听结束（portal 会话关闭）");
     }
 
@@ -447,9 +564,27 @@ mod tests {
         // Keysym values are the lowercase letters gamescope watches for.
         assert_eq!(GamescopeAction::ToggleNis.keysym(), 'y' as i32);
         assert_eq!(GamescopeAction::ToggleNearest.keysym(), 'n' as i32);
-        assert_eq!(GamescopeAction::SharpnessUp.keysym(), 'i' as i32);
-        assert_eq!(GamescopeAction::SharpnessDown.keysym(), 'o' as i32);
+        assert_eq!(GamescopeAction::ToggleLinear.keysym(), 'b' as i32);
         assert_eq!(GamescopeAction::ToggleFullscreen.keysym(), 'f' as i32);
+    }
+
+    #[test]
+    fn sharper_means_gamescopes_softer_key() {
+        // gamescope's help calls Super+I "increase FSR sharpness", but that key
+        // raises a value RCAS reads as reduction-of-sharpness. The user asks for
+        // a direction, so the mapping is inverted here — this test is the only
+        // thing standing between that inversion and a silent regression.
+        let sharper = GamescopeAction::for_sharpness_delta(1).unwrap();
+        let softer = GamescopeAction::for_sharpness_delta(-1).unwrap();
+        assert_eq!(sharper, GamescopeAction::Sharpen);
+        assert_eq!(sharper.keysym(), 'o' as i32);
+        assert_eq!(softer, GamescopeAction::Soften);
+        assert_eq!(softer.keysym(), 'i' as i32);
+        assert_eq!(GamescopeAction::for_sharpness_delta(0), None);
+
+        // The descriptions must agree with the keys they press.
+        assert!(GamescopeAction::Sharpen.description().contains("提高"));
+        assert!(GamescopeAction::Soften.description().contains("降低"));
     }
 
     #[test]
@@ -496,5 +631,12 @@ mod tests {
         assert!(!ready());
         let err = inject_now(GamescopeAction::ToggleFsr).await.unwrap_err();
         assert!(err.to_string().contains("还没就绪"), "{err}");
+
+        // `daemon.status` builds its answer out of this, and "not requested yet"
+        // has to be distinguishable from "requested and failed".
+        let status = status();
+        assert!(!status.ready);
+        assert!(!status.requested, "没有测试调用过 request_once");
+        assert!(status.error.is_none());
     }
 }

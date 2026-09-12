@@ -42,6 +42,40 @@ pub enum Command {
         #[command(subcommand)]
         action: SyncCommand,
     },
+    /// Runtime scaling of a running game (gamescope's own hotkeys)
+    Scale {
+        #[command(subcommand)]
+        action: ScaleCommand,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum ScaleCommand {
+    /// Show running sessions and whether the scaling hotkeys are usable
+    Status,
+    /// Ask the portal for the scaling hotkeys (approve the dialog it opens)
+    Hotkeys {
+        /// Seconds to wait for approval; 0 asks and returns immediately
+        #[arg(long, default_value_t = 0)]
+        wait: u64,
+    },
+    /// Toggle FSR upscaling
+    Fsr {
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
+    /// Toggle nearest-neighbour (integer) upscaling
+    Integer {
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
+    /// Nudge sharpness: positive is sharper, negative is softer
+    Sharpness {
+        /// Steps, e.g. 1 or -1
+        delta: i32,
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

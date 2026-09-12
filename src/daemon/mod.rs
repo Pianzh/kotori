@@ -302,6 +302,7 @@ impl Daemon {
                 }
                 Err(e) => rpc_err(id, -32602, e),
             },
+            "scale.hotkeys" => respond(id, Ok(Self::rpc_scale_hotkeys())),
             "sync.status" => respond(id, self.rpc_sync_status().await),
             "sync.set_settings" => {
                 match serde_json::from_value::<sync_rpc::SettingsPatch>(Value::Object(
@@ -378,9 +379,17 @@ impl Daemon {
     async fn rpc_status(&self) -> Result<Value, String> {
         let games = self.config.read().await.games.len();
         let sessions = self.engine.list_sessions().await;
+        let hotkeys = crate::hotkeys::status();
         Ok(json!({
             "running": true,
             "games": games,
+            // Not per session: the hotkeys are one registration for the whole
+            // daemon, and "why is there no hotkey" is answered here or nowhere.
+            "hotkeys": {
+                "requested": hotkeys.requested,
+                "ready": hotkeys.ready,
+                "error": hotkeys.error,
+            },
             "sessions": sessions
                 .iter()
                 .map(|s| json!({
@@ -803,17 +812,18 @@ impl Daemon {
 
     /// gamescope moves sharpness one step per keypress, so a bigger delta means
     /// pressing the key more than once (capped at gamescope's 0..20 range).
+    ///
+    /// `delta` is in kotori's own scale, where larger is *sharper* — the
+    /// inversion to gamescope's keys lives in
+    /// [`crate::hotkeys::GamescopeAction::for_sharpness_delta`].
     async fn rpc_scale_adjust_sharpness(
         &self,
         session_id: &str,
         delta: i32,
     ) -> Result<Value, String> {
         self.lookup_session(session_id).await?;
-        let action = match delta {
-            step if step > 0 => crate::hotkeys::GamescopeAction::SharpnessUp,
-            step if step < 0 => crate::hotkeys::GamescopeAction::SharpnessDown,
-            _ => return Err("锐度步长不能为 0".to_string()),
-        };
+        let action = crate::hotkeys::GamescopeAction::for_sharpness_delta(delta)
+            .ok_or_else(|| "锐度步长不能为 0".to_string())?;
         let steps = delta.unsigned_abs().min(20);
         for _ in 0..steps {
             Self::inject(action).await?;
@@ -834,6 +844,26 @@ impl Daemon {
             .get_session(session_id)
             .await
             .ok_or_else(|| format!("session not found: {session_id}"))
+    }
+
+    /// Ask the desktop portal for the runtime-scaling hotkeys.
+    ///
+    /// Launching a game already does this (ADR-015); this is the way in when
+    /// nothing of ours is running yet — the CLI's `kotori scale hotkeys`, and
+    /// what the real-machine check uses to separate "registration failed" from
+    /// "injection failed".
+    ///
+    /// Registration pops a consent dialog, so the answer describes what was
+    /// *started*; poll `daemon.status` for the outcome.
+    fn rpc_scale_hotkeys() -> Value {
+        let started = crate::hotkeys::request_once(&crate::config::data_dir());
+        let status = crate::hotkeys::status();
+        json!({
+            "started_now": started,
+            "requested": status.requested,
+            "ready": status.ready,
+            "error": status.error,
+        })
     }
 }
 

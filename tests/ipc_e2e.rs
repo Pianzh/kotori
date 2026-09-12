@@ -242,6 +242,10 @@ exit 0
             // Keep display detection out of the test: the daemon must use this
             // value for new games regardless of the machine it runs on.
             .env("KOTORI_OUTPUT_RESOLUTION", "2560x1440")
+            // These tests launch games for real, which is where the daemon asks
+            // the desktop portal for the scaling hotkeys — on a developer's own
+            // session that would raise a consent dialog on every test run.
+            .env("KOTORI_NO_HOTKEYS", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::from(stdout))
             .stderr(Stdio::from(stderr));

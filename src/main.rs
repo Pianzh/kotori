@@ -163,8 +163,194 @@ fn main() -> anyhow::Result<()> {
         cli::Command::Sync { action } => {
             sync_cli(&rt, action)?;
         }
+        cli::Command::Scale { action } => {
+            scale_cli(&rt, action)?;
+        }
     }
 
+    Ok(())
+}
+
+/// `kotori scale …`: press gamescope's own scaling hotkeys for a running game.
+///
+/// The buttons the user actually presses are the portal's global shortcuts
+/// (ADR-015). This exists because the same actions must be drivable from a
+/// script or a terminal without a GUI — and because it makes "the hotkey did
+/// nothing" bisectable: one command shows whether registration, injection or
+/// the game itself is the part that is broken.
+fn scale_cli(rt: &tokio::runtime::Runtime, action: cli::ScaleCommand) -> anyhow::Result<()> {
+    use cli::ScaleCommand;
+
+    let socket = config::socket_path();
+    daemon::ensure_running(&socket)?;
+
+    match action {
+        ScaleCommand::Status => {
+            let status = call_daemon(rt, &socket, "daemon.status", None)?;
+            print_scale_status(&status);
+        }
+        ScaleCommand::Hotkeys { wait } => ask_for_hotkeys(rt, &socket, wait)?,
+        ScaleCommand::Fsr { session_id } => {
+            press(rt, &socket, "scale.toggle_fsr", session_id, None)?
+        }
+        ScaleCommand::Integer { session_id } => {
+            press(rt, &socket, "scale.toggle_integer", session_id, None)?
+        }
+        ScaleCommand::Sharpness { delta, session_id } => press(
+            rt,
+            &socket,
+            "scale.adjust_sharpness",
+            session_id,
+            Some(delta),
+        )?,
+    }
+
+    Ok(())
+}
+
+fn call_daemon(
+    rt: &tokio::runtime::Runtime,
+    socket: &std::path::Path,
+    method: &str,
+    params: Option<serde_json::Map<String, serde_json::Value>>,
+) -> anyhow::Result<serde_json::Value> {
+    rt.block_on(rpc::call(socket, method, params))
+        .map_err(anyhow::Error::msg)
+}
+
+/// Pick the session a scaling command applies to.
+///
+/// Only one game usually runs, so the id may be left out — but guessing between
+/// two running games would rescale the wrong one, so that case lists them
+/// instead.
+fn resolve_session(status: &serde_json::Value, given: Option<String>) -> anyhow::Result<String> {
+    if let Some(id) = given {
+        return Ok(id);
+    }
+    let sessions = status["sessions"].as_array().cloned().unwrap_or_default();
+    match sessions.as_slice() {
+        [] => anyhow::bail!("没有正在运行的游戏（缩放只对 kotori 启动、且还在运行的游戏生效）"),
+        [only] => Ok(only["session_id"].as_str().unwrap_or_default().to_string()),
+        many => {
+            let list: Vec<String> = many
+                .iter()
+                .map(|s| {
+                    format!(
+                        "  {} — {}",
+                        s["session_id"].as_str().unwrap_or("?"),
+                        s["game_id"].as_str().unwrap_or("?")
+                    )
+                })
+                .collect();
+            anyhow::bail!(
+                "同时有多个游戏在运行，请指定 session_id：\n{}",
+                list.join("\n")
+            )
+        }
+    }
+}
+
+fn print_scale_status(status: &serde_json::Value) {
+    let hotkeys = &status["hotkeys"];
+    let state = match (
+        hotkeys["ready"].as_bool(),
+        hotkeys["error"].as_str(),
+        hotkeys["requested"].as_bool(),
+    ) {
+        (Some(true), ..) => "已就绪".to_string(),
+        (_, Some(err), _) => format!("不可用：{err}"),
+        (_, _, Some(true)) => "正在等你在弹窗里确认".to_string(),
+        _ => "还没申请（启动一次游戏，或跑 kotori scale hotkeys）".to_string(),
+    };
+    println!("运行时缩放热键：{state}");
+
+    let sessions = status["sessions"].as_array().cloned().unwrap_or_default();
+    if sessions.is_empty() {
+        println!("正在运行的游戏：无");
+    } else {
+        println!("正在运行的游戏：");
+        for s in &sessions {
+            println!(
+                "  {} — {}（已运行 {}s）",
+                s["session_id"].as_str().unwrap_or("?"),
+                s["game_id"].as_str().unwrap_or("?"),
+                s["elapsed_secs"].as_u64().unwrap_or(0)
+            );
+        }
+    }
+}
+
+/// Ask the portal for the hotkeys, and optionally wait for the user to approve
+/// the dialog.
+///
+/// Without `--wait` this returns while the dialog is still up: the request is
+/// asynchronous on the daemon side (it must never block a game launch), so the
+/// outcome can only be observed by polling `daemon.status`.
+fn ask_for_hotkeys(
+    rt: &tokio::runtime::Runtime,
+    socket: &std::path::Path,
+    wait: u64,
+) -> anyhow::Result<()> {
+    let value = call_daemon(rt, socket, "scale.hotkeys", None)?;
+    if value["ready"].as_bool() == Some(true) {
+        println!("运行时缩放热键已就绪");
+        return Ok(());
+    }
+    if let Some(err) = value["error"].as_str() {
+        println!("运行时缩放热键不可用：{err}");
+        return Ok(());
+    }
+    if value["requested"].as_bool() != Some(true) {
+        println!("没能申请运行时缩放热键（守护进程没有回应，看看 daemon 日志）");
+        return Ok(());
+    }
+    println!("已向桌面门户申请授权，请在弹窗里确认（弹窗会列出每个快捷键）");
+    if wait == 0 {
+        return Ok(());
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(wait);
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let status = call_daemon(rt, socket, "daemon.status", None)?;
+        let hotkeys = &status["hotkeys"];
+        if hotkeys["ready"].as_bool() == Some(true) {
+            println!("运行时缩放热键已就绪");
+            return Ok(());
+        }
+        if let Some(err) = hotkeys["error"].as_str() {
+            println!("申请失败：{err}");
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            println!("等了 {wait}s 还没确认，先不等了（弹窗可能还开着）");
+            return Ok(());
+        }
+    }
+}
+
+fn press(
+    rt: &tokio::runtime::Runtime,
+    socket: &std::path::Path,
+    method: &str,
+    session_id: Option<String>,
+    delta: Option<i32>,
+) -> anyhow::Result<()> {
+    let status = call_daemon(rt, socket, "daemon.status", None)?;
+    let session = resolve_session(&status, session_id)?;
+
+    let mut params = rpc::params([("session_id", serde_json::json!(session))]);
+    if let Some(delta) = delta {
+        params.insert("delta".into(), serde_json::json!(delta));
+    }
+    let result = call_daemon(rt, socket, method, Some(params))?;
+    println!(
+        "已按下 gamescope 的缩放热键：{}",
+        result
+            .get("action")
+            .and_then(|a| a.as_str())
+            .unwrap_or(method)
+    );
     Ok(())
 }
 

@@ -794,11 +794,17 @@ mod tests {
 
         // A read must not masquerade as "nothing stored".
         let error = keyring.get(SecretKey::B2KeyId).unwrap_err();
-        assert!(matches!(error, SecretError::BackendNotRunning { .. }));
+        assert!(
+            matches!(error, SecretError::BackendNotRunning { .. }),
+            "{error:?}"
+        );
 
         // And a write reports the real reason too.
         let error = keyring.set(SecretKey::B2AppKey, "x").unwrap_err();
-        assert!(matches!(error, SecretError::BackendNotRunning { .. }));
+        assert!(
+            matches!(error, SecretError::BackendNotRunning { .. }),
+            "{error:?}"
+        );
 
         // `system_or_memory` is what the daemon uses, so it must degrade to a
         // session store rather than refusing to run at all.
