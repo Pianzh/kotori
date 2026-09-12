@@ -217,6 +217,12 @@ pub struct UiGame {
     pub sharpness: u32,
     pub internal: (u32, u32),
     pub output: (u32, u32),
+    /// Scaling ratio as stored; `None` means the profile still drives the output
+    /// size from `output` alone.
+    pub scale_ratio: Option<f32>,
+    /// Whether the window size may drive the output size (i.e. dragging the
+    /// window rescales live).
+    pub follow_window: bool,
     pub fullscreen: bool,
     pub framerate: Option<u32>,
 }
@@ -251,6 +257,11 @@ struct Draft {
     internal_h: String,
     output_w: String,
     output_h: String,
+    /// Kept as text so a half-typed ratio survives an edit. Empty means "no
+    /// ratio". The widget for it arrives with the scale-section rework; until
+    /// then this only carries the stored value through an open + save.
+    scale_ratio: String,
+    follow_window: bool,
     fullscreen: bool,
     framerate: String,
 }
@@ -283,6 +294,8 @@ impl Draft {
             internal_h: game.internal.1.to_string(),
             output_w: game.output.0.to_string(),
             output_h: game.output.1.to_string(),
+            scale_ratio: game.scale_ratio.map(|r| r.to_string()).unwrap_or_default(),
+            follow_window: game.follow_window,
             fullscreen: game.fullscreen,
             framerate: game.framerate.map(|f| f.to_string()).unwrap_or_default(),
         }
@@ -2904,6 +2917,17 @@ fn profile_from_draft(draft: &Draft) -> Result<ScaleProfile, String> {
         .ok_or_else(|| format!("未知缩放算法: {}", draft.algo))?
         .with_sharpness(draft.sharpness);
 
+    // An empty field means "no ratio": the stored output size keeps driving the
+    // window. A half-typed number is an error the user can fix, not a silent
+    // fallback that would throw their ratio away.
+    let scale_ratio = match draft.scale_ratio.trim() {
+        "" => None,
+        raw => Some(
+            raw.parse::<f32>()
+                .map_err(|_| format!("缩放比例必须是数字（当前 {raw}）"))?,
+        ),
+    };
+
     Ok(ScaleProfile {
         name: draft.profile_name.clone(),
         algorithm,
@@ -2911,6 +2935,8 @@ fn profile_from_draft(draft: &Draft) -> Result<ScaleProfile, String> {
         internal_height: parse_u32(&draft.internal_h, "游戏分辨率高")?,
         output_width: parse_u32(&draft.output_w, "输出分辨率宽")?,
         output_height: parse_u32(&draft.output_h, "输出分辨率高")?,
+        scale_ratio,
+        follow_window: draft.follow_window,
         framerate_limit: if draft.framerate.trim().is_empty() {
             None
         } else {
@@ -2988,6 +3014,14 @@ fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     u32_field(scale, "output_width").unwrap_or(0),
                     u32_field(scale, "output_height").unwrap_or(0),
                 ),
+                scale_ratio: scale
+                    .and_then(|s| s.get("scale_ratio"))
+                    .and_then(|v| v.as_f64())
+                    .map(|r| r as f32),
+                follow_window: scale
+                    .and_then(|s| s.get("follow_window"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
                 fullscreen: scale
                     .and_then(|s| s.get("force_fullscreen"))
                     .and_then(|v| v.as_bool())
@@ -3169,6 +3203,8 @@ mod tests {
             internal_h: "720".into(),
             output_w: "2560".into(),
             output_h: "1440".into(),
+            scale_ratio: String::new(),
+            follow_window: true,
             fullscreen: true,
             framerate: String::new(),
         }
@@ -3268,6 +3304,29 @@ mod tests {
         assert!(err.contains("游戏分辨率宽"), "{err}");
     }
 
+    /// A plain open + save must neither invent nor drop a scaling ratio:
+    /// "no ratio" (the state every older profile is in) stays "no ratio", a set
+    /// one survives, and half-typed text is an error rather than a silent reset.
+    #[test]
+    fn the_scaling_ratio_survives_an_open_and_save() {
+        let game = ui_game();
+        let untouched = profile_from_draft(&Draft::from_game(&game)).unwrap();
+        assert_eq!(untouched.scale_ratio, None);
+        assert!(untouched.follow_window);
+
+        let mut pinned = game.clone();
+        pinned.scale_ratio = Some(1.5);
+        pinned.follow_window = false;
+        let profile = profile_from_draft(&Draft::from_game(&pinned)).unwrap();
+        assert_eq!(profile.scale_ratio, Some(1.5));
+        assert!(!profile.follow_window);
+
+        let mut half_typed = Draft::from_game(&pinned);
+        half_typed.scale_ratio = "1.5x".into();
+        let err = profile_from_draft(&half_typed).unwrap_err();
+        assert!(err.contains("缩放比例"), "{err}");
+    }
+
     /// A freshly parsed game must not look "edited" to the save button.
     impl UiGame {
         fn save_paths_changed_after_edit(&self) -> bool {
@@ -3289,6 +3348,8 @@ mod tests {
             sharpness: 2,
             internal: (1280, 720),
             output: (2560, 1440),
+            scale_ratio: None,
+            follow_window: true,
             fullscreen: true,
             framerate: None,
         }

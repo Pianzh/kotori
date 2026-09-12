@@ -154,16 +154,24 @@ pub fn sharpness_to_gamescope(sharpness: u32) -> u32 {
 /// `-s` is `--mouse-sensitivity` since 3.16 and must never be emitted here
 /// (it swallows the following argument), and `--fsr-sharpness` is only an
 /// alias of `--sharpness` that older code passed with the wrong polarity.
+///
+/// `-W/-H` are the *initial* output size in physical pixels, taken from
+/// [`ScaleProfile::output_size`] (scaling ratio first, stored output size as the
+/// fallback). gamescope treats them as a preferred size only: a nested window
+/// stays freely resizable and gamescope follows every resize by adopting the new
+/// content size as its output size, so `follow_window = false` cannot be
+/// expressed here — it needs the compositor (see `config::ScaleProfile`).
 pub fn build_gamescope_args(profile: &ScaleProfile, game_cmd: &[String]) -> Vec<String> {
+    let (output_width, output_height) = profile.output_size();
     let mut args = vec![
         "-w".into(),
         profile.internal_width.to_string(),
         "-h".into(),
         profile.internal_height.to_string(),
         "-W".into(),
-        profile.output_width.to_string(),
+        output_width.to_string(),
         "-H".into(),
-        profile.output_height.to_string(),
+        output_height.to_string(),
     ];
 
     // Scale algorithm -> scaler/filter/sharpness.
@@ -247,6 +255,46 @@ mod tests {
         assert_eq!(
             &args[..8],
             ["-w", "1280", "-h", "720", "-W", "2560", "-H", "1440"]
+        );
+    }
+
+    #[test]
+    fn a_scaling_ratio_overrides_the_stored_output_size() {
+        let mut p = profile(ScaleAlgorithm::Fsr { sharpness: 2 });
+        p.output_width = 2560;
+        p.output_height = 1440;
+        p.scale_ratio = Some(1.5);
+        let args = build_gamescope_args(&p, &game_cmd());
+        // 1280x720 * 1.5, not the stored 2560x1440.
+        assert_eq!(
+            &args[..8],
+            ["-w", "1280", "-h", "720", "-W", "1920", "-H", "1080"]
+        );
+    }
+
+    #[test]
+    fn without_a_ratio_the_stored_output_size_still_drives_the_window() {
+        let mut p = profile(ScaleAlgorithm::Integer);
+        p.output_width = 1600;
+        p.output_height = 900;
+        assert_eq!(p.scale_ratio, None);
+        let args = build_gamescope_args(&p, &game_cmd());
+        assert_eq!(
+            &args[..8],
+            ["-w", "1280", "-h", "720", "-W", "1600", "-H", "900"]
+        );
+    }
+
+    #[test]
+    fn follow_window_is_not_a_command_line_flag() {
+        // gamescope always follows the window; the switch is enforced by the
+        // compositor, so it must never leak into the argument list.
+        let mut pinned = profile(ScaleAlgorithm::Integer);
+        pinned.follow_window = false;
+        let floating = profile(ScaleAlgorithm::Integer);
+        assert_eq!(
+            build_gamescope_args(&pinned, &game_cmd()),
+            build_gamescope_args(&floating, &game_cmd())
         );
     }
 

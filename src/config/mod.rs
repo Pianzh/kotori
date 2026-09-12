@@ -12,6 +12,12 @@ pub const FALLBACK_OUTPUT_HEIGHT: u32 = 1080;
 
 /// Accepted range for any resolution field coming from a client.
 pub const MAX_RESOLUTION: u32 = 16384;
+
+/// Accepted range for the scaling ratio (output ÷ internal resolution).
+/// 1.0 means "no upscaling"; the product is additionally capped by
+/// `MAX_RESOLUTION`, so the ceiling here only catches nonsense.
+pub const MIN_SCALE_RATIO: f32 = 0.25;
+pub const MAX_SCALE_RATIO: f32 = 8.0;
 /// Accepted range for the frame rate limit.
 pub const MAX_FRAMERATE: u32 = 1000;
 
@@ -304,10 +310,26 @@ pub struct ScaleProfile {
     pub internal_height: u32,
     pub output_width: u32,
     pub output_height: u32,
+    /// Upscale factor relative to the internal resolution. When present it
+    /// *wins* over `output_*` — those stay for profiles written before ratios
+    /// existed, and for the UI, which still edits them.
+    #[serde(default)]
+    pub scale_ratio: Option<f32>,
+    /// `true` (default) means the window decides the output size, so dragging
+    /// the window rescales live — which is what gamescope does anyway.
+    /// `false` means the output is pinned to `internal × scale_ratio` and the
+    /// backend has to stop the window from being resized: gamescope itself
+    /// never sets a min/max content size, so this is compositor work.
+    #[serde(default = "default_true")]
+    pub follow_window: bool,
     #[serde(default)]
     pub framerate_limit: Option<u32>,
     #[serde(default)]
     pub force_fullscreen: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Scaling algorithm bound to a game.
@@ -378,9 +400,27 @@ impl ScaleProfile {
             internal_height: DEFAULT_INTERNAL_HEIGHT,
             output_width: output.0,
             output_height: output.1,
+            scale_ratio: None,
+            follow_window: true,
             framerate_limit: None,
             force_fullscreen: true,
         }
+    }
+
+    /// Output size in *physical* pixels for this profile.
+    ///
+    /// `scale_ratio` wins when it is usable; otherwise the stored `output_*`
+    /// pair is used, so old profiles behave exactly as before. gamescope's
+    /// `-W/-H` expect physical pixels and divide by the compositor's
+    /// fractional scale themselves, so no desktop-scale maths belongs here.
+    pub fn output_size(&self) -> (u32, u32) {
+        let Some(ratio) = self.scale_ratio.filter(|r| r.is_finite() && *r > 0.0) else {
+            return (self.output_width, self.output_height);
+        };
+        let upscale = |value: u32| -> u32 {
+            ((value as f32 * ratio).round() as i64).clamp(1, MAX_RESOLUTION as i64) as u32
+        };
+        (upscale(self.internal_width), upscale(self.internal_height))
     }
 
     /// Clamp values that are representable but outside the supported range.
@@ -422,6 +462,25 @@ impl ScaleProfile {
             return Err(format!(
                 "帧率限制必须在 1..={MAX_FRAMERATE} 之间（当前 {fps}）"
             ));
+        }
+
+        if let Some(ratio) = self.scale_ratio {
+            if !ratio.is_finite() || !(MIN_SCALE_RATIO..=MAX_SCALE_RATIO).contains(&ratio) {
+                return Err(format!(
+                    "缩放比例必须在 {MIN_SCALE_RATIO}..={MAX_SCALE_RATIO} 之间（当前 {ratio}）"
+                ));
+            }
+            // Checked before `output_size()` clamps, so a ratio that only looks
+            // fine because of the clamp is still rejected here.
+            let wide = self.internal_width as f64 * ratio as f64;
+            let high = self.internal_height as f64 * ratio as f64;
+            if wide > MAX_RESOLUTION as f64 || high > MAX_RESOLUTION as f64 {
+                return Err(format!(
+                    "缩放比例 {ratio} 会把输出分辨率变成 {:.0}x{:.0}，超过上限 {MAX_RESOLUTION}",
+                    wide.round(),
+                    high.round()
+                ));
+            }
         }
 
         Ok(())
@@ -722,7 +781,57 @@ output_height = 1440
         assert_eq!(game.wine_prefix, None);
         assert_eq!(game.scale_profile.framerate_limit, None);
         assert!(!game.scale_profile.force_fullscreen);
+        // Profiles written before scaling ratios existed: no ratio, and the
+        // window is free to drive the output size.
+        assert_eq!(game.scale_profile.scale_ratio, None);
+        assert!(game.scale_profile.follow_window);
         assert_eq!(config.daemon.socket_path, default_socket_path());
+    }
+
+    #[test]
+    fn a_scaling_ratio_decides_the_output_size() {
+        let mut profile = ScaleProfile::default_for((2560, 1440));
+        // No ratio: the stored output pair is what gamescope is told.
+        assert_eq!(profile.output_size(), (2560, 1440));
+
+        profile.scale_ratio = Some(2.0);
+        assert_eq!(profile.output_size(), (2560, 1440));
+        profile.scale_ratio = Some(1.5);
+        assert_eq!(profile.output_size(), (1920, 1080));
+
+        // Odd ratios round to whole pixels and never collapse to zero.
+        profile.internal_width = 1000;
+        profile.internal_height = 999;
+        profile.scale_ratio = Some(0.25);
+        assert_eq!(profile.output_size(), (250, 250));
+
+        // An unusable ratio falls back instead of producing a zero-size window.
+        profile.scale_ratio = Some(0.0);
+        assert_eq!(profile.output_size(), (2560, 1440));
+        // ...and an absurd one is clamped rather than overflowing.
+        profile.scale_ratio = Some(1e30);
+        assert_eq!(profile.output_size(), (MAX_RESOLUTION, MAX_RESOLUTION));
+    }
+
+    #[test]
+    fn profile_validation_bounds_the_scaling_ratio() {
+        let mut profile = ScaleProfile::default_for((2560, 1440));
+
+        profile.scale_ratio = Some(MIN_SCALE_RATIO / 2.0);
+        assert!(profile.validate().unwrap_err().contains("缩放比例"));
+        profile.scale_ratio = Some(MAX_SCALE_RATIO + 1.0);
+        assert!(profile.validate().is_err());
+        profile.scale_ratio = Some(f32::NAN);
+        assert!(profile.validate().is_err());
+        profile.scale_ratio = Some(2.0);
+        assert!(profile.validate().is_ok());
+
+        // In range, but the product blows past the resolution ceiling: rejected
+        // here rather than silently clamped by `output_size()`.
+        profile.internal_width = MAX_RESOLUTION;
+        profile.scale_ratio = Some(2.0);
+        let err = profile.validate().unwrap_err();
+        assert!(err.contains("输出分辨率"), "{err}");
     }
 
     #[test]
