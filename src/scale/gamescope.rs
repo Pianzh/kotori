@@ -487,10 +487,17 @@ impl ScaleEngine for GamescopeScaleEngine {
         let watched = session.process_name.clone();
         tokio::spawn(async move {
             let status = child.wait().await;
-            tracing::info!(
-                "session {sid} gamescope exited: {:?}",
-                status.map(|s| s.code())
-            );
+            // `code()` is `None` when a signal killed the process, which is exactly
+            // the case worth seeing: gamescope aborts on its way out here, and
+            // "Ok(None)" alone says nothing about that.
+            match &status {
+                Ok(status) => tracing::info!(
+                    "session {sid} gamescope exited: code={:?} signal={:?}",
+                    status.code(),
+                    std::os::unix::process::ExitStatusExt::signal(status)
+                ),
+                Err(err) => tracing::warn!("session {sid}: 等 gamescope 结束出错：{err}"),
+            }
 
             // Launcher games: the processes we started may hand off to the real
             // game and exit first. Stay alive while that process still runs, so
