@@ -171,13 +171,13 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `kotori scale …`: press gamescope's own scaling hotkeys for a running game.
+/// `kotori scale …`: change a running game's scaling right now.
 ///
-/// The buttons the user actually presses are the portal's global shortcuts
-/// (ADR-015). This exists because the same actions must be drivable from a
-/// script or a terminal without a GUI — and because it makes "the hotkey did
-/// nothing" bisectable: one command shows whether registration, injection or
-/// the game itself is the part that is broken.
+/// The buttons the user actually presses are the portal's global shortcuts; this
+/// is the same action without the key, so it works from a script or a terminal
+/// (and needs no portal consent at all). It is also what makes "the hotkey did
+/// nothing" bisectable: one command separates "the trigger never fired" from
+/// "gamescope did not react".
 fn scale_cli(rt: &tokio::runtime::Runtime, action: cli::ScaleCommand) -> anyhow::Result<()> {
     use cli::ScaleCommand;
 
@@ -366,13 +366,32 @@ fn press(
         params.insert("delta".into(), serde_json::json!(delta));
     }
     let result = call_daemon(rt, socket, method, Some(params))?;
-    println!(
-        "已按下 gamescope 的缩放热键：{}",
-        result
-            .get("action")
-            .and_then(|a| a.as_str())
-            .unwrap_or(method)
-    );
+    let action = result
+        .get("action")
+        .and_then(|a| a.as_str())
+        .unwrap_or(method);
+    let sessions = result
+        .get("sessions")
+        .and_then(|s| s.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+    println!("已应用缩放动作 {action}（会话 {sessions}）");
+    if let Some(failed) = result.get("failed").and_then(|f| f.as_array())
+        && !failed.is_empty()
+    {
+        for entry in failed {
+            println!(
+                "  ⚠ 会话 {} 没生效：{}",
+                entry.get("session").and_then(|s| s.as_str()).unwrap_or("?"),
+                entry.get("error").and_then(|e| e.as_str()).unwrap_or("?")
+            );
+        }
+    }
     Ok(())
 }
 

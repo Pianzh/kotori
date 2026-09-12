@@ -10,9 +10,10 @@ use tokio::sync::broadcast;
 use crate::process;
 use crate::util::executor::find_binary;
 
+use super::x11::{GamescopeDisplay, Settings};
 use super::{
-    LaunchSpec, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, SessionEvent, SessionKind,
-    build_gamescope_args,
+    LaunchSpec, ScaleAction, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, SessionEvent,
+    SessionKind, build_gamescope_args,
 };
 
 /// How many lifecycle events may queue up before slow subscribers miss one.
@@ -146,6 +147,92 @@ impl NiriScaleEngine {
 
         build_gamescope_args(spec.profile, &game_cmd)
     }
+
+    /// The settings gamescope is actually running with, as far as anyone can tell.
+    ///
+    /// gamescope never writes those properties back, so what
+    /// [`GamescopeDisplay::read`] returns is *our* last command — true as long as
+    /// nothing else changed the filter. Falling back to the profile keeps a fresh
+    /// session honest: it was launched with exactly those arguments.
+    pub async fn live_settings(&self, session: &ScaleSession) -> Option<Settings> {
+        let pid = session.gamescope_pid?;
+        let display = GamescopeDisplay::discover(pid).ok().flatten()?;
+        display
+            .read()
+            .ok()
+            .flatten()
+            .or_else(|| Some(Settings::for_algorithm(&session.profile.algorithm)))
+    }
+
+    /// Run one runtime scaling action against every live gamescope.
+    ///
+    /// All of them, not just the focused one: the hotkey is global, and a user with
+    /// two games open is rare enough that "both changed" (which the answer says)
+    /// beats "the wrong one changed". Watch-only sessions are skipped — kotori
+    /// launched nothing there, so there is no gamescope of ours to talk to.
+    pub async fn apply_action(&self, action: ScaleAction) -> ActionOutcome {
+        let sessions: Vec<ScaleSession> = self.sessions.read().await.values().cloned().collect();
+        let mut outcome = ActionOutcome::default();
+        for session in sessions {
+            let Some(pid) = session.gamescope_pid else {
+                continue;
+            };
+            match self.apply_to(pid, &session, action) {
+                Ok(Some(settings)) => outcome.applied.push(AppliedAction {
+                    session_id: session.session_id.clone(),
+                    settings,
+                }),
+                Ok(None) => {}
+                Err(err) => outcome
+                    .failed
+                    .push((session.session_id.clone(), err.to_string())),
+            }
+        }
+        outcome
+    }
+
+    fn apply_to(
+        &self,
+        pid: u32,
+        session: &ScaleSession,
+        action: ScaleAction,
+    ) -> Result<Option<Settings>, super::x11::X11Error> {
+        let Some(gs) = GamescopeDisplay::discover(pid)? else {
+            // gamescope is gone, or its Xwayland has not come up yet.
+            return Ok(None);
+        };
+        let current = gs
+            .read()?
+            .unwrap_or_else(|| Settings::for_algorithm(&session.profile.algorithm));
+        let next = current.applied(action);
+        gs.apply(next)?;
+        tracing::info!(
+            "session {} ({}): {} → filter {:?} / scaler {:?} / 锐度 {}",
+            session.session_id,
+            gs.display(),
+            action.id(),
+            next.filter,
+            next.scaler,
+            next.sharpness
+        );
+        Ok(Some(next))
+    }
+}
+
+/// One session whose runtime settings changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedAction {
+    pub session_id: String,
+    pub settings: Settings,
+}
+
+/// What a runtime action did, session by session.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ActionOutcome {
+    /// Sessions that were actually changed.
+    pub applied: Vec<AppliedAction>,
+    /// Sessions that could not be reached, and why.
+    pub failed: Vec<(String, String)>,
 }
 
 impl Default for NiriScaleEngine {
@@ -189,6 +276,20 @@ impl ScaleEngine for NiriScaleEngine {
         // Run under the resolved prefix instead of whatever wine defaults to.
         if let Some(prefix) = spec.wine_prefix {
             command.env("WINEPREFIX", prefix);
+        }
+
+        // gamescope enables its Vulkan "gamescope WSI" layer for the game
+        // (`setenv("ENABLE_GAMESCOPE_WSI", "1", 0)` — the trailing 0 means "only if
+        // not already set"), and that layer's explicit-sync path is what makes
+        // gamescope die on NVIDIA in nested Wayland mode: measured here as
+        // `vkImportSemaphoreFdKHR failed` followed by SIGSEGV about seven seconds
+        // into the game, with `ENABLE_GAMESCOPE_WSI=0` surviving (ValveSoftware/
+        // gamescope#1662). Disabling it costs one copy per frame (DXVK presents
+        // through Xwayland rather than straight into gamescope) — it does *not*
+        // replace DXVK, which is the only D3D path on the ARM target. A user who
+        // wants to try the layer anyway only has to export ENABLE_GAMESCOPE_WSI=1.
+        if std::env::var_os("ENABLE_GAMESCOPE_WSI").is_none() {
+            command.env("ENABLE_GAMESCOPE_WSI", "0");
         }
 
         let mut child = command

@@ -1,8 +1,111 @@
 pub mod niri;
+pub mod x11;
 
 use std::path::Path;
 
 use crate::config::{MAX_SHARPNESS, ScaleAlgorithm, ScaleProfile};
+
+/// One runtime scaling action — what a hotkey, the CLI and the GUI all ask for.
+///
+/// The list is deliberately short: an action exists only if kotori can actually
+/// carry it out. gamescope's own `Super+F` (toggle the nested window's
+/// fullscreen state) is **not** here, because the runtime channel
+/// ([`x11`]) can change the compositor's upscaler and nothing else — and a
+/// registered shortcut that cannot do anything is worse than a missing one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScaleAction {
+    ToggleFsr,
+    ToggleNis,
+    ToggleNearest,
+    ToggleLinear,
+    Soften,
+    Sharpen,
+}
+
+impl ScaleAction {
+    /// Every action kotori registers, in the order the portal lists them.
+    pub const ALL: [Self; 6] = [
+        Self::ToggleFsr,
+        Self::ToggleNis,
+        Self::ToggleNearest,
+        Self::ToggleLinear,
+        Self::Soften,
+        Self::Sharpen,
+    ];
+
+    /// Stable id: the portal shortcut id, and what the RPC/CLI layer sends.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::ToggleFsr => "toggle-fsr",
+            Self::ToggleNis => "toggle-nis",
+            Self::ToggleNearest => "toggle-nearest",
+            Self::ToggleLinear => "toggle-linear",
+            Self::Soften => "soften",
+            Self::Sharpen => "sharpen",
+        }
+    }
+
+    /// Look an id up as it comes back from the portal.
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|action| action.id() == id)
+    }
+
+    /// The name of this action, as the desktop will show it in its shortcut
+    /// list — so it names the *effect*, never a key. The key is the user's to
+    /// choose, and gamescope's own chords are not even reachable (see
+    /// `crate::hotkeys`).
+    ///
+    /// The two sharpness steps name the effect, which is the opposite way round
+    /// from gamescope's own help text — see [`Self::for_sharpness_delta`].
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::ToggleFsr => "开启/关闭 FSR 放大",
+            Self::ToggleNis => "开启/关闭 NIS 放大",
+            Self::ToggleNearest => "切换最近邻放大",
+            Self::ToggleLinear => "切回双线性过滤",
+            Self::Soften => "降低锐度 1 级",
+            Self::Sharpen => "提高锐度 1 级",
+        }
+    }
+
+    /// Trigger suggested to the portal, or `None` for "leave it unbound until
+    /// the user asks for it".
+    ///
+    /// Only the one that matters mid-game comes with a default; everything else
+    /// is registered so that it *can* be bound, but bound by choice. Every one
+    /// of them is rebindable, from the desktop's shortcut settings today and
+    /// from kotori's own settings once it has a page for it.
+    ///
+    /// A hint is a convenience, never a promise: desktops may ignore it — KDE
+    /// does, the string is not even in its portal binary — so the truth is what
+    /// the portal reports back (see `crate::hotkeys::HotkeyStatus::unbound`).
+    pub fn preferred_trigger(self) -> Option<&'static str> {
+        match self {
+            // Flipping the upscaling on and off while playing.
+            Self::ToggleFsr => Some("<Shift><Alt>q"),
+            _ => None,
+        }
+    }
+
+    /// Which way `delta` steps the sharpness.
+    ///
+    /// The direction is the opposite of what gamescope's `--help` says, and the
+    /// two statements there even contradict each other: `--sharpness` is
+    /// documented as "0 (max) to 20 (min)", while `Super+I` is documented as
+    /// "increase FSR sharpness by 1" although it does
+    /// `g_upscaleFilterSharpness + 1`. The code is the authority — gamescope
+    /// hands that number to RCAS as `sharpness / 10`, and FSR's own header says
+    /// "0.0 := maximum sharpness, to N>0 … reduction of sharpness"
+    /// (`src/shaders/ffx_fsr1.h`). So the *number* is a softness: one step up
+    /// softens, one step down sharpens.
+    pub fn for_sharpness_delta(delta: i32) -> Option<Self> {
+        match delta {
+            d if d > 0 => Some(Self::Sharpen),
+            d if d < 0 => Some(Self::Soften),
+            _ => None,
+        }
+    }
+}
 
 /// Everything needed to start (or start watching) one game.
 #[derive(Debug, Clone)]
@@ -58,11 +161,12 @@ pub trait ScaleEngine: Send + Sync {
         None
     }
 
-    // Runtime scaling control is deliberately *not* part of this trait. gamescope
-    // has no API for it, so the only way to change scaling mid-game is to press
-    // gamescope's own shortcuts — which lives in `crate::hotkeys` (portal
-    // injection, ADR-015) and is therefore backend-independent. A backend that
-    // gained a native API would add its own method here.
+    // Runtime scaling control is deliberately *not* part of this trait: it is
+    // gamescope's own state, reachable only through the properties gamescope
+    // watches on its internal Xwayland ([`x11`]). `NiriScaleEngine` implements it
+    // as an inherent method, because that is the only backend with a gamescope to
+    // talk to — a backend with a real API of its own would grow its own method
+    // here.
 
     /// Get current status
     async fn get_status(&self, session: &ScaleSession) -> Result<ScaleStatus, ScaleError>;

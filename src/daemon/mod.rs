@@ -72,6 +72,28 @@ impl Daemon {
         }
     }
 
+    /// Where hotkey activations go.
+    ///
+    /// A hotkey fires outside any RPC call, so it needs an owner that outlives the
+    /// call: the closure only *spawns* the work, so a slow or wedged Xwayland
+    /// cannot stall key delivery. A keypress that changed nothing is worth a line
+    /// in the log — it is the only trace the user would otherwise not get.
+    fn hotkey_sink(&self) -> crate::hotkeys::ActionSink {
+        let engine = Arc::clone(&self.engine);
+        std::sync::Arc::new(move |action| {
+            let engine = Arc::clone(&engine);
+            tokio::spawn(async move {
+                let outcome = engine.apply_action(action).await;
+                if outcome.applied.is_empty() && outcome.failed.is_empty() {
+                    tracing::warn!("热键 {} 触发了，但没有正在运行的游戏可缩放", action.id());
+                }
+                for (session, err) in outcome.failed {
+                    tracing::warn!("热键 {} 在会话 {session} 上没生效：{err}", action.id());
+                }
+            });
+        })
+    }
+
     /// Own an explicit config file instead of the machine-wide one. Tests use
     /// this so they never touch `~/.config/kotori/config.toml`.
     pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
@@ -302,7 +324,7 @@ impl Daemon {
                 }
                 Err(e) => rpc_err(id, -32602, e),
             },
-            "scale.hotkeys" => respond(id, Ok(Self::rpc_scale_hotkeys())),
+            "scale.hotkeys" => respond(id, Ok(self.rpc_scale_hotkeys())),
             "sync.status" => respond(id, self.rpc_sync_status().await),
             "sync.set_settings" => {
                 match serde_json::from_value::<sync_rpc::SettingsPatch>(Value::Object(
@@ -744,7 +766,7 @@ impl Daemon {
         // run. Registration pops a consent dialog, hence the background task:
         // launching a game must not wait for it, and a missing portal only
         // means "no hotkeys".
-        if crate::hotkeys::request_once(&crate::config::data_dir()) {
+        if crate::hotkeys::request_once(self.hotkey_sink()) {
             tracing::info!("已向 portal 申请运行时缩放热键（需要你授权一次）");
         }
 
@@ -784,63 +806,97 @@ impl Daemon {
             .await
             .map_err(|e| e.to_string())?;
         let mut value = serde_json::to_value(status).map_err(|e| e.to_string())?;
-        // These numbers describe the profile the game was launched with; the live
-        // state can be changed by a hotkey and cannot be read back. Report whether
-        // the runtime hotkeys are usable so callers can explain themselves.
+        // `status` describes the profile the game was launched with. What gamescope
+        // is running *now* is readable too — it is our own last command, kept on the
+        // root window of its Xwayland — so report both and let the caller spot when
+        // they have drifted apart (a hotkey, or gamescope's own shortcuts).
         if let Some(object) = value.as_object_mut() {
             object.insert("hotkeys_ready".to_string(), json!(crate::hotkeys::ready()));
+            if let Some(live) = self.engine.live_settings(&session).await {
+                object.insert(
+                    "live".to_string(),
+                    json!({
+                        "filter": format!("{:?}", live.filter),
+                        "scaler": format!("{:?}", live.scaler),
+                        "sharpness": live.sharpness,
+                    }),
+                );
+            }
         }
         Ok(value)
     }
 
-    /// Runtime scaling changes are gamescope's own hotkeys, pressed for the user
-    /// through the RemoteDesktop portal (ADR-015) — while a game runs, gamescope
-    /// accepts nothing else. A live session is required either way: without one
-    /// there is nothing to rescale, and saying that beats a portal error nobody
-    /// can act on.
+    /// Runtime scaling changes go straight at gamescope: every action is written to
+    /// the properties it watches on its own Xwayland (see `crate::scale::x11`).
     ///
-    /// Note that `scale.get_status` keeps reporting the *launch* profile: we
-    /// cannot read gamescope's current state back, so after a hotkey — ours or
-    /// the user's own — that report is stale by design.
+    /// No hotkeys and no consent dialog are involved in *doing* it — the portal
+    /// only supplies the trigger — so this works from the CLI and the GUI even when
+    /// the user never bound a key. What it does need is a live session: without one
+    /// there is nothing to rescale, and the answer says so.
     async fn rpc_scale_toggle_fsr(&self, session_id: &str) -> Result<Value, String> {
         self.lookup_session(session_id).await?;
-        Self::inject(crate::hotkeys::GamescopeAction::ToggleFsr).await
+        self.run_action(crate::scale::ScaleAction::ToggleFsr).await
     }
 
     /// Nearest-neighbour is the runtime counterpart of integer scaling: both stop
     /// the filter from inventing pixels.
     async fn rpc_scale_toggle_integer(&self, session_id: &str) -> Result<Value, String> {
         self.lookup_session(session_id).await?;
-        Self::inject(crate::hotkeys::GamescopeAction::ToggleNearest).await
+        self.run_action(crate::scale::ScaleAction::ToggleNearest)
+            .await
     }
 
-    /// gamescope moves sharpness one step per keypress, so a bigger delta means
-    /// pressing the key more than once (capped at gamescope's 0..20 range).
+    /// Sharpness moves one step per call, so a bigger delta means stepping more
+    /// than once (capped at gamescope's 0..20 range).
     ///
-    /// `delta` is in kotori's own scale, where larger is *sharper* — the
-    /// inversion to gamescope's keys lives in
-    /// [`crate::hotkeys::GamescopeAction::for_sharpness_delta`].
+    /// `delta` is in kotori's own scale, where larger is *sharper* — the inversion
+    /// into gamescope's softness number lives in
+    /// [`crate::scale::ScaleAction::for_sharpness_delta`].
     async fn rpc_scale_adjust_sharpness(
         &self,
         session_id: &str,
         delta: i32,
     ) -> Result<Value, String> {
         self.lookup_session(session_id).await?;
-        let action = crate::hotkeys::GamescopeAction::for_sharpness_delta(delta)
+        let action = crate::scale::ScaleAction::for_sharpness_delta(delta)
             .ok_or_else(|| "锐度步长不能为 0".to_string())?;
         let steps = delta.unsigned_abs().min(20);
         for _ in 0..steps {
-            Self::inject(action).await?;
+            self.run_action(action).await?;
         }
         Ok(json!({ "success": true, "steps": steps }))
     }
 
-    /// Press one of gamescope's shortcuts for the user.
-    async fn inject(action: crate::hotkeys::GamescopeAction) -> Result<Value, String> {
-        crate::hotkeys::inject_now(action)
-            .await
-            .map(|()| json!({ "success": true, "action": action.id() }))
-            .map_err(|err| format!("{err}（也可以直接按 {}）", action.shortcut_hint()))
+    /// Apply one action to the live sessions and describe what happened.
+    ///
+    /// "Nothing to do" is an error the caller can act on ("start a game first"),
+    /// while a partial success reports both halves — silence about the session that
+    /// did *not* change is how a user ends up pressing a key twice.
+    async fn run_action(&self, action: crate::scale::ScaleAction) -> Result<Value, String> {
+        let outcome = self.engine.apply_action(action).await;
+        if outcome.applied.is_empty() {
+            let detail = if outcome.failed.is_empty() {
+                "没有正在运行的游戏".to_string()
+            } else {
+                outcome
+                    .failed
+                    .iter()
+                    .map(|(session, err)| format!("{session}: {err}"))
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            };
+            return Err(format!("{} 没有生效：{detail}", action.id()));
+        }
+        Ok(json!({
+            "success": true,
+            "action": action.id(),
+            "sessions": outcome.applied.iter().map(|a| &a.session_id).collect::<Vec<_>>(),
+            "failed": outcome
+                .failed
+                .iter()
+                .map(|(session, err)| json!({ "session": session, "error": err }))
+                .collect::<Vec<_>>(),
+        }))
     }
 
     async fn lookup_session(&self, session_id: &str) -> Result<ScaleSession, String> {
@@ -859,8 +915,8 @@ impl Daemon {
     ///
     /// Registration pops a consent dialog, so the answer describes what was
     /// *started*; poll `daemon.status` for the outcome.
-    fn rpc_scale_hotkeys() -> Value {
-        let started = crate::hotkeys::request_once(&crate::config::data_dir());
+    fn rpc_scale_hotkeys(&self) -> Value {
+        let started = crate::hotkeys::request_once(self.hotkey_sink());
         let status = crate::hotkeys::status();
         json!({
             "started_now": started,

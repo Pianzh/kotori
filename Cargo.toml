@@ -46,6 +46,11 @@ chacha20poly1305 = "0.11.0"
 ashpd = { version = "0.13.13", features = ["global_shortcuts", "remote_desktop", "screencast", "tokio"] }
 futures-util = "0.3.34"
 
+# Runtime scaling goes through the properties gamescope watches on the root window
+# of its own Xwayland (see `src/scale/x11.rs`). Already in the tree as a transitive
+# dependency of winit, so this adds nothing to build time.
+x11rb = "0.13.2"
+
 # The GUI stack is unusably slow when compiled without optimisation: wgpu, naga
 # and cosmic-text all do per-frame work, and at opt-level 0 a frame can take
 # hundreds of milliseconds — the window then trails the keyboard by about a
