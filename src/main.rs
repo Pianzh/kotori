@@ -3,6 +3,7 @@ mod config;
 mod daemon;
 mod display;
 mod game;
+mod hotkeys;
 mod process;
 mod rpc;
 mod scale;
