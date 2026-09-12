@@ -183,12 +183,18 @@ pub fn remove_game(config: &mut crate::config::Config, id: &str) -> bool {
 /// Pick the most plausible game executable inside a directory.
 ///
 /// Strategy:
-/// 1. Prefer executables whose basename hints it's the game
-///    (e.g. contains "chs", "chinese", "cn", "game", "启动").
-/// 2. Skip obvious helper/utility executables.
-/// 3. Fall back to the first remaining .exe.
+/// 1. Drop executables that are plainly not the game ([`is_helper`]).
+/// 2. Score what is left: localised builds first, then names that look like the
+///    directory they live in ([`affinity`]).
+/// 3. Fall back to any executable when *everything* looked like a helper — a
+///    dosbox-only game really is just `dosbox.exe`.
+///
+/// Ties are broken by size and then by name rather than by directory order:
+/// `read_dir` order is filesystem-dependent, and a library entry once pointed at
+/// `Uninstaller.exe` because of it.
 fn pick_game_exe(dir: &Path) -> Option<PathBuf> {
-    let mut exes: Vec<(String, PathBuf)> = Vec::new();
+    let dir_hint = normalize(&dir.file_name().unwrap_or_default().to_string_lossy());
+    let mut exes: Vec<(String, u64, PathBuf)> = Vec::new();
 
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -199,7 +205,8 @@ fn pick_game_exe(dir: &Path) -> Option<PathBuf> {
                     .unwrap_or_default()
                     .to_string_lossy()
                     .to_lowercase();
-                exes.push((stem, p));
+                let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
+                exes.push((stem, size, p));
             }
         }
     }
@@ -208,26 +215,17 @@ fn pick_game_exe(dir: &Path) -> Option<PathBuf> {
         return None;
     }
 
-    // Score each candidate.
-    let candidates: Vec<(i32, PathBuf)> = exes
+    let mut candidates: Vec<(i32, u64, String, PathBuf)> = exes
         .iter()
-        .filter_map(|(stem, path)| {
-            let is_helper = helper_names().iter().any(|h| stem == *h)
-                || stem.contains("unitycrash")
-                || stem.contains("game_manager")
-                || stem.contains("dosbox")
-                || stem.contains("修改工具")
-                || stem.contains("修复器")
-                || stem.contains("manager");
-            if is_helper {
-                return None;
-            }
+        .filter(|(stem, _, _)| !is_helper(stem))
+        .map(|(stem, size, path)| {
             let mut score = 0;
             if stem.contains("chs")
                 || stem.contains("chinese")
                 || stem.contains("_cn")
                 || stem == "cn"
                 || stem.contains("汉化")
+                || stem.contains("中文")
             {
                 score += 3;
             }
@@ -237,23 +235,30 @@ fn pick_game_exe(dir: &Path) -> Option<PathBuf> {
             if stem == "main" {
                 score += 1;
             }
-            Some((score, path.clone()))
+            score += affinity(&dir_hint, stem);
+            (score, *size, stem.clone(), path.clone())
         })
         .collect();
 
     if candidates.is_empty() {
-        // Only helpers present; fall back to any exe.
-        return exes.first().map(|(_, p)| p.clone());
+        // Only helpers present; fall back to any exe, name-sorted so the answer
+        // does not depend on directory order.
+        exes.sort_by(|a, b| a.0.cmp(&b.0));
+        return exes.first().map(|(_, _, p)| p.clone());
     }
 
-    candidates
-        .into_iter()
-        .max_by_key(|(score, _)| *score)
-        .map(|(_, p)| p)
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+    candidates.into_iter().next().map(|(_, _, _, p)| p)
 }
 
-const fn helper_names() -> &'static [&'static str] {
-    &[
+/// Is this executable something other than the game?
+///
+/// Installers, config tools and update helpers. Matched as *prefixes* as well as
+/// whole names, because `Uninstaller.exe`, `unins000.exe` and `Setup_x.exe` all
+/// mean the same thing — the list only knowing the bare word "uninstall" is how a
+/// library entry came to point at an uninstaller.
+fn is_helper(stem: &str) -> bool {
+    const EXACT: &[&str] = &[
         "uninstall",
         "uninst",
         "setup",
@@ -276,7 +281,78 @@ const fn helper_names() -> &'static [&'static str] {
         "卸载",
         "工具",
         "设置",
-    ]
+    ];
+    const PREFIXES: &[&str] = &[
+        "unins",
+        "setup",
+        "install",
+        "config",
+        "filechk",
+        "bootmenu",
+        "autoupdate",
+        "startuptool",
+        "opentsalpha",
+        "sigluscounter",
+        "dosbox",
+    ];
+    const CONTAINS: &[&str] = &[
+        "unitycrash",
+        "game_manager",
+        "修改工具",
+        "修复器",
+        "manager",
+        "opensavefolder",
+        "savefolder",
+        "readme",
+        // A localisation *patch installer* is not the game, even though its name
+        // contains the same hint that makes a localised build attractive: a real
+        // entry pointed at `灰色的果实_汉化补丁.exe` while `Grisaia.exe` sat next
+        // to it.
+        "补丁",
+        "patch",
+        "crack",
+        "免cd",
+        "破解",
+        "激活",
+    ];
+    EXACT.contains(&stem)
+        || PREFIXES.iter().any(|prefix| stem.starts_with(prefix))
+        || CONTAINS.iter().any(|needle| stem.contains(needle))
+}
+
+/// Lower-case a name and drop everything that is not a letter or a digit, so
+/// `Rance3` and `Rance03` can be compared at all.
+fn normalize(name: &str) -> String {
+    name.chars()
+        .filter(|c| c.is_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// How much an executable's name looks like the directory it lives in.
+///
+/// `Rance3/Rance03.exe` and `SiglusEngineCHS/SiglusEngineCHS.exe` are the normal
+/// case; leftovers like `OpenSaveFolder.exe` share nothing with the directory.
+/// An exact match scores highest, a shared prefix less, and it can never outvote
+/// the localisation hints above — it only decides between plausible candidates.
+fn affinity(dir_hint: &str, stem: &str) -> i32 {
+    let stem = normalize(stem);
+    if stem.chars().count() < 4 {
+        return 0;
+    }
+    if stem == *dir_hint {
+        return 4;
+    }
+    let shared = dir_hint
+        .chars()
+        .zip(stem.chars())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if shared >= 4 {
+        (shared as i32).min(3)
+    } else {
+        0
+    }
 }
 
 /// Generate a stable id from a directory name.
@@ -417,5 +493,55 @@ mod tests {
     fn scan_of_missing_directory_is_empty_not_an_error() {
         let missing = std::env::temp_dir().join("kotori-does-not-exist-xyz");
         assert!(scan(&missing).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_uninstaller_is_not_the_game_even_when_it_is_called_uninstaller() {
+        // Measured on the real library: `rance3/` had picked `Uninstaller.exe`,
+        // because the helper list only knew the bare word "uninstall" (so
+        // "uninstaller" was not filtered) and ties fell to directory order.
+        let dir = TempDir::new("rance3");
+        dir.with(&[
+            "OpenSaveFolder.exe",
+            "Rance03.exe",
+            "ResetConfig.exe",
+            "Uninstaller.exe",
+        ]);
+        let picked = pick_game_exe(&dir.path()).unwrap();
+        assert_eq!(file_name(&picked), "Rance03.exe");
+    }
+
+    #[test]
+    fn the_executable_named_like_its_directory_beats_a_lookalike() {
+        // A localised build is usually the one that carries the directory's name.
+        let dir = TempDir::new("affinity");
+        let game = dir.path().join("SiglusEngineCHS");
+        std::fs::create_dir_all(&game).unwrap();
+        for file in [
+            "SiglusEngine.exe",
+            "SiglusEngineCHS.exe",
+            "SiglusCounter.exe",
+        ] {
+            std::fs::write(game.join(file), b"").unwrap();
+        }
+        let picked = pick_game_exe(&game).unwrap();
+        assert_eq!(file_name(&picked), "SiglusEngineCHS.exe");
+    }
+
+    #[test]
+    fn helpers_are_recognised_by_prefix_too() {
+        for stem in [
+            "uninstaller",
+            "unins000",
+            "setup_x",
+            "installer",
+            "configtool",
+            "autoupdatecheck",
+        ] {
+            assert!(is_helper(stem), "{stem} 应该被当作工具");
+        }
+        for stem in ["rance03", "advcore", "siglusenginechs", "game"] {
+            assert!(!is_helper(stem), "{stem} 是游戏本体，不该被过滤");
+        }
     }
 }

@@ -42,7 +42,7 @@ pub enum Command {
         #[command(subcommand)]
         action: SyncCommand,
     },
-    /// Runtime scaling of a running game (gamescope's own hotkeys)
+    /// Runtime scaling of a running game (a hotkey changes gamescope's scaler)
     Scale {
         #[command(subcommand)]
         action: ScaleCommand,
