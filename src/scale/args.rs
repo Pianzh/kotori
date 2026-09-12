@@ -1,0 +1,246 @@
+//! gamescope's command line: what a launch looks like.
+//!
+//! The parameter model is version-sensitive and has burned us before (see the
+//! notes on [`build_gamescope_args`]), so it lives in one file with its tests.
+use crate::config::{MAX_SHARPNESS, ScaleAlgorithm, ScaleProfile};
+
+/// Translate kotori's internal sharpness (0 = softest, 5 = sharpest) into
+/// gamescope's `--sharpness`, whose scale is inverted (0 = max, 20 = min).
+pub fn sharpness_to_gamescope(sharpness: u32) -> u32 {
+    20 - sharpness.min(MAX_SHARPNESS) * 4
+}
+
+/// Build gamescope command line arguments from a scale profile.
+///
+/// targets gamescope >= 3.16 parameter model:
+///   -w/-h :: game (nested) resolution
+///   -W/-H :: output resolution
+///   -S    :: scaler type (auto, integer, fit, fill, stretch)
+///   -F    :: filter (linear, nearest, fsr, nis, pixel)
+///   --sharpness :: 0 (max) .. 20 (min)
+///
+/// `-s` is `--mouse-sensitivity` since 3.16 and must never be emitted here
+/// (it swallows the following argument), and `--fsr-sharpness` is only an
+/// alias of `--sharpness` that older code passed with the wrong polarity.
+///
+/// `-W/-H` are the *initial* output size in physical pixels, taken from
+/// [`ScaleProfile::output_size`] (scaling ratio first, stored output size as the
+/// fallback). gamescope treats them as a preferred size only: a nested window
+/// stays freely resizable and gamescope follows every resize by adopting the new
+/// content size as its output size, so `follow_window = false` cannot be
+/// expressed here — it needs the compositor (see `config::ScaleProfile`).
+pub fn build_gamescope_args(profile: &ScaleProfile, game_cmd: &[String]) -> Vec<String> {
+    let (output_width, output_height) = profile.output_size();
+    let mut args = vec![
+        "-w".into(),
+        profile.internal_width.to_string(),
+        "-h".into(),
+        profile.internal_height.to_string(),
+        "-W".into(),
+        output_width.to_string(),
+        "-H".into(),
+        output_height.to_string(),
+    ];
+
+    // Scale algorithm -> scaler/filter/sharpness.
+    match &profile.algorithm {
+        ScaleAlgorithm::Fsr { sharpness } => {
+            args.push("-S".into());
+            args.push("fit".into());
+            args.push("-F".into());
+            args.push("fsr".into());
+            args.push("--sharpness".into());
+            args.push(sharpness_to_gamescope(*sharpness).to_string());
+        }
+        ScaleAlgorithm::Nis { sharpness } => {
+            args.push("-S".into());
+            args.push("fit".into());
+            args.push("-F".into());
+            args.push("nis".into());
+            args.push("--sharpness".into());
+            args.push(sharpness_to_gamescope(*sharpness).to_string());
+        }
+        ScaleAlgorithm::Integer => {
+            args.push("-S".into());
+            args.push("integer".into());
+            args.push("-F".into());
+            args.push("nearest".into());
+        }
+        ScaleAlgorithm::Bilinear => {
+            args.push("-S".into());
+            args.push("fit".into());
+            args.push("-F".into());
+            args.push("linear".into());
+        }
+    }
+
+    if let Some(fps) = profile.framerate_limit {
+        args.push("-r".into());
+        args.push(fps.to_string());
+    }
+
+    if profile.force_fullscreen {
+        args.push("-f".into());
+    }
+
+    // Separator
+    args.push("--".into());
+
+    // Game command
+    args.extend(game_cmd.iter().cloned());
+
+    args
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ScaleAlgorithm;
+
+    fn profile(algorithm: ScaleAlgorithm) -> ScaleProfile {
+        ScaleProfile {
+            algorithm,
+            framerate_limit: None,
+            force_fullscreen: false,
+            ..ScaleProfile::default_for((2560, 1440))
+        }
+    }
+
+    fn game_cmd() -> Vec<String> {
+        vec!["/usr/bin/wine".into(), "/games/x/game.exe".into()]
+    }
+
+    /// Index of a flag, or panic with a readable message.
+    fn index_of(args: &[String], flag: &str) -> usize {
+        args.iter()
+            .position(|a| a == flag)
+            .unwrap_or_else(|| panic!("{flag} missing from {args:?}"))
+    }
+
+    #[test]
+    fn resolutions_are_mapped_to_geometry_flags() {
+        let args = build_gamescope_args(&profile(ScaleAlgorithm::Integer), &game_cmd());
+        assert_eq!(
+            &args[..8],
+            ["-w", "1280", "-h", "720", "-W", "2560", "-H", "1440"]
+        );
+    }
+
+    #[test]
+    fn a_scaling_ratio_overrides_the_stored_output_size() {
+        let mut p = profile(ScaleAlgorithm::Fsr { sharpness: 2 });
+        p.output_width = 2560;
+        p.output_height = 1440;
+        p.scale_ratio = Some(1.5);
+        let args = build_gamescope_args(&p, &game_cmd());
+        // 1280x720 * 1.5, not the stored 2560x1440.
+        assert_eq!(
+            &args[..8],
+            ["-w", "1280", "-h", "720", "-W", "1920", "-H", "1080"]
+        );
+    }
+
+    #[test]
+    fn without_a_ratio_the_stored_output_size_still_drives_the_window() {
+        let mut p = profile(ScaleAlgorithm::Integer);
+        p.output_width = 1600;
+        p.output_height = 900;
+        assert_eq!(p.scale_ratio, None);
+        let args = build_gamescope_args(&p, &game_cmd());
+        assert_eq!(
+            &args[..8],
+            ["-w", "1280", "-h", "720", "-W", "1600", "-H", "900"]
+        );
+    }
+
+    #[test]
+    fn follow_window_is_not_a_command_line_flag() {
+        // gamescope always follows the window; the switch is enforced by the
+        // compositor, so it must never leak into the argument list.
+        let mut pinned = profile(ScaleAlgorithm::Integer);
+        pinned.follow_window = false;
+        let floating = profile(ScaleAlgorithm::Integer);
+        assert_eq!(
+            build_gamescope_args(&pinned, &game_cmd()),
+            build_gamescope_args(&floating, &game_cmd())
+        );
+    }
+
+    #[test]
+    fn fsr_uses_the_316_scaler_model() {
+        let args =
+            build_gamescope_args(&profile(ScaleAlgorithm::Fsr { sharpness: 2 }), &game_cmd());
+        assert_eq!(args[index_of(&args, "-S") + 1], "fit");
+        assert_eq!(args[index_of(&args, "-F") + 1], "fsr");
+        assert_eq!(args[index_of(&args, "--sharpness") + 1], "12");
+    }
+
+    #[test]
+    fn never_emits_the_legacy_mouse_sensitivity_flag() {
+        // `-s` used to mean FSR and now eats the next argument; `--fsr-sharpness`
+        // had inverted polarity. Neither may come back.
+        for algorithm in [
+            ScaleAlgorithm::Fsr { sharpness: 3 },
+            ScaleAlgorithm::Nis { sharpness: 3 },
+            ScaleAlgorithm::Integer,
+            ScaleAlgorithm::Bilinear,
+        ] {
+            let args = build_gamescope_args(&profile(algorithm), &game_cmd());
+            assert!(!args.iter().any(|a| a == "-s"), "legacy -s in {args:?}");
+            assert!(
+                !args.iter().any(|a| a == "--fsr-sharpness"),
+                "legacy --fsr-sharpness in {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sharpness_polarity_matches_gamescope() {
+        assert_eq!(sharpness_to_gamescope(0), 20);
+        assert_eq!(sharpness_to_gamescope(2), 12);
+        assert_eq!(sharpness_to_gamescope(5), 0);
+        // Out-of-range values are clamped, never negative.
+        assert_eq!(sharpness_to_gamescope(99), 0);
+    }
+
+    #[test]
+    fn nis_and_bilinear_pick_their_filters() {
+        let nis = build_gamescope_args(&profile(ScaleAlgorithm::Nis { sharpness: 5 }), &game_cmd());
+        assert_eq!(nis[index_of(&nis, "-F") + 1], "nis");
+        assert_eq!(nis[index_of(&nis, "--sharpness") + 1], "0");
+
+        let bilinear = build_gamescope_args(&profile(ScaleAlgorithm::Bilinear), &game_cmd());
+        assert_eq!(bilinear[index_of(&bilinear, "-F") + 1], "linear");
+        assert!(!bilinear.iter().any(|a| a == "--sharpness"));
+    }
+
+    #[test]
+    fn integer_scaling_uses_nearest_neighbour() {
+        let args = build_gamescope_args(&profile(ScaleAlgorithm::Integer), &game_cmd());
+        assert_eq!(args[index_of(&args, "-S") + 1], "integer");
+        assert_eq!(args[index_of(&args, "-F") + 1], "nearest");
+    }
+
+    #[test]
+    fn optional_flags_are_only_emitted_when_requested() {
+        let bare = build_gamescope_args(&profile(ScaleAlgorithm::Integer), &game_cmd());
+        assert!(!bare.iter().any(|a| a == "-r"));
+        assert!(!bare.iter().any(|a| a == "-f"));
+
+        let mut p = profile(ScaleAlgorithm::Integer);
+        p.framerate_limit = Some(60);
+        p.force_fullscreen = true;
+        let full = build_gamescope_args(&p, &game_cmd());
+        assert_eq!(full[index_of(&full, "-r") + 1], "60");
+        assert!(full.iter().any(|a| a == "-f"));
+    }
+
+    #[test]
+    fn game_command_follows_the_separator_last() {
+        let args = build_gamescope_args(&profile(ScaleAlgorithm::Integer), &game_cmd());
+        let sep = index_of(&args, "--");
+        assert_eq!(&args[sep + 1..], ["/usr/bin/wine", "/games/x/game.exe"]);
+        // Nothing after the separator may look like a gamescope flag.
+        assert_eq!(args.len(), sep + 3);
+    }
+}

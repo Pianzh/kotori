@@ -37,7 +37,7 @@ use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, PropMode, Window};
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
-use super::ScaleAlgorithm;
+use crate::config::ScaleAlgorithm;
 
 /// Where X sockets live. Only overridable so tests can point at a temp dir.
 pub const SOCKET_DIR: &str = "/tmp/.X11-unix";
