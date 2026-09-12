@@ -40,12 +40,39 @@ use model::*;
 use parse::*;
 use tasks::*;
 
+/// The graphics backend to ask for when the user has not picked one.
+///
+/// `None` leaves wgpu's own choice alone (it prefers Vulkan). That is the right
+/// answer on KDE/Plasma, and leaving it alone there is not a preference but a
+/// fix: asking for `gl` makes wgpu fail to create a surface for the window on
+/// this hybrid Intel/NVIDIA Wayland session (`No config found!` from
+/// `wgpu_hal::gles::egl`), and `iced_renderer` then walks *per backend* —
+/// trying its software rasteriser before moving on to the next one — so the
+/// failure does not land on Vulkan, it lands on `iced_tiny_skia`. Software
+/// rendering is why the GUI felt slow, and a `debug_assert!` inside that
+/// rasteriser is what killed it outright: "Quad with non-normal width!" took
+/// the whole process down with it.
+///
+/// Under niri it is the Vulkan swapchain that misbehaves instead
+/// (`SurfaceError::Outdated` on every frame, a `log::error!` storm from
+/// `iced_winit`: 33k lines in 6s), so there GL is the one that works. `niri`
+/// exports `NIRI_SOCKET`; an explicit `WGPU_BACKEND` from the user always wins.
+fn default_backend() -> Option<&'static str> {
+    is_niri().then_some("gl")
+}
+
+/// Whether we are running under the niri compositor.
+fn is_niri() -> bool {
+    std::env::var_os("NIRI_SOCKET").is_some()
+        || std::env::var("XDG_CURRENT_DESKTOP")
+            .is_ok_and(|v| v.to_ascii_lowercase().contains("niri"))
+}
+
 pub fn run() -> anyhow::Result<()> {
-    // Niri + wgpu Vulkan swapchain constantly reports SurfaceError::Outdated,
-    // producing an ERROR log storm (33k lines in 6s). Force GL/EGL by default;
-    // an explicit WGPU_BACKEND env from the user still takes precedence.
-    if std::env::var_os("WGPU_BACKEND").is_none() {
-        unsafe { std::env::set_var("WGPU_BACKEND", "gl") };
+    if std::env::var_os("WGPU_BACKEND").is_none()
+        && let Some(backend) = default_backend()
+    {
+        unsafe { std::env::set_var("WGPU_BACKEND", backend) };
     }
 
     let (crash_log, crash_log_ok) = install_crash_log();

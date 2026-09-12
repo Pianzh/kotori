@@ -64,6 +64,19 @@ opt-level = 3
 [profile.dev]
 opt-level = 1
 
+# …except inside the software rasteriser `iced_renderer` falls back to when the
+# GPU compositor cannot come up. It `debug_assert!`s that every quad it draws has
+# a "normal" width and height — and 0.0 is not normal — which aborts the entire
+# GUI ("Quad with non-normal width!", the crash the user reported twice on
+# 2026-09-12). A release build renders that same frame happily, so the assert
+# only ever punished debug builds. Keep it off for that one crate: a machine
+# whose driver refuses a surface should end up with a slow window, not a dead
+# process. (The deliberate `WGPU_BACKEND` choice in `ui::run` is what keeps us on
+# the GPU path in the first place; this is the safety net under it.)
+[profile.dev.package.iced_tiny_skia]
+opt-level = 3
+debug-assertions = false
+
 [profile.release]
 opt-level = "s"
 lto = true
