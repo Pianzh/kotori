@@ -9,6 +9,8 @@
 //! So both are inspected, case-insensitively, after stripping any directory
 //! part and trying the truncated form as well.
 
+use std::collections::HashMap;
+
 /// `C:\games\x\Game.exe` / `/usr/bin/wine` -> `game.exe` / `wine`
 pub fn normalize_process_name(name: &str) -> String {
     let name = name.trim();
@@ -20,9 +22,21 @@ pub fn normalize_process_name(name: &str) -> String {
     base.to_lowercase()
 }
 
-/// The first 15 characters, which is all `/proc/<pid>/comm` can hold.
+/// The part of `name` that `/proc/<pid>/comm` can still hold.
+///
+/// `TASK_COMM_LEN` is 16 *bytes* including the terminator, so the kernel keeps 15
+/// bytes — not 15 characters. Taking 15 characters was wrong for every non-ASCII
+/// name: a Chinese exe name is 3 bytes per character, so the kernel stores about
+/// five of them and a 15-character guess matches nothing at all.
 fn truncated(name: &str) -> String {
-    name.chars().take(15).collect()
+    let mut out = String::new();
+    for ch in name.chars() {
+        if out.len() + ch.len_utf8() > 15 {
+            break;
+        }
+        out.push(ch);
+    }
+    out
 }
 
 /// Does one process (already read from `/proc`) match the wanted name?
@@ -98,6 +112,104 @@ pub async fn wait_until_gone(name: &str) {
     }
 }
 
+/// Every live descendant of `root`.
+///
+/// Built from one pass over `/proc` instead of following parent links upwards
+/// from each candidate: this runs exactly when a session's tree is falling apart,
+/// and a process whose parent has already died is still listed under that old
+/// parent here — which is the only way to still find it.
+pub fn descendants(root: i32) -> Vec<i32> {
+    if root <= 0 {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+
+    let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
+    for entry in entries.flatten() {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<i32>().ok())
+        else {
+            continue;
+        };
+        if let Some(parent) = parent_of(pid) {
+            children.entry(parent).or_default().push(pid);
+        }
+    }
+
+    let mut found = Vec::new();
+    let mut queue = vec![root];
+    while let Some(pid) = queue.pop() {
+        for &child in children.get(&pid).into_iter().flatten() {
+            found.push(child);
+            queue.push(child);
+        }
+    }
+    found
+}
+
+/// `PPid` from `/proc/<pid>/status`.
+///
+/// The `status` file rather than `stat`: `stat`'s second field is the command
+/// name in parentheses, and a command name may itself contain spaces and
+/// parentheses, which is a classic way to misparse it.
+fn parent_of(pid: i32) -> Option<i32> {
+    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("PPid:"))
+        .and_then(|rest| rest.trim().parse::<i32>().ok())
+}
+
+/// Processes that belong to wine's plumbing or to gamescope, not to a game.
+///
+/// Wine runs a set of helper processes per prefix, and the measured reason a
+/// session can hang is that one of them (`winedevice.exe`) ignores SIGTERM and
+/// outlives the game by forever. So "the process tree is not empty" must not be
+/// read as "the game is still running"; this list is what separates the two.
+const PLUMBING: [&str; 16] = [
+    "gamescope",
+    "gamescope-wl",
+    "gamescopereaper",
+    "xwayland",
+    "wine",
+    "wine64",
+    "wineserver",
+    "wine-preloader",
+    "wine64-preloader",
+    "services.exe",
+    "winedevice.exe",
+    "plugplay.exe",
+    "rpcss.exe",
+    "svchost.exe",
+    "explorer.exe",
+    "conhost.exe",
+];
+
+/// Is this the name of plumbing rather than of a game?
+pub fn is_plumbing(name: &str) -> bool {
+    PLUMBING.contains(&normalize_process_name(name).as_str())
+}
+
+/// Descendants of `root` that look like a game: pid and `/proc/<pid>/comm`.
+///
+/// The second opinion before kotori ends a session on the strength of a single
+/// process name: a launcher hands off to the real game and exits first, and the
+/// handoff target is what turns up here.
+pub fn live_game_processes(root: i32) -> Vec<(i32, String)> {
+    descendants(root)
+        .into_iter()
+        .filter_map(|pid| {
+            let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
+            let name = name.trim().to_string();
+            (!name.is_empty() && !is_plumbing(&name)).then_some((pid, name))
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +249,68 @@ mod tests {
         let cut = truncated(long);
         assert_eq!(cut.chars().count(), 15);
         assert!(matches(long, &cut, ""));
+    }
+
+    #[test]
+    fn comm_truncation_counts_bytes_not_characters() {
+        // `/proc/<pid>/comm` keeps 15 **bytes**, so a Chinese exe name arrives cut
+        // in the middle: three bytes per character means five of them survive.
+        assert_eq!(truncated("海猫鸣泣之时散语音版.exe"), "海猫鸣泣之");
+        assert!(matches("海猫鸣泣之时散语音版.exe", "海猫鸣泣之", ""));
+    }
+
+    #[test]
+    fn plumbing_is_told_apart_from_a_game() {
+        for name in [
+            "gamescope",
+            "gamescope-wl",
+            "gamescopereaper",
+            "Xwayland",
+            "winedevice.exe",
+            "services.exe",
+            "/usr/bin/wine",
+        ] {
+            assert!(is_plumbing(name), "{name} 是管道进程，不能当成游戏");
+        }
+        for name in [
+            "海猫鸣泣之时散语音版.exe",
+            "SiglusEngineCHS.exe",
+            "game.exe",
+        ] {
+            assert!(!is_plumbing(name), "{name} 是游戏，不能当成管道进程");
+        }
+    }
+
+    #[test]
+    fn finds_descendants_and_calls_the_game_one_a_game() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id() as i32;
+        let own = std::process::id() as i32;
+
+        assert!(
+            descendants(own).contains(&pid),
+            "子进程 {pid} 应该出现在自己的后代里"
+        );
+
+        // `spawn` returns on fork, before the child has exec'd, so its name can
+        // briefly still be this test binary — poll instead of asserting at once.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !live_game_processes(own)
+            .iter()
+            .any(|(p, name)| *p == pid && name == "sleep")
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "spawned sleep was never reported as a game process"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+
+        child.kill().unwrap();
+        child.wait().unwrap();
     }
 
     #[test]

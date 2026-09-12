@@ -10,7 +10,10 @@ use tokio::sync::broadcast;
 use crate::process;
 use crate::util::executor::find_binary;
 
-use super::teardown::{TEARDOWN_GRACE, TEARDOWN_POLL, pid_alive, stuck_in_teardown};
+use super::teardown::{
+    GAME_GONE_GRACE, GAME_POLL, TEARDOWN_GRACE, TEARDOWN_POLL, pid_alive, stuck_in_teardown,
+    terminate_session,
+};
 
 use super::x11::{GamescopeDisplay, Settings};
 use super::{
@@ -334,6 +337,43 @@ impl Default for GamescopeScaleEngine {
     }
 }
 
+/// Wait for the game's process to show up before watching for it to leave.
+///
+/// Without this, "not running" would be indistinguishable from "has not started
+/// yet", and a slow wine prefix would have its session killed from under it.
+///
+/// Returns `false` when the session is already over, gamescope is gone, or the
+/// process never appeared: a game that never starts is not this detector's
+/// business — gamescope exiting on its own ends the session the ordinary way.
+async fn game_shows_up(
+    sessions: &Arc<RwLock<HashMap<String, ScaleSession>>>,
+    sid: &str,
+    name: &str,
+    root: i32,
+) -> bool {
+    let deadline = tokio::time::Instant::now() + process::APPEAR_TIMEOUT;
+    loop {
+        if !sessions.read().await.contains_key(sid) {
+            return false;
+        }
+        if process::is_running(name) {
+            tracing::info!("session {sid}: 开始盯着游戏进程 {name}（它退出即收尾）");
+            return true;
+        }
+        if !pid_alive(root) {
+            return false;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!(
+                "session {sid}: 一直没看到进程 {name}，不再盯它\
+                 （gamescope 自己退出时仍会正常收尾）"
+            );
+            return false;
+        }
+        tokio::time::sleep(process::POLL_INTERVAL).await;
+    }
+}
+
 #[async_trait::async_trait]
 impl ScaleEngine for GamescopeScaleEngine {
     async fn start_session(&self, spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError> {
@@ -403,6 +443,23 @@ impl ScaleEngine for GamescopeScaleEngine {
         }
 
         let pgid = child.id().unwrap_or(0);
+
+        // The process that *is* the game, as opposed to wine's plumbing around it.
+        //
+        // Wine hands the exe's process a rewritten `argv[0]` (the Windows path), so
+        // the exe's own file name is what matches it — unless the game config names
+        // the process, which is what a launcher wrapper needs.
+        let game_process = spec
+            .process_name
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                Path::new(spec.exe)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().to_string())
+                    .filter(|name| !name.trim().is_empty())
+            });
+
         let session = ScaleSession {
             session_id: uuid::Uuid::new_v4().to_string(),
             game_id: Some(spec.game_id.to_string()),
@@ -489,6 +546,57 @@ impl ScaleEngine for GamescopeScaleEngine {
             }
         });
 
+        // A second way for a session to end: the game leaving, as opposed to
+        // gamescope getting wedged on its way out.
+        //
+        // Measured (2026-09-12): a game closed from its **own** menu leaves
+        // gamescope running with nothing to composite — its main thread stays in the
+        // Wayland poll loop, so `stuck_in_teardown` is false and the watchdog above
+        // never fires. What *is* gone is the game, so that is what gets watched.
+        // Without this the session never ends: no `Ended`, and the saves the game
+        // just wrote are never uploaded.
+        if let Some(name) = game_process {
+            let detector_sessions = self.sessions.clone();
+            let detector_sid = session.session_id.clone();
+            let root = watchdog;
+            tokio::spawn(async move {
+                if !game_shows_up(&detector_sessions, &detector_sid, &name, root).await {
+                    return;
+                }
+                loop {
+                    tokio::time::sleep(GAME_POLL).await;
+                    if !detector_sessions.read().await.contains_key(&detector_sid) {
+                        return; // stopped by hand; `stop_session` owns that teardown
+                    }
+                    if !pid_alive(root) {
+                        return; // gamescope is gone: the ordinary path
+                    }
+                    if process::is_running(&name) {
+                        continue;
+                    }
+
+                    // Gone once is not gone: wine starts its processes in stages.
+                    tokio::time::sleep(GAME_GONE_GRACE).await;
+                    if process::is_running(&name) {
+                        continue;
+                    }
+
+                    // A launcher exits before the game it started does, and that
+                    // game is still sitting in this session's process tree.
+                    if !process::live_game_processes(root).is_empty() {
+                        continue;
+                    }
+
+                    tracing::warn!(
+                        "session {detector_sid}: 游戏进程 {name} 已经退出，但 gamescope 还活着\
+                         （游戏内部退出／启动器交接），kotori 收尾整组进程"
+                    );
+                    terminate_session(root).await;
+                    return;
+                }
+            });
+        }
+
         Ok(session)
     }
 
@@ -507,26 +615,9 @@ impl ScaleEngine for GamescopeScaleEngine {
 
         tracing::info!("stopping session {} (pgid {})", session.session_id, pgid);
 
-        unsafe {
-            libc::kill(-pgid, libc::SIGTERM);
-        }
-
-        // Allow a few seconds for graceful shutdown before SIGKILL.
-        for _ in 0..30 {
-            if !pid_alive(pgid) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-        if pid_alive(pgid) {
-            tracing::warn!(
-                "session {} did not exit, sending SIGKILL",
-                session.session_id
-            );
-            unsafe {
-                libc::kill(-pgid, libc::SIGKILL);
-            }
-        }
+        // SIGTERM the group *and* its tree, then SIGKILL what is left. The tree
+        // matters here too: `winedevice.exe` sits in a process group of its own.
+        terminate_session(pgid).await;
 
         Ok(())
     }

@@ -72,6 +72,65 @@ pub(super) const TEARDOWN_GRACE: Duration = Duration::from_millis(1200);
 /// How often the exit watchdog looks at gamescope's state.
 pub(super) const TEARDOWN_POLL: Duration = Duration::from_millis(250);
 
+/// How often the game's own process is looked for while a session runs.
+///
+/// Faster than [`TEARDOWN_POLL`] because this is what notices a game that quit
+/// from its own menu, and the user is watching the window disappear when it does.
+pub(super) const GAME_POLL: Duration = Duration::from_millis(500);
+
+/// How long the game has to *stay* gone before the session counts as over.
+///
+/// One sighting of "not running" is not enough: wine starts its processes in
+/// stages, and a game that is between two of them must not be mistaken for one
+/// that has finished.
+pub(super) const GAME_GONE_GRACE: Duration = Duration::from_millis(1500);
+
+/// How long a session's processes get to act on SIGTERM before SIGKILL.
+const GROUP_GRACE_STEPS: usize = 30;
+
+/// How often the group is re-checked while it shuts down.
+const GROUP_POLL: Duration = Duration::from_millis(100);
+
+/// Bring a whole session down: its process group **and** the tree hanging off it.
+///
+/// Both, because they are not the same set. Measured (2026-09-12): wine's
+/// `winedevice.exe` puts itself into a process group of its own, so killing the
+/// session's group leaves it behind — and a left-behind `winedevice.exe` is
+/// exactly what keeps `gamescopereaper` in `wait4()`, which keeps gamescope alive
+/// and the session from ever ending (so the saves the game just wrote are never
+/// uploaded).
+pub(super) async fn terminate_session(root: i32) {
+    if root <= 0 {
+        return;
+    }
+
+    // Snapshot the tree *before* anything is signalled: once the root dies its
+    // children are reparented, and a fresh walk would no longer find them.
+    let mut tree = crate::process::descendants(root);
+    signal(root, &tree, libc::SIGTERM);
+
+    for _ in 0..GROUP_GRACE_STEPS {
+        if !pid_alive(root) && tree.iter().all(|&pid| !pid_alive(pid)) {
+            return;
+        }
+        tokio::time::sleep(GROUP_POLL).await;
+    }
+
+    tracing::warn!("会话进程组 {root} 没有自己收尾，kotori 直接 SIGKILL（连同它的整棵子进程树）");
+    tree.extend(crate::process::descendants(root));
+    signal(root, &tree, libc::SIGKILL);
+}
+
+/// Signal the group *and* each pid in the tree.
+fn signal(root: i32, tree: &[i32], signal: i32) {
+    unsafe {
+        libc::kill(-root, signal);
+        for &pid in tree {
+            libc::kill(pid, signal);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +160,16 @@ mod tests {
         assert_eq!(read_wchan(4_242_424), None);
         assert!(!stuck_in_teardown(4_242_424));
         assert!(!stuck_in_teardown(0));
+    }
+
+    #[tokio::test]
+    async fn terminating_nothing_is_instant_and_harmless() {
+        // pid 0 must not be signalled at all (`kill(-0, …)` means "my own process
+        // group"), and a session that is already gone must not sit out the grace
+        // period — this runs on the daemon's hot path when a game exits.
+        let started = std::time::Instant::now();
+        terminate_session(0).await;
+        terminate_session(4_242_424).await;
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
     }
 }
