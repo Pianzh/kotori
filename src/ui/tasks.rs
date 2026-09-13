@@ -148,6 +148,19 @@ pub(super) async fn unlock_credentials(socket: &Path, password: &str) -> Result<
     Ok(())
 }
 
+/// 锁上凭据文件:派生出来的密钥从内存里丢掉,再想看凭据就得重新输主密码。
+pub(super) async fn lock_credentials(socket: &Path) -> Result<(), String> {
+    crate::rpc::call(socket, "sync.lock", None).await?;
+    Ok(())
+}
+
+/// 删掉主密码凭据文件。里面的凭据一起消失 —— 忘了主密码时这是唯一的出路,
+/// 所以它不需要先解锁(见 `rpc_sync_clear_master_password`)。
+pub(super) async fn clear_master_file(socket: &Path) -> Result<(), String> {
+    crate::rpc::call(socket, "sync.clear_master_password", None).await?;
+    Ok(())
+}
+
 /// Seal the current credentials into a master-password file, and say where it
 /// landed.
 pub(super) async fn set_master_password(socket: &Path, password: &str) -> Result<String, String> {

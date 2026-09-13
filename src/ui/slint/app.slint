@@ -130,7 +130,9 @@ export component AppWindow inherits Window {
     in-out property <string> sync-master-hint: "";
     in-out property <int> sync-store-kind: 0;
     in-out property <bool> sync-store-locked: false;
-    in-out property <string> sync-store-path: "";
+    in-out property <string> sync-master-file: "";
+    in-out property <string> sync-store-name: "";
+    in-out property <bool> sync-confirm-master-delete: false;
     in-out property <bool> sync-has-password: false;
     in-out property <bool> sync-has-credentials: false;
     in-out property <bool> sync-enabled: false;
@@ -166,6 +168,11 @@ export component AppWindow inherits Window {
     callback sync-clear-password();
     callback sync-unlock();
     callback sync-set-master-password();
+    // 我们自己的那套凭据方案(主密码加密文件)的两个动作,外加删除前的二次确认。
+    callback sync-lock-credentials();
+    callback sync-delete-master-requested();
+    callback sync-delete-master-cancelled();
+    callback sync-delete-master-confirmed();
 
     // ── 设置(全局) ───────────────────────────────────────────────────────
     in-out property <string> wine-prefix: "";
@@ -328,7 +335,9 @@ export component AppWindow inherits Window {
                             master-hint: root.sync-master-hint;
                             store-kind: root.sync-store-kind;
                             store-locked: root.sync-store-locked;
-                            store-path: root.sync-store-path;
+                            master-file: root.sync-master-file;
+                            store-name: root.sync-store-name;
+                            confirm-master-delete: root.sync-confirm-master-delete;
                             has-password: root.sync-has-password;
                             can-delete-credentials: root.sync-has-credentials;
                             sync-enabled <=> root.sync-enabled;
@@ -363,6 +372,10 @@ export component AppWindow inherits Window {
                             clear-password => { root.sync-clear-password(); }
                             unlock => { root.sync-unlock(); }
                             set-master-password => { root.sync-set-master-password(); }
+                            lock-credentials => { root.sync-lock-credentials(); }
+                            delete-master-requested => { root.sync-delete-master-requested(); }
+                            delete-master-cancelled => { root.sync-delete-master-cancelled(); }
+                            delete-master-confirmed => { root.sync-delete-master-confirmed(); }
                         }
 
                         if root.tab == 3 : SettingsPage {

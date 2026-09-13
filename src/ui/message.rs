@@ -98,6 +98,13 @@ pub enum Message {
     SyncUnlocked(Result<(), String>),
     SyncSetMasterPassword,
     SyncMasterSaved(Result<String, String>),
+    /// 锁上主密码凭据文件(密钥只留在内存里),以及删掉它(里面的凭据一起消失)。
+    SyncLockCredentials,
+    SyncCredentialsLocked(Result<(), String>),
+    SyncMasterDeleteRequested,
+    SyncMasterDeleteCancelled,
+    SyncMasterDeleteConfirmed,
+    SyncMasterDeleted(Result<(), String>),
     SyncNow(Option<String>),
     SyncNowDone(Result<String, String>),
     SyncRestoreRequested(String, Option<String>),

@@ -160,6 +160,10 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_sync_clear_password(|| dispatch(Message::SyncClearPassword));
     window.on_sync_unlock(|| dispatch(Message::SyncUnlock));
     window.on_sync_set_master_password(|| dispatch(Message::SyncSetMasterPassword));
+    window.on_sync_lock_credentials(|| dispatch(Message::SyncLockCredentials));
+    window.on_sync_delete_master_requested(|| dispatch(Message::SyncMasterDeleteRequested));
+    window.on_sync_delete_master_cancelled(|| dispatch(Message::SyncMasterDeleteCancelled));
+    window.on_sync_delete_master_confirmed(|| dispatch(Message::SyncMasterDeleteConfirmed));
 
     // ── 设置 ──────────────────────────────────────────────────────────────
     window.on_wine_prefix_changed(|text| dispatch(Message::WinePrefixChanged(text.to_string())));

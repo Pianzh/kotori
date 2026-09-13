@@ -82,7 +82,9 @@ pub struct SyncStatus {
     pub store_kind: String,
     /// Only meaningful for `encrypted-file`.
     pub store_locked: bool,
-    pub store_path: String,
+    /// 主密码凭据文件的路径。三种存储下 daemon 都会报它(`keyring.secrets_file`),
+    /// 而 `store_path` 只在文件模式里才有 —— 所以"凭据会存到哪"一律用它。
+    pub master_file: String,
     pub min_master_password: usize,
     pub secrets: Vec<String>,
     pub ready: bool,
@@ -96,6 +98,71 @@ impl SyncStatus {
     /// account names only — never a value.
     pub(super) fn has_secret(&self, account: &str) -> bool {
         self.secrets.iter().any(|a| a == account)
+    }
+
+    /// 凭据现在存在哪一级(ADR-014)。
+    pub(super) fn store(&self) -> CredentialStore {
+        CredentialStore::from_wire(&self.store_kind)
+    }
+}
+
+/// 凭据三级存储里**现在生效**的那一级。
+///
+/// 这是 UI 最容易说错的一件事:没有密钥环的机器上凭据只在内存里,说成"已存入系统
+/// 密钥环"就是在骗用户 —— 他会以为重启之后还在。所以措辞一律从这里取,别在文案里
+/// 写死某一级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum CredentialStore {
+    /// 系统密钥环(Secret Service;Windows 上是将来要接的凭据管理器)。
+    #[default]
+    System,
+    /// 我们自己的方案:主密码加密文件(Argon2id + ChaCha20-Poly1305,见 `secrets/encrypted.rs`)。
+    File,
+    /// 仅本次会话:本机没有可持久化的后端,守护进程一重启就没了。
+    Session,
+}
+
+impl CredentialStore {
+    /// `sync.status` 里的 `keyring.store.kind`。不认识的答复按最坏情况算:
+    /// 当作系统密钥环,不吓唬用户。
+    pub(super) fn from_wire(kind: &str) -> Self {
+        match kind {
+            "encrypted-file" => Self::File,
+            "session-only" => Self::Session,
+            _ => Self::System,
+        }
+    }
+
+    /// 页面用它挑要画哪一块(0/1/2,见 `sync.slint` 的 `store-kind`)。
+    pub(super) fn index(self) -> i32 {
+        match self {
+            Self::System => 0,
+            Self::File => 1,
+            Self::Session => 2,
+        }
+    }
+
+    /// 用户看到的这一级的名字,能直接接在"存入 / 删除"后面。
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            Self::System => "系统密钥环",
+            Self::File => "主密码凭据文件",
+            Self::Session => "本次会话的内存",
+        }
+    }
+
+    /// 保存成功后的落点说明。`what` 是"凭据"或"同步密码"。
+    ///
+    /// 三级的说法必须分开写:"已存入系统密钥环、磁盘上没有明文"这套词只对第一级成立 ——
+    /// 文件那一级是加密落盘的,内存那一级则在守护进程重启后就没了。
+    pub(super) fn saved_note(self, what: &str) -> String {
+        match self {
+            Self::System => format!("{what}已存入系统密钥环（磁盘上没有明文）"),
+            Self::File => format!("{what}已加密写入主密码凭据文件（只有主密码能打开它）"),
+            Self::Session => format!(
+                "{what}只在本次会话的内存里 —— 本机没有可用的密钥环，设一个主密码才能留住它"
+            ),
+        }
     }
 }
 
@@ -123,6 +190,8 @@ pub(super) struct SyncForm {
     /// An encryption change needs one more click: it decides whether existing
     /// data in the bucket can still be read.
     pub(super) confirm_encryption: Option<bool>,
+    /// 删除主密码凭据文件前的二次确认(里面的凭据会一起消失)。
+    pub(super) confirm_master_delete: bool,
     pub(super) msg: Option<String>,
     pub(super) busy: bool,
 }
@@ -136,6 +205,7 @@ impl SyncForm {
     pub(super) fn apply(&mut self, status: &SyncStatus, settings: &Value) {
         self.loaded = true;
         self.confirm_encryption = None;
+        self.confirm_master_delete = false;
         let _ = status;
         if self.settings_dirty {
             return;

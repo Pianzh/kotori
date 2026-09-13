@@ -12,7 +12,13 @@ fn main() {
     // its `ScrollView`; every other control is drawn in `widgets.slint`, because
     // what makes Windows 11 recognisable is the hover/press/expand transitions,
     // and a stock style does not expose those.
-    let config = slint_build::CompilerConfiguration::new().with_style("fluent".into());
+    //
+    // `with_debug_info` 是给 `render/window_test.rs` 用的:只有带调试信息的生成代码,
+    // Slint 的 `ElementHandle` 才查得到元素(元素类型名/几何),那条"没有哪一段比窗口宽"
+    // 的断言就靠它 —— min-width 撑破窗口这种错,肉眼要量像素才发现(UI_GUIDE §7.14)。
+    let config = slint_build::CompilerConfiguration::new()
+        .with_style("fluent".into())
+        .with_debug_info(true);
     slint_build::compile_with_config("src/ui/slint/app.slint", config)
         .expect("compiling src/ui/slint/app.slint");
 }

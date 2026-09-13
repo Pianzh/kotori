@@ -116,6 +116,15 @@ impl App {
             .unwrap_or(8)
     }
 
+    /// 凭据现在存在哪一级(ADR-014 的三级存储)。还没读到 `sync.status` 时按系统
+    /// 密钥环算,与页面上的默认一致 —— 第一条消息不先把用户吓一跳。
+    pub(super) fn credential_store(&self) -> CredentialStore {
+        self.sync_status
+            .as_ref()
+            .map(SyncStatus::store)
+            .unwrap_or_default()
+    }
+
     /// Encryption as last reported by the daemon, used to decide whether a save
     /// is an encryption *change* (which the daemon will ask about).
     pub(super) fn stored_encryption(&self) -> bool {
@@ -247,7 +256,7 @@ mod tests {
         assert!(app.sync_form.key_id.is_empty() && app.sync_form.app_key.is_empty());
         assert_eq!(
             app.sync_form.msg.as_deref(),
-            Some("已删除密钥环里的 B2 凭据")
+            Some("已从系统密钥环里删除 B2 凭据")
         );
 
         // A failure keeps what the user typed and names the problem.
@@ -264,6 +273,83 @@ mod tests {
                 .as_deref()
                 .unwrap_or_default()
                 .contains("密钥环没在运行")
+        );
+    }
+
+    /// 凭据到底存在哪一级,消息里就得说哪一级 —— 没有密钥环的机器上凭据只在内存里,
+    /// 说成"已存入系统密钥环"就是在骗用户(他会以为重启之后还在)。
+    #[test]
+    fn the_save_message_names_the_store_that_actually_holds_the_credentials() {
+        let (mut app, _task) = App::new();
+
+        // 本机没有可用的密钥环:`sync.status` 报 session-only。
+        app.sync_status = Some(SyncStatus {
+            store_kind: "session-only".into(),
+            ephemeral: true,
+            ..sync_status_fixture()
+        });
+        assert_eq!(app.credential_store(), CredentialStore::Session);
+        let _ = app.update(Message::SyncCredentialsSaved(Ok(())));
+        let memory = app.sync_form.msg.clone().unwrap_or_default();
+        assert!(!memory.contains("系统密钥环"), "{memory}");
+        assert!(memory.contains("本次会话的内存"), "{memory}");
+        assert!(memory.contains("主密码"), "要告诉用户怎么留住它:{memory}");
+
+        // 主密码文件那一级:说"加密写入",不能说"磁盘上没有明文"。
+        app.sync_status = Some(SyncStatus {
+            store_kind: "encrypted-file".into(),
+            ..sync_status_fixture()
+        });
+        assert_eq!(app.credential_store(), CredentialStore::File);
+        // 表单里要有东西,才走"存了密码"那一支(空 = 清除)。
+        app.sync_form.password = "hunter2hunter2".into();
+        let _ = app.update(Message::SyncPasswordSaved(Ok(())));
+        let sealed = app.sync_form.msg.clone().unwrap_or_default();
+        assert!(sealed.contains("主密码凭据文件"), "{sealed}");
+        assert!(!sealed.contains("磁盘上没有明文"), "{sealed}");
+
+        // 还没读到状态时也别说谎:默认那级是系统密钥环,但名字来自同一处。
+        let (mut fresh, _task) = App::new();
+        assert!(fresh.sync_status.is_none());
+        assert_eq!(fresh.credential_store(), CredentialStore::System);
+        let _ = fresh.update(Message::SyncCredentialsSaved(Ok(())));
+        assert!(
+            fresh
+                .sync_form
+                .msg
+                .as_deref()
+                .unwrap_or_default()
+                .contains("系统密钥环")
+        );
+    }
+
+    /// 删除凭据文件是破坏性操作:没点过"删除"就直接确认,什么都不该发生。
+    #[test]
+    fn deleting_the_master_file_needs_the_confirmation_it_asked_for() {
+        let (mut app, _task) = App::new();
+        let _ = app.update(Message::SyncMasterDeleteConfirmed);
+        assert!(!app.sync_form.busy, "没确认过就不该发请求");
+
+        let _ = app.update(Message::SyncMasterDeleteRequested);
+        assert!(app.sync_form.confirm_master_delete);
+        let _ = app.update(Message::SyncMasterDeleteCancelled);
+        assert!(!app.sync_form.confirm_master_delete);
+
+        let _ = app.update(Message::SyncMasterDeleteRequested);
+        let _ = app.update(Message::SyncMasterDeleteConfirmed);
+        assert!(!app.sync_form.confirm_master_delete, "确认后要收起确认条");
+        assert!(app.sync_form.busy);
+
+        let _ = app.update(Message::SyncMasterDeleted(Ok(())));
+        assert!(!app.sync_form.busy);
+        assert!(
+            app.sync_form
+                .msg
+                .as_deref()
+                .unwrap_or_default()
+                .contains("凭据一起消失"),
+            "要说清后果:{:?}",
+            app.sync_form.msg
         );
     }
 }

@@ -10,6 +10,18 @@ use std::rc::Rc;
 use super::*;
 use crate::ui::test_support::{sync_payload, sync_status_fixture, ui_game};
 
+/// 切到某一页。`tab` 是**窗口自己的属性**(点导航栏时由 .slint 直接改),所以只改
+/// `app.tab` 的话页面根本不会实例化 —— 那些"渲染过了"的断言会全部空跑(踩过)。
+fn show_tab(ui: &mut Ui, tab: Tab) {
+    ui.app.tab = tab;
+    ui.window.set_tab(match tab {
+        Tab::Games => 0,
+        Tab::Add => 1,
+        Tab::Sync => 2,
+        Tab::Settings => 3,
+    });
+}
+
 #[test]
 fn every_page_renders_without_a_display() {
     i_slint_backend_testing::init_no_event_loop();
@@ -97,7 +109,7 @@ fn every_page_renders_without_a_display() {
     ui.app.games = vec![ui_game()];
 
     // 添加游戏:空表单 → 填好 → 有回话。
-    ui.app.tab = Tab::Add;
+    show_tab(&mut ui, Tab::Add);
     ui.app.selected = None;
     ui.app.draft = None;
     ui.app.confirm_delete = false;
@@ -111,7 +123,7 @@ fn every_page_renders_without_a_display() {
 
     // 云同步:还没读到 → 一切就绪 → 待确认加密 → 待确认恢复 → 凭据文件锁着 →
     // 本机连密钥环都没有 → 没装 rclone 且有个存档位置解析不了。
-    ui.app.tab = Tab::Sync;
+    show_tab(&mut ui, Tab::Sync);
     render(&mut ui);
     ui.app.sync_status = Some(sync_status_fixture());
     ui.app.sync_form.apply(
@@ -127,10 +139,47 @@ fn every_page_renders_without_a_display() {
     render(&mut ui);
     ui.app.sync_restore_pending = None;
 
+    // 每一段都不能比窗口宽:输入框的 min-width 一旦等于 preferred-width,整页会被撑出去
+    // (卡片被切、说明文字挤成一列竖字,见 UI_GUIDE §7.14)。凭据组是这一页最宽的一行
+    // (说明 + 输入框 + 最多三个按钮),所以每个状态都量一次它。
+    // ⚠ 这条只能在整页测试里做:测试后端才拿得到元素几何。
+    let fits = |ui: &Ui, type_names: &[&str]| {
+        let window = &ui.window;
+        let width = window.window().size().width as f32 / window.window().scale_factor();
+        for type_name in type_names {
+            let found: Vec<_> = i_slint_backend_testing::ElementHandle::find_by_element_type_name(
+                window, type_name,
+            )
+            .collect();
+            // 查不到就是查不到:没有调试信息的生成代码会静默返回空列表,这条断言就白写了
+            // (见 build.rs 的 `with_debug_info`)。
+            assert!(
+                !found.is_empty(),
+                "查不到 {type_name} —— Slint 的 ElementHandle 需要带调试信息的生成代码"
+            );
+            for element in found {
+                assert!(
+                    element.size().width <= width + 1.0,
+                    "{type_name} 宽 {} 超过了窗口宽 {width}",
+                    element.size().width
+                );
+            }
+        }
+    };
+    let sync_states = ["SyncCredentialsGroup", "CardRow"];
+
+    // ⚠ `ElementHandle` 只看得见**没被裁掉**的部分(`ItemRc::is_visible` 判的是裁剪矩形):
+    // 740 高的窗口里凭据组刚好在折线以下,所以量之前先把窗口撑高 —— 否则查询会静默返回空,
+    // 断言等于没写(这一点踩过一次)。
+    ui.window
+        .window()
+        .set_size(slint::LogicalSize::new(1120.0, 2600.0));
+    render(&mut ui);
+
     ui.app.sync_status = Some(SyncStatus {
         store_kind: "encrypted-file".into(),
         store_locked: true,
-        store_path: "/home/user/.config/kotori/secrets.json".into(),
+        master_file: "/home/user/.config/kotori/secrets.json".into(),
         keyring: "主密码加密文件（已锁定）".into(),
         ready: false,
         problem: Some("凭据文件已锁定，请先用主密码解锁".into()),
@@ -138,8 +187,9 @@ fn every_page_renders_without_a_display() {
     });
     ui.app.sync_form.master_password = "typed".into();
     render(&mut ui);
+    fits(&ui, &sync_states);
 
-    // 解锁之后就不该再有主密码框了。
+    // 解锁之后就不该再有主密码框了,但「锁定 / 删除凭据文件」要在。
     ui.app.sync_status = Some(SyncStatus {
         store_locked: false,
         ready: true,
@@ -147,6 +197,14 @@ fn every_page_renders_without_a_display() {
         ..ui.app.sync_status.clone().unwrap()
     });
     render(&mut ui);
+    render(&mut ui);
+    fits(&ui, &sync_states);
+    // 删除前的二次确认条也要能画出来。
+    ui.app.sync_form.confirm_master_delete = true;
+    render(&mut ui);
+    render(&mut ui);
+    fits(&ui, &sync_states);
+    ui.app.sync_form.confirm_master_delete = false;
 
     ui.app.sync_status = Some(SyncStatus {
         store_kind: "session-only".into(),
@@ -155,6 +213,8 @@ fn every_page_renders_without_a_display() {
         ..sync_status_fixture()
     });
     render(&mut ui);
+    render(&mut ui);
+    fits(&ui, &sync_states);
 
     ui.app.sync_status = Some(SyncStatus {
         rclone: None,
@@ -172,7 +232,7 @@ fn every_page_renders_without_a_display() {
     render(&mut ui);
 
     // 设置:Wine 状态没到 / 到了 / 有回话,快捷键没问到 / 问到了(含"授权了但没绑键")。
-    ui.app.tab = Tab::Settings;
+    show_tab(&mut ui, Tab::Settings);
     ui.app.sync_form.master_password.clear();
     render(&mut ui);
     ui.app.wine_status = Some(WineStatus {
@@ -334,6 +394,28 @@ fn every_page_renders_without_a_display() {
     });
     window.invoke_sync_restore_cancelled();
     assert_app(&|app| assert!(app.sync_restore_pending.is_none()));
+
+    // 没先点"删除"就直接确认:什么都不该发生(防手滑)。
+    window.invoke_sync_delete_master_confirmed();
+    assert_app(&|app| assert!(!app.sync_form.busy));
+
+    // 删除凭据文件:请求 → 待确认;取消 → 抹掉;确认 → 发出去。测试里没有 daemon,
+    // 任务不会回包,所以只断言"待确认"被清掉、表单进入忙。
+    window.invoke_sync_delete_master_requested();
+    assert_app(&|app| assert!(app.sync_form.confirm_master_delete));
+    window.invoke_sync_delete_master_cancelled();
+    assert_app(&|app| assert!(!app.sync_form.confirm_master_delete));
+    window.invoke_sync_delete_master_requested();
+    window.invoke_sync_delete_master_confirmed();
+    assert_app(&|app| {
+        assert!(!app.sync_form.confirm_master_delete);
+        assert!(app.sync_form.busy);
+    });
+    with_ui(|ui| ui.app.sync_form.busy = false);
+
+    window.invoke_sync_lock_credentials();
+    assert_app(&|app| assert!(app.sync_form.busy));
+    with_ui(|ui| ui.app.sync_form.busy = false);
 
     window.invoke_wine_prefix_changed("/prefixes/mine".into());
     assert_app(&|app| assert_eq!(app.wine_prefix_input, "/prefixes/mine"));

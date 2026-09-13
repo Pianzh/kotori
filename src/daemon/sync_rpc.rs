@@ -296,7 +296,7 @@ impl Daemon {
             "ready": settings.enabled && problem.is_none() && rclone.is_some(),
             "problem": problem,
             "remote": sync::remote_root(&settings),
-            "password_hint": crate::secrets::lookup_hint(SecretKey::SyncPassword),
+            "password_hint": self.sync.keyring().lookup_hint(SecretKey::SyncPassword),
             "pull_timeout_secs": PULL_TIMEOUT.as_secs(),
             "keep_versions_max": MAX_KEEP_VERSIONS,
             "games": games,
@@ -447,12 +447,12 @@ impl Daemon {
             .set(SecretKey::SyncPasswordObscured, &obscured)
             .map_err(|e| e.to_string())?;
 
-        tracing::info!("sync password stored in the keyring (never on disk)");
+        tracing::info!("sync password stored (never in the config)");
         Ok(json!({
             "stored": true,
             // So the user can verify it is what they think it is, and read it
-            // back later without kotori.
-            "hint": crate::secrets::lookup_hint(SecretKey::SyncPassword),
+            // back later without kotori — in the way *this* store allows.
+            "hint": self.sync.keyring().lookup_hint(SecretKey::SyncPassword),
         }))
     }
 
@@ -460,7 +460,11 @@ impl Daemon {
     pub(super) fn rpc_sync_unlock(&self, password: Password) -> Result<Value, String> {
         let keyring = self.sync.keyring();
         let Some(file) = keyring.encrypted_store() else {
-            return Err("当前不需要解锁（凭据存在系统密钥环或内存里）".to_string());
+            // 如实报现在用的是哪一级:说"存在系统密钥环"在只跑内存的机器上是假话。
+            return Err(format!(
+                "当前不需要解锁（凭据存在{}里）",
+                keyring.describe()
+            ));
         };
         file.unlock(&password.password).map_err(|e| e.to_string())?;
         tracing::info!("凭据文件已解锁");
@@ -1105,6 +1109,64 @@ mod tests {
                 .unwrap()
                 .len(),
             2
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 忘了主密码时的出路:删凭据文件**不需要先解锁**(GUI 的「删除凭据文件」就走这条,
+    /// 所以它必须一直可用 —— 否则锁着的文件就成了删不掉的垃圾)。
+    #[tokio::test]
+    async fn the_master_file_can_be_deleted_even_while_it_is_locked() {
+        let dir = std::env::temp_dir().join(format!(
+            "kotori-master-clear-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let path = dir.join("secrets.json");
+
+        let daemon = Daemon::with_keyring_at(daemon_config(), Keyring::memory(), path.clone());
+        call(
+            &daemon,
+            "sync.set_credentials",
+            r#"{"key_id":"005keyid","app_key":"K005appkey"}"#,
+        )
+        .await;
+        call(
+            &daemon,
+            "sync.set_master_password",
+            r#"{"password":"correct horse battery","force":true}"#,
+        )
+        .await;
+        assert!(path.is_file(), "凭据文件应当被创建");
+
+        // 重启后文件是锁着的 —— 正是"忘了主密码"的那种状态。
+        let restarted = Daemon::with_master_file(daemon_config(), path.clone());
+        assert_eq!(
+            call(&restarted, "sync.status", "").await["result"]["keyring"]["store"]["locked"],
+            true
+        );
+
+        let value = call(&restarted, "sync.clear_master_password", "").await;
+        assert_eq!(value["result"]["removed"], true, "{value}");
+        assert!(!path.is_file(), "文件应当被删掉");
+
+        // 没有文件后端了,而且如实说现在用哪一级 —— 但不断言是哪一级:
+        // 这台机器上有没有真密钥环不是这个测试能决定的。
+        let status = call(&restarted, "sync.status", "").await;
+        assert_ne!(
+            status["result"]["keyring"]["store"]["kind"], "encrypted-file",
+            "文件都没了,不该还说自己在用文件后端: {status}"
+        );
+
+        // 再删一次要明说"没有文件",而不是假装成功。
+        let value = call(&restarted, "sync.clear_master_password", "").await;
+        assert!(
+            value["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("没有主密码凭据文件"),
+            "{value}"
         );
 
         std::fs::remove_dir_all(&dir).ok();

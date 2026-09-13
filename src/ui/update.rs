@@ -513,7 +513,7 @@ impl App {
             Message::SyncCredentialsSaved(result) => {
                 self.sync_form.busy = false;
                 self.sync_form.msg = Some(match &result {
-                    Ok(()) => "凭据已存入系统密钥环（磁盘上没有明文）".to_string(),
+                    Ok(()) => self.credential_store().saved_note("凭据"),
                     Err(e) => format!("保存凭据失败: {e}"),
                 });
                 if result.is_ok() {
@@ -535,7 +535,7 @@ impl App {
             Message::SyncCredentialsCleared(result) => {
                 self.sync_form.busy = false;
                 self.sync_form.msg = Some(match &result {
-                    Ok(()) => "已删除密钥环里的 B2 凭据".to_string(),
+                    Ok(()) => format!("已从{}里删除 B2 凭据", self.credential_store().name()),
                     Err(e) => format!("删除凭据失败: {e}"),
                 });
                 if result.is_ok() {
@@ -556,7 +556,7 @@ impl App {
             Message::SyncPasswordCleared(result) => {
                 self.sync_form.busy = false;
                 self.sync_form.msg = Some(match &result {
-                    Ok(()) => "已删除密钥环里的同步密码".to_string(),
+                    Ok(()) => format!("已从{}里删除同步密码", self.credential_store().name()),
                     Err(e) => format!("删除密码失败: {e}"),
                 });
                 if result.is_ok() {
@@ -583,7 +583,7 @@ impl App {
                 self.sync_form.busy = false;
                 self.sync_form.msg = Some(match &result {
                     Ok(()) if self.sync_form.password.is_empty() => "已清除同步密码".to_string(),
-                    Ok(()) => "密码已存入系统密钥环（我们不会替你生成密码）".to_string(),
+                    Ok(()) => self.credential_store().saved_note("同步密码"),
                     Err(e) => format!("保存密码失败: {e}"),
                 });
                 if result.is_ok() {
@@ -661,6 +661,56 @@ impl App {
                     }
                     Err(e) => self.sync_form.msg = Some(e),
                 }
+                self.reload_sync()
+            }
+            Message::SyncLockCredentials => {
+                if self.sync_form.busy {
+                    return Task::none();
+                }
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { lock_credentials(&socket).await },
+                    Message::SyncCredentialsLocked,
+                )
+            }
+            Message::SyncCredentialsLocked(result) => {
+                self.sync_form.busy = false;
+                self.sync_form.msg = Some(match result {
+                    Ok(()) => "凭据文件已锁定；再要用它得重新输入主密码".to_string(),
+                    Err(e) => format!("锁定失败: {e}"),
+                });
+                self.reload_sync()
+            }
+            Message::SyncMasterDeleteRequested => {
+                self.sync_form.confirm_master_delete = true;
+                Task::none()
+            }
+            Message::SyncMasterDeleteCancelled => {
+                self.sync_form.confirm_master_delete = false;
+                Task::none()
+            }
+            Message::SyncMasterDeleteConfirmed => {
+                // 破坏性操作:确认过一次就够了,别再让用户点第三下。
+                if !self.sync_form.confirm_master_delete {
+                    return Task::none();
+                }
+                self.sync_form.confirm_master_delete = false;
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { clear_master_file(&socket).await },
+                    Message::SyncMasterDeleted,
+                )
+            }
+            Message::SyncMasterDeleted(result) => {
+                self.sync_form.busy = false;
+                self.sync_form.msg = Some(match result {
+                    Ok(()) => "已删除主密码凭据文件（存在里面的凭据一起消失了）".to_string(),
+                    Err(e) => format!("删除凭据文件失败: {e}"),
+                });
                 self.reload_sync()
             }
             Message::SyncNow(game_id) => {

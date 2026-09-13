@@ -46,6 +46,11 @@ pub(super) fn push_sync(ui: &mut Ui) {
         w.set_sync_master_password(v)
     });
     push_bool(w.get_sync_busy(), form.busy, |v| w.set_sync_busy(v));
+    push_bool(
+        w.get_sync_confirm_master_delete(),
+        form.confirm_master_delete,
+        |v| w.set_sync_confirm_master_delete(v),
+    );
 
     let message = form.msg.clone().unwrap_or_default();
     let ok = !message.contains("失败") && !message.contains("不一样") && !message.contains("请先");
@@ -88,16 +93,19 @@ pub(super) fn push_sync(ui: &mut Ui) {
         |v| w.set_sync_problem(v),
     );
     push_bool(w.get_sync_ready(), status.ready, |v| w.set_sync_ready(v));
-    push_int(
-        w.get_sync_store_kind(),
-        store_kind_index(&status.store_kind),
-        |v| w.set_sync_store_kind(v),
-    );
+    push_int(w.get_sync_store_kind(), status.store().index(), |v| {
+        w.set_sync_store_kind(v)
+    });
+    // 说"存到哪"/"存在哪"都用这一级自己的名字:没有密钥环的机器上凭据只在内存里,
+    // 文案写成"密钥环"就是在骗用户。
+    push_str(w.get_sync_store_name(), status.store().name(), |v| {
+        w.set_sync_store_name(v)
+    });
+    push_str(w.get_sync_master_file(), &status.master_file, |v| {
+        w.set_sync_master_file(v)
+    });
     push_bool(w.get_sync_store_locked(), status.store_locked, |v| {
         w.set_sync_store_locked(v)
-    });
-    push_str(w.get_sync_store_path(), &status.store_path, |v| {
-        w.set_sync_store_path(v)
     });
     push_bool(
         w.get_sync_has_password(),
@@ -111,7 +119,7 @@ pub(super) fn push_sync(ui: &mut Ui) {
     );
     push_str(
         w.get_sync_credentials_label(),
-        &credentials_label(has_key_id, has_app_key),
+        &credentials_label(has_key_id, has_app_key, status.store().name()),
         |v| w.set_sync_credentials_label(v),
     );
     push_str(w.get_sync_password_hint(), &status.password_hint, |v| {
@@ -124,23 +132,40 @@ pub(super) fn push_sync(ui: &mut Ui) {
     );
 }
 /// `sync.status` reports the credential store by name; the page wants a number
-/// (it decides which of the three blocks to draw).
-fn store_kind_index(kind: &str) -> i32 {
-    match kind {
-        "encrypted-file" => 1,
-        "session-only" => 2,
-        _ => 0,
-    }
-}
+/// (it decides which of the three blocks to draw). The mapping itself lives on
+/// [`CredentialStore`] — the wording and the index must not drift apart.
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
-    fn the_credential_store_names_the_three_places_a_secret_can_live() {
-        assert_eq!(store_kind_index("system"), 0);
-        assert_eq!(store_kind_index("encrypted-file"), 1);
-        assert_eq!(store_kind_index("session-only"), 2);
+    fn every_store_gets_its_own_index_and_its_own_name() {
+        assert_eq!(CredentialStore::System.index(), 0);
+        assert_eq!(CredentialStore::File.index(), 1);
+        assert_eq!(CredentialStore::Session.index(), 2);
+        assert_eq!(
+            CredentialStore::from_wire("system"),
+            CredentialStore::System
+        );
+        assert_eq!(
+            CredentialStore::from_wire("encrypted-file"),
+            CredentialStore::File
+        );
+        assert_eq!(
+            CredentialStore::from_wire("session-only"),
+            CredentialStore::Session
+        );
         // 不认识的答复按最坏情况算:当作系统密钥环,不吓唬用户。
-        assert_eq!(store_kind_index(""), 0);
+        assert_eq!(CredentialStore::from_wire(""), CredentialStore::System);
+
+        // 三级各有各的说法,不能都叫"密钥环"。
+        let names = [
+            CredentialStore::System.name(),
+            CredentialStore::File.name(),
+            CredentialStore::Session.name(),
+        ];
+        assert!(names.iter().all(|name| !name.is_empty()));
+        assert_eq!(names[0], "系统密钥环");
+        assert!(!names[2].contains("密钥环"), "内存不是密钥环:{}", names[2]);
     }
 }

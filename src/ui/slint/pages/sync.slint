@@ -28,7 +28,10 @@ export component SyncPage inherits ScrollView {
     in property <string> master-hint: "";
     in property <int> store-kind: 0;          // 0 系统密钥环 / 1 主密码文件 / 2 仅本次会话
     in property <bool> store-locked: false;
-    in property <string> store-path: "";
+    in property <string> master-file: "";
+    // 三级存储里现在生效的那一级的名字(「系统密钥环」/「主密码凭据文件」/「本次会话的内存」)。
+    in property <string> store-name: "";
+    in property <bool> confirm-master-delete: false;
     in property <bool> has-password: false;
     in property <bool> can-delete-credentials: false;
 
@@ -71,6 +74,10 @@ export component SyncPage inherits ScrollView {
     callback clear-password();
     callback unlock();
     callback set-master-password();
+    callback lock-credentials();
+    callback delete-master-requested();
+    callback delete-master-cancelled();
+    callback delete-master-confirmed();
 
     Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
 
@@ -305,7 +312,9 @@ export component SyncPage inherits ScrollView {
                 SyncCredentialsGroup {
                     store-kind: root.store-kind;
                     store-locked: root.store-locked;
-                    store-path: root.store-path;
+                    master-file: root.master-file;
+                    store-name: root.store-name;
+                    confirm-master-delete: root.confirm-master-delete;
                     credentials-label: root.credentials-label;
                     password-hint: root.password-hint;
                     master-hint: root.master-hint;
@@ -324,6 +333,10 @@ export component SyncPage inherits ScrollView {
                     clear-password => { root.clear-password(); }
                     unlock => { root.unlock(); }
                     set-master-password => { root.set-master-password(); }
+                    lock-credentials => { root.lock-credentials(); }
+                    delete-master-requested => { root.delete-master-requested(); }
+                    delete-master-cancelled => { root.delete-master-cancelled(); }
+                    delete-master-confirmed => { root.delete-master-confirmed(); }
                 }
         }
 

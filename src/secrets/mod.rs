@@ -359,6 +359,24 @@ impl Keyring {
         matches!(self.backend, Backend::Memory(_))
     }
 
+    /// 这一级存储下,"怎么自己把密码取回来"的诚实答案。
+    ///
+    /// 三级存储的取回方式完全不同:密钥环能用 `secret-tool` 直接读,凭据文件只有
+    /// 主密码(所以我们干脆说明没有第二条路),内存那一级重启就没了。**说错比不说更坏** ——
+    /// 用户会照着一条跑不通的命令去找一个根本不在那儿的密码。
+    pub fn lookup_hint(&self, key: SecretKey) -> String {
+        match &self.backend {
+            Backend::Tool(_) => lookup_hint(key),
+            Backend::EncryptedFile(file) => format!(
+                "凭据在你自己设的主密码文件 {} 里,只有主密码能打开它 —— 忘了就只能删掉重设。",
+                file.path().display()
+            ),
+            Backend::Memory(_) => {
+                "本次会话没有可持久化的后端,守护进程一停密码就没了,取不回来。".to_string()
+            }
+        }
+    }
+
     /// Name of the store, for the settings page.
     pub fn describe(&self) -> String {
         match &self.backend {
@@ -923,5 +941,34 @@ mod tests {
 
         // Whatever a platform says, it must not be empty advice.
         assert!(!keyring_hint().is_empty(), "{hint}");
+    }
+
+    /// 三级存储下"怎么取回密码"的答案不一样 —— 没有密钥环的机器上再指一条
+    /// `secret-tool` 命令,就是让用户去找一个不在那儿的东西。
+    #[test]
+    fn the_retrieval_hint_follows_the_store_that_is_actually_in_use() {
+        // 密钥环:给出能直接跑的命令。
+        let fake = FakeTool::new("hint");
+        let keyring = fake.keyring();
+        assert!(
+            keyring
+                .lookup_hint(SecretKey::SyncPassword)
+                .contains("secret-tool lookup"),
+            "{:?}",
+            keyring.lookup_hint(SecretKey::SyncPassword)
+        );
+
+        // 内存那一级:明说取不回来,不再提 secret-tool。
+        let memory = Keyring::memory();
+        let hint = memory.lookup_hint(SecretKey::SyncPassword);
+        assert!(!hint.contains("secret-tool"), "{hint}");
+        assert!(hint.contains("取不回来"), "{hint}");
+
+        // 我们自己的方案:只有主密码,别再指去密钥环。
+        let file = Keyring::encrypted_file("/tmp/kotori-hint/secrets.json");
+        let hint = file.lookup_hint(SecretKey::SyncPassword);
+        assert!(!hint.contains("secret-tool"), "{hint}");
+        assert!(hint.contains("/tmp/kotori-hint/secrets.json"), "{hint}");
+        assert!(hint.contains("主密码"), "{hint}");
     }
 }

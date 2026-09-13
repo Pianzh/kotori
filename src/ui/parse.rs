@@ -16,14 +16,16 @@ pub(super) fn str_field(value: &Value, key: &str) -> String {
 /// What the B2 section says about the stored credentials.
 ///
 /// There is only ever **one** set of B2 keys (the daemon overwrites the two
-/// keyring entries), so the useful information is how many of its two halves
-/// are actually there — never the values, which do not leave the keyring.
-pub(super) fn credentials_label(has_key_id: bool, has_app_key: bool) -> String {
+/// entries), so the useful information is how many of its two halves are
+/// actually there — never the values, which do not leave the store. `store` is
+/// the *name* of the tier they are in right now: saying "密钥环" on a machine
+/// that has none would promise persistence we do not have.
+pub(super) fn credentials_label(has_key_id: bool, has_app_key: bool, store: &str) -> String {
     let stored = usize::from(has_key_id) + usize::from(has_app_key);
     let mark = |saved: bool| if saved { "✓" } else { "✗ 未保存" };
     format!(
-        "密钥环里现在有 {stored}/2 项：keyID {}，applicationKey {}。再次保存会覆盖上一套，\
-         只存进密钥环，配置文件里没有任何明文。",
+        "{store}里现在有 {stored}/2 项：keyID {}，applicationKey {}。再次保存会覆盖上一套，\
+         只进{store}，配置文件里没有任何明文。",
         mark(has_key_id),
         mark(has_app_key),
     )
@@ -145,10 +147,9 @@ pub(super) fn parse_sync_status(value: &Value) -> Result<SyncStatus, String> {
             .and_then(|store| store.get("locked"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
-        store_path: value
+        master_file: value
             .get("keyring")
-            .and_then(|keyring| keyring.get("store"))
-            .map(|store| str_field(store, "path"))
+            .map(|keyring| str_field(keyring, "secrets_file"))
             .unwrap_or_default(),
         min_master_password: value
             .get("keyring")
@@ -730,6 +731,12 @@ mod tests {
         assert!(!status.ephemeral);
         assert_eq!(status.store_kind, "system");
         assert!(!status.store_locked);
+        assert_eq!(status.store(), CredentialStore::System);
+        assert!(
+            status.master_file.ends_with("secrets.json"),
+            "凭据会存到哪要一直有答案:{}",
+            status.master_file
+        );
         assert_eq!(status.min_master_password, 8);
         assert_eq!(status.remote, "kotori:kotori-saves/kotori");
         assert_eq!(status.rclone.as_deref(), Some("/usr/bin/rclone"));
@@ -754,12 +761,17 @@ mod tests {
     fn the_credentials_section_counts_what_is_stored() {
         // One pair of keys per account, so "how many" means "how many of the
         // two halves are there" — the values never come back from the daemon.
-        assert!(credentials_label(true, true).contains("2/2"));
-        assert!(credentials_label(true, false).contains("1/2"));
-        let empty = credentials_label(false, false);
+        assert!(credentials_label(true, true, "系统密钥环").contains("2/2"));
+        assert!(credentials_label(true, false, "系统密钥环").contains("1/2"));
+        let empty = credentials_label(false, false, "系统密钥环");
         assert!(empty.contains("0/2"), "{empty}");
         assert!(empty.contains("未保存"), "{empty}");
         assert!(empty.contains("覆盖"), "覆盖语义要写出来：{empty}");
+
+        // 说哪一级就说那一级:没有密钥环的机器上不能写成"密钥环里"。
+        let memory = credentials_label(true, true, CredentialStore::Session.name());
+        assert!(memory.contains("本次会话的内存里现在有 2/2"), "{memory}");
+        assert!(!memory.contains("密钥环"), "{memory}");
 
         let status = sync_status_fixture();
         assert!(status.has_secret("b2-key-id") && status.has_secret("sync-password"));
