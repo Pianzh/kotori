@@ -35,3 +35,7 @@ credentials*.json
 
 # 沙箱里构建用的独立 cargo 缓存（~/.cargo 只读）
 .cargo-home/
+
+# 那份 17MB 兜底字体的本地备份：历史里已经剔除（见 README「字体」一节），
+# 文件本身留在工作目录里以便将来做子集化，但**不要再提交回去**。
+.font-backup/
