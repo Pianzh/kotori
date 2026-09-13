@@ -503,19 +503,35 @@ impl Keyring {
             .spawn()
             .map_err(|e| SecretError::Command(format!("{}: {e}", tool.display())))?;
 
+        // 子进程可能**没读 stdin 就已经退出了**(密钥环没在跑时 `secret-tool` 正是
+        // 如此:往 stderr 报一句然后 exit 1)⇒ 这一次写会拿到 EPIPE。真正的答案在
+        // 退出码和 stderr 里,所以这里只记下来、不提前返回 —— 否则同一个故障会时而
+        // 报「密钥环没有在运行」、时而报「Broken pipe」,而后者对用户毫无意义。
+        let mut write_error = None;
         if let Some(value) = stdin {
             let mut pipe = child
                 .stdin
                 .take()
                 .ok_or_else(|| SecretError::Command("无法写入 secret-tool 标准输入".to_string()))?;
-            pipe.write_all(value.as_bytes())
+            if let Err(e) = pipe
+                .write_all(value.as_bytes())
                 .and_then(|_| pipe.write_all(b"\n"))
-                .map_err(|e| SecretError::Command(e.to_string()))?;
+            {
+                write_error = Some(e);
+            }
         }
 
-        child
+        let output = child
             .wait_with_output()
-            .map_err(|e| SecretError::Command(e.to_string()))
+            .map_err(|e| SecretError::Command(e.to_string()))?;
+
+        // 写不进去、命令却"成功" = 凭据根本没存下来,不许当成功。
+        if output.status.success()
+            && let Some(e) = write_error
+        {
+            return Err(SecretError::Command(e.to_string()));
+        }
+        Ok(output)
     }
 
     /// Read a secret. `Ok(None)` means "not stored".
