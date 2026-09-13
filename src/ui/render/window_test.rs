@@ -94,6 +94,12 @@ fn every_page_renders_without_a_display() {
     });
     render(&mut ui);
 
+    // ⚠ 「浏览…」挑回来的值有没有真的落到那个输入框里,**这里测不了**:Rust 推给窗口
+    // 的是一个令牌,页面自己动手填(见 types.slint 的 `PathPick`),而测试后端读到的
+    // `accessible_value()` 是**旧的** —— 拿早就存在的 `seed` 机制做对照实验也一样旧,
+    // 所以那条断言会是假的。它靠快照看:`KOTORI_UI_PICK=<路径>`(见 snapshot.rs)。
+    ui.app.draft = Some(Draft::from_game(&ui_game()));
+
     ui.app.confirm_delete = true;
     render(&mut ui);
     // 没有「保存」按钮了:这一行小字就是自动保存的全部汇报(进行中 / 成功 / 无改动 / 失败)。
@@ -104,7 +110,8 @@ fn every_page_renders_without_a_display() {
         (false, "保存失败: 缩放比例必须是数字（当前 abc）"),
     ] {
         ui.app.saving = saving;
-        ui.app.saved_msg = Some(message.to_string());
+        ui.app
+            .report_saved(message.to_string(), !message.starts_with("保存失败"));
         render(&mut ui);
     }
     ui.app.saved_msg = None;
@@ -305,6 +312,29 @@ fn every_page_renders_without_a_display() {
         render(&mut ui);
     }
 
+    // 存档行是单游戏页最宽的一行(形态 + 路径 + 「浏览…」+ 排除 + 删除),加上那颗按钮
+    // 之后更挤了:也量一次(窗口这时已经是 2600 高,行才不会被裁掉)。
+    ui.window.set_tab(0);
+    ui.app.tab = Tab::Games;
+    ui.app.selected = Some("demo".into());
+    ui.window.set_game_open(true);
+    ui.app.draft = Some(Draft {
+        save_paths: kinds
+            .iter()
+            .map(|kind| SavePathDraft {
+                kind: (*kind).to_string(),
+                path: format!("/{kind}"),
+                exclude: "*.log, cache/".into(),
+            })
+            .collect(),
+        ..Draft::from_game(&ui_game())
+    });
+    render(&mut ui);
+    fits(&ui, &["SaveRow"]);
+    ui.window.set_game_open(false);
+    ui.app.selected = None;
+    ui.app.draft = None;
+
     // ── 回调 → 消息 ────────────────────────────────────────────────────
     // 上面证明"能画出来",这一段证明"点下去真的会到消息循环里":下标 → 枚举的
     // 映射(`tab` / 算法 / 存档形态 / 同步字段)如果错了,页面上完全看不出来。
@@ -461,6 +491,28 @@ fn every_page_renders_without_a_display() {
     window.invoke_wine_prefix_changed("/prefixes/mine".into());
     assert_app(&|app| assert_eq!(app.wine_prefix_input, "/prefixes/mine"));
     assert_app(&|app| assert!(app.wine_prefix_dirty));
+
+    // 「浏览…」:六个按钮都要接到消息循环上。接错(或漏接)在编译期看不出来 ——
+    // 症状是"点了没反应",而对话框本身在测试里不会开,所以这里只断言请求发出去了。
+    let browse = |which: i32| {
+        with_ui(|ui| ui.app.picking = false);
+        match which {
+            0 => window.invoke_browse_new_game_dir(),
+            1 => window.invoke_browse_new_exe(),
+            2 => window.invoke_browse_game_dir(),
+            3 => window.invoke_browse_exe(),
+            4 => window.invoke_browse_save(0),
+            _ => window.invoke_browse_wine_prefix(),
+        }
+        assert!(
+            with_ui(|ui| ui.app.picking),
+            "第 {which} 个「浏览…」按钮没有请对话框"
+        );
+    };
+    for which in 0..6 {
+        browse(which);
+    }
+    with_ui(|ui| ui.app.picking = false);
 
     // 后台服务:停止会立刻立起"别自动拉回来"的旗(请求本身不会跑 —— 测试里的
     // runtime 没人驱动,见 `Task`),启动则进入忙态。

@@ -4,6 +4,11 @@ use super::games::{game_item, ratio_label};
 use super::*;
 
 pub(super) fn push_detail(ui: &mut Ui) {
+    // 「浏览…」刚选回来的值:单游戏页的输入框由**页面自己**持有(见文件头那条规矩),
+    // 平时 Rust 不往里写 —— 但这一笔是用户自己按出来的,所以要把值推回去,否则他
+    // 挑完了框里还是旧内容。
+    push_picked_path(ui);
+
     let app = &ui.app;
     let w = &ui.window;
 
@@ -17,7 +22,7 @@ pub(super) fn push_detail(ui: &mut Ui) {
         w.set_confirm_delete(v)
     });
     let (saved, saved_ok) = match &app.saved_msg {
-        Some(message) => (message.clone(), !message.starts_with("保存失败")),
+        Some(message) => (message.clone(), app.saved_ok),
         None => (String::new(), true),
     };
     push_str(w.get_saved_message(), &saved, |v| w.set_saved_message(v));
@@ -59,6 +64,39 @@ pub(super) fn push_detail(ui: &mut Ui) {
     });
 
     push_saves(ui);
+}
+/// 把「浏览…」选中的值推回页面(推完就丢掉:它只属于那一次点击)。
+fn push_picked_path(ui: &mut Ui) {
+    let Some((target, value)) = ui.app.picked_path.take() else {
+        return;
+    };
+    let value = SharedString::from(value);
+    match target {
+        // 单游戏设置页的两个路径框由页面自己持有,窗口上没有属性可写 ⇒ 发一个令牌,
+        // 页面收到后自己填那一个框(见 `types.slint` 的 `PathPick`)。
+        PathTarget::GameDir | PathTarget::Exe => {
+            let target = if target == PathTarget::GameDir { 0 } else { 1 };
+            ui.app.pick_token = ui.app.pick_token.wrapping_add(1);
+            let token = ui.app.pick_token;
+            ui.window.set_path_pick(PathPick {
+                token,
+                target,
+                value,
+            });
+        }
+        PathTarget::SavePath(index) => {
+            // 存档行的文本是**模型的初始值**(页面不往回写),所以改模型那一行就够了。
+            if let Some(mut row) = ui.saves.row_data(index) {
+                row.path = value.clone();
+                ui.saves.set_row_data(index, row);
+                if let Some(built) = ui.saves_built.get_mut(index) {
+                    built.path = value;
+                }
+            }
+        }
+        // 其它目标由各自的页面从 App 状态读(添加游戏页与设置页都是单向推的)。
+        PathTarget::NewGameDir | PathTarget::NewExe | PathTarget::WinePrefix => {}
+    }
 }
 /// The stored profile, as the per-game page's "reset" basis.
 fn game_detail(game: &UiGame) -> GameDetail {

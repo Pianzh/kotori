@@ -13,6 +13,10 @@ import { SaveItem } from "../types.slint";
 export component GameSavesGroup inherits Rectangle {
     in property <[SaveItem]> saves;
     in property <[string]> save-kinds;
+    // 「浏览…」能不能用(系统里有没有文件对话框);理由由页面那行灰字说。
+    in property <bool> browse-enabled: true;
+    // 「浏览…」用不了时的理由(空串 = 什么都不加)。
+    in property <string> path-hint: "";
     // 与页面双向:行里点开下拉要写上去,浮层选完要写回来。
     in-out property <int> open-save: -1;
     in-out property <int> open-save-kind: 0;
@@ -22,6 +26,7 @@ export component GameSavesGroup inherits Rectangle {
     callback kind-clicked(int, Point);
     callback path-changed(int, string);
     callback exclude-changed(int, string);
+    callback browse-save(int);
 
     height: group.height;
     group := Group {
@@ -29,7 +34,8 @@ export component GameSavesGroup inherits Rectangle {
                         padding: 16px;
                         spacing: 4px;
                         Text {
-                            text: "windows = prefix 里的 Windows 路径,推荐用 %APPDATA% / %DOCUMENTS% 这类令牌(别写用户名,各 prefix 不一样);relative = 相对游戏根目录;absolute = 只在这台机器上有效,不跨平台同步。";
+                            text: "windows = prefix 里的 Windows 路径,推荐用 %APPDATA% / %DOCUMENTS% 这类令牌(别写用户名,各 prefix 不一样);relative = 相对游戏根目录;absolute = 只在这台机器上有效,不跨平台同步。"
+                                + (root.path-hint == "" ? "" : "\n\n" + root.path-hint);
                             font-size: 12px;
                             color: Tokens.text-3;
                             wrap: word-wrap;
@@ -42,6 +48,7 @@ export component GameSavesGroup inherits Rectangle {
                         exclude: entry.exclude;
                         placeholder: entry.placeholder;
                         kinds: root.save-kinds;
+                        browse-enabled: root.browse-enabled;
                         open: root.open-save == index;
                         kind-clicked(anchor) => {
                             root.open-save = index;
@@ -50,6 +57,7 @@ export component GameSavesGroup inherits Rectangle {
                         }
                         path-changed(text) => { root.path-changed(index, text); }
                         exclude-changed(text) => { root.exclude-changed(index, text); }
+                        browse-clicked => { root.browse-save(index); }
                         remove-clicked => { root.remove-save(index); }
                     }
                     HorizontalLayout {

@@ -9,7 +9,7 @@
 import { Tokens } from "theme.slint";
 import { Gap, NavItem } from "widgets/base.slint";
 import { StdButton } from "widgets/buttons.slint";
-import { GameItem, GameDetail, SaveItem, HotkeyState } from "types.slint";
+import { GameItem, GameDetail, SaveItem, HotkeyState, PathPick } from "types.slint";
 import { AppNav } from "app-nav.slint";
 import { GamesPage } from "pages/games.slint";
 import { GameSettingsPage } from "pages/game-settings.slint";
@@ -44,8 +44,22 @@ export component AppWindow inherits Window {
     in-out property <string> error: "";
     in-out property <bool> loading: false;
 
+    // ── 「浏览…」:借系统自己的文件对话框挑一个位置(见 src/picker.rs) ─────────
+    // 一个窗口级开关就够:能不能用是**这台机器**的事,和哪个输入框无关。没探完
+    // (`false`)时按钮先灰着,理由在那个灰字 `path-hint` 里(能用时它是空的)。
+    in-out property <bool> browse-enabled: false;
+    in-out property <string> path-hint: "";
+    // 刚挑回来的那个值,交给单游戏设置页自己去填(页面持有那些输入框的副本)。
+    in-out property <PathPick> path-pick: { token: 0, target: -1, value: "" };
+
     callback tab-changed(int);
     callback refresh();
+    callback browse-new-game-dir();
+    callback browse-new-exe();
+    callback browse-game-dir();
+    callback browse-exe();
+    callback browse-save(int);
+    callback browse-wine-prefix();
 
     // ── 游戏库 ────────────────────────────────────────────────────────────
     in-out property <[GameItem]> games: [];
@@ -286,6 +300,9 @@ export component AppWindow inherits Window {
                             sync-can-act: root.detail-sync-can-act;
                             sync-pending: root.detail-sync-pending;
                             sync-busy: root.detail-sync-busy;
+                            browse-enabled: root.browse-enabled;
+                            path-hint: root.path-hint;
+                            path-pick: root.path-pick;
                             back => { root.back(); }
                             launch => { root.launch(root.game.id); }
                             reset => { root.reset(); }
@@ -294,6 +311,9 @@ export component AppWindow inherits Window {
                             delete-confirmed => { root.delete-confirmed(); }
                             game-dir-changed(text) => { root.game-dir-changed(text); }
                             exe-changed(text) => { root.exe-changed(text); }
+                            browse-game-dir => { root.browse-game-dir(); }
+                            browse-exe => { root.browse-exe(); }
+                            browse-save(index) => { root.browse-save(index); }
                             ratio-changed(text) => { root.ratio-changed(text); }
                             algo-picked(index) => { root.algo-picked(index); }
                             sharpness-changed(value) => { root.sharpness-changed(value); }
@@ -323,9 +343,13 @@ export component AppWindow inherits Window {
                             creating: root.creating;
                             message: root.create-message;
                             message-ok: root.create-message-ok;
+                            browse-enabled: root.browse-enabled;
+                            path-hint: root.path-hint;
                             name-changed(text) => { root.new-name-changed(text); }
                             game-dir-changed(text) => { root.new-game-dir-changed(text); }
                             exe-changed(text) => { root.new-exe-changed(text); }
+                            browse-game-dir => { root.browse-new-game-dir(); }
+                            browse-exe => { root.browse-new-exe(); }
                             create-requested => { root.create-requested(); }
                         }
 
@@ -406,11 +430,14 @@ export component AppWindow inherits Window {
                             wine-default: root.wine-default;
                             wine-environment: root.wine-environment;
                             wine-detected: root.wine-detected;
+                            browse-enabled: root.browse-enabled;
+                            path-hint: root.path-hint;
                             hotkeys: root.hotkeys;
                             hotkeys-loaded: root.hotkeys-loaded;
                             service-start => { root.service-start(); }
                             service-stop => { root.service-stop(); }
                             wine-prefix-changed(text) => { root.wine-prefix-changed(text); }
+                            browse-wine-prefix => { root.browse-wine-prefix(); }
                             save-wine-prefix => { root.save-wine-prefix(); }
                             clear-wine-prefix => { root.clear-wine-prefix(); }
                         }

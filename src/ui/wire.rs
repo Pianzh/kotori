@@ -53,6 +53,8 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_new_game_dir_changed(|text| dispatch(Message::NewGameDirChanged(text.to_string())));
     window.on_new_exe_changed(|text| dispatch(Message::NewExeChanged(text.to_string())));
     window.on_create_requested(|| dispatch(Message::CreateRequested));
+    window.on_browse_new_game_dir(|| dispatch(Message::PickPath(PathTarget::NewGameDir)));
+    window.on_browse_new_exe(|| dispatch(Message::PickPath(PathTarget::NewExe)));
 
     // ── 单个游戏 ──────────────────────────────────────────────────────────
     window.on_back(|| {
@@ -71,6 +73,13 @@ pub(super) fn install_callbacks(window: &AppWindow) {
 
     window.on_game_dir_changed(|text| dispatch(Message::GameDirChanged(text.to_string())));
     window.on_exe_changed(|text| dispatch(Message::ExePathChanged(text.to_string())));
+    window.on_browse_game_dir(|| dispatch(Message::PickPath(PathTarget::GameDir)));
+    window.on_browse_exe(|| dispatch(Message::PickPath(PathTarget::Exe)));
+    window.on_browse_save(|index| {
+        dispatch(Message::PickPath(PathTarget::SavePath(
+            index.max(0) as usize
+        )))
+    });
     window.on_ratio_changed(|text| dispatch(Message::ScaleRatioChanged(text.to_string())));
     window.on_algo_picked(|index| {
         if let Some(label) = ScaleAlgorithm::ALL.get(index.max(0) as usize) {
@@ -167,6 +176,7 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_service_start(|| dispatch(Message::ServiceStart));
     window.on_service_stop(|| dispatch(Message::ServiceStop));
     window.on_wine_prefix_changed(|text| dispatch(Message::WinePrefixChanged(text.to_string())));
+    window.on_browse_wine_prefix(|| dispatch(Message::PickPath(PathTarget::WinePrefix)));
     window.on_save_wine_prefix(|| dispatch(Message::SaveWinePrefix));
     window.on_clear_wine_prefix(|| dispatch(Message::ClearWinePrefix));
 }

@@ -49,13 +49,20 @@ libc = "0.2"
 nix = { version = "0.29", features = ["signal", "process", "term"] }
 argon2 = "0.6.0"
 chacha20poly1305 = "0.11.0"
-ashpd = { version = "0.13.13", features = ["global_shortcuts", "remote_desktop", "screencast", "tokio"] }
+ashpd = { version = "0.13.13", features = ["file_chooser", "global_shortcuts", "remote_desktop", "screencast", "tokio"] }
 futures-util = "0.3.34"
 
 # Runtime scaling goes through the properties gamescope watches on the root window
 # of its own Xwayland (see `src/scale/x11.rs`). Already in the tree as a transitive
 # dependency of winit, so this adds nothing to build time.
 x11rb = "0.13.2"
+
+# 「浏览…」在 Windows 上的那一半:系统自己的「打开 / 选择文件夹」对话框 —— 就是资源
+# 管理器弹出来的那个(shell 的 IFileOpenDialog)。**只在 Windows 上编译**,所以它不会
+# 往 Linux 的依赖树里加任何东西:Linux 那边我们直接走 xdg-desktop-portal(见
+# `src/picker.rs`),不引 rfd 的 GTK / portal 后端。
+[target.'cfg(windows)'.dependencies]
+rfd = { version = "0.15", default-features = false }
 
 # The GUI stack is unusably slow when compiled without optimisation: a renderer
 # and a text shaper both do per-frame work, and at opt-level 0 a frame can take

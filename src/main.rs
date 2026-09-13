@@ -5,6 +5,7 @@ mod desktop;
 mod display;
 mod game;
 mod hotkeys;
+mod picker;
 mod process;
 mod rpc;
 mod scale;

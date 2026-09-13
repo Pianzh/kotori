@@ -43,7 +43,7 @@ mod update;
 mod wire;
 
 pub use app::App;
-pub use message::{Message, SyncField, Tab};
+pub use message::{Message, PathTarget, SyncField, Tab};
 pub use model::{SavePathDraft, SessionInfo, SyncGameRow, SyncStatus, UiGame, WineStatus};
 
 use crash::*;

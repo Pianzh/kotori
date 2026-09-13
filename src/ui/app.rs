@@ -15,6 +15,9 @@ pub struct App {
     pub(super) draft: Option<Draft>,
     pub(super) saving: bool,
     pub(super) saved_msg: Option<String>,
+    /// 那行小字是好事还是坏事(`saved_msg` 光有文字说明不了 —— "猜前缀"那种做法在
+    /// 「浏览…」失败这种新消息上就会显示成绿色)。
+    pub(super) saved_ok: bool,
     /// 自动保存用世代号:每改一笔 +1 并挂一个防抖定时器,定时器醒来发现号变了就作废
     /// (说明用户还在改)。没有「保存」按钮之后,这一对(世代 + [`SaveAttempt`])是
     /// 唯一防止"打一个字写一次""旧回包盖掉新内容"的东西,别省。
@@ -46,6 +49,19 @@ pub struct App {
     pub(super) service_busy: bool,
     pub(super) service_msg: Option<String>,
     pub(super) daemon_paused: bool,
+    /// 「浏览…」:这台机器上有没有可用的系统对话框。`None` = 还没探完(按钮先灰着,
+    /// 探完立刻放行 —— 探测是一次 D-Bus 调用,开机那一瞬间就回来了)。
+    ///
+    /// `Err` 里是**给用户看**的理由:没有 xdg-desktop-portal 的桌面上按钮会一直灰着,
+    /// 而灰按钮必须说明为什么,否则用户只会以为坏了(用户 2026-09-13:"没有就不能用")。
+    pub(super) picker: Option<Result<(), String>>,
+    /// 对话框正开着(挡住第二次点击弹出第二个框)。
+    pub(super) picking: bool,
+    /// 刚选回来的值,等着被推回**页面自己那份副本**(单游戏设置页的输入框由页面持有,
+    /// Rust 平时不往里写 —— 见 `game-settings.slint` 的文件头与 `render/detail.rs`)。
+    pub(super) picked_path: Option<(PathTarget, String)>,
+    /// 推给页面的"第几次选择"令牌:值一样也要能触发一次(见 `types.slint` 的 `PathPick`)。
+    pub(super) pick_token: i32,
     /// 全局快捷键的注册情况(设置页);`None` = 还没问到。
     pub(super) hotkeys: Option<HotkeyStatus>,
     /// Automatic reconnect bookkeeping.
@@ -76,6 +92,7 @@ impl App {
                 draft: None,
                 saving: false,
                 saved_msg: None,
+                saved_ok: true,
                 autosave_generation: 0,
                 save_in_flight: None,
                 search: String::new(),
@@ -92,6 +109,10 @@ impl App {
                 service_busy: false,
                 service_msg: None,
                 daemon_paused: false,
+                picker: None,
+                picking: false,
+                picked_path: None,
+                pick_token: 0,
                 hotkeys: None,
                 retry_attempts: 0,
                 running: std::collections::BTreeMap::new(),
@@ -108,6 +129,11 @@ impl App {
                 Task::perform(
                     async { load_sync_status().await },
                     Message::SyncStatusLoaded,
+                ),
+                // 「浏览…」能不能用,开机就问一次(没有对话框的桌面上按钮要灰着并说明)。
+                Task::perform(
+                    async { crate::picker::probe().await },
+                    Message::PickerProbed,
                 ),
                 // Start the periodic session poll.
                 Task::perform(async { tokio::time::sleep(STATUS_POLL).await }, |_| {
@@ -209,6 +235,182 @@ impl App {
             Message::ProfileSaved(generation, result)
         })
     }
+
+    /// 单游戏设置页底部那行小字:说一句话,并说明它是好消息还是坏消息。
+    ///
+    /// 光有一句话不够 —— 渲染那层要知道用绿色还是红色,而"猜前缀"是靠不住的。
+    pub(super) fn report_saved(&mut self, message: impl Into<String>, ok: bool) {
+        self.saved_msg = Some(message.into());
+        self.saved_ok = ok;
+    }
+
+    // ── 「浏览…」:借系统自己的对话框挑一个位置 ──────────────────────────────
+
+    /// 按钮能不能点:探到了对话框,而且现在没有另一个框开着。
+    pub(super) fn can_browse(&self) -> bool {
+        !self.picking && matches!(self.picker, Some(Ok(())))
+    }
+
+    /// 按钮下面那行灰字。能用时是空串(什么都不显示)。
+    pub(super) fn path_hint(&self) -> String {
+        match &self.picker {
+            Some(Err(reason)) => {
+                format!("「浏览…」在这台机器上用不了:{reason}。这里的位置可以照常自己填。")
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// 拼一个选择请求:挑什么(文件还是目录)、标题、以及从哪儿开始找。
+    ///
+    /// 起点只是"方便",不是规则 —— 认不出合适的起点就让对话框自己决定,别拿一个不存在
+    /// 的目录去喂它(portal 会直接拒掉整个请求)。
+    pub(super) fn pick_request(&self, target: PathTarget) -> crate::picker::Request {
+        use crate::picker::Request;
+
+        let draft = self.draft.as_ref();
+        match target {
+            PathTarget::NewGameDir => {
+                Request::folder("选游戏根目录", existing_dir(&self.new_game_dir))
+            }
+            PathTarget::NewExe => Request::exe(
+                "选可执行文件",
+                parent_dir(&self.new_exe).or_else(|| existing_dir(&self.new_game_dir)),
+            ),
+            PathTarget::GameDir => Request::folder(
+                "选游戏根目录",
+                draft.and_then(|d| existing_dir(&d.game_dir)),
+            ),
+            PathTarget::Exe => Request::exe(
+                "选可执行文件",
+                draft.and_then(|d| parent_dir(&d.exe).or_else(|| existing_dir(&d.game_dir))),
+            ),
+            PathTarget::SavePath(index) => {
+                let entry = draft.and_then(|d| d.save_paths.get(index));
+                let game_dir = draft.and_then(|d| existing_dir(&d.game_dir));
+                match entry.map(|entry| entry.kind.as_str()) {
+                    // relative 只可能是游戏目录里的东西 —— 起点就放在那儿。
+                    Some("relative") => Request::folder("选存档目录(要在游戏根目录里面)", game_dir),
+                    Some("absolute") => Request::folder(
+                        "选存档目录",
+                        entry.and_then(|entry| existing_dir(&entry.path)),
+                    ),
+                    // windows:存档在 prefix 的用户目录里,能认出来就从那儿开始找
+                    // (认路径形状,不需要先知道游戏用的是哪个 prefix,见 `wine.rs`)。
+                    _ => Request::folder(
+                        "选存档目录(prefix 里的 Windows 路径)",
+                        self.prefix_user_dir(),
+                    ),
+                }
+            }
+            PathTarget::WinePrefix => Request::folder(
+                "选 wine 目录(prefix)",
+                existing_dir(&self.wine_prefix_input).or_else(|| self.machine_prefix()),
+            ),
+        }
+    }
+
+    /// 这台机器上现在生效的那个 wine prefix(`wine.status` 报的,可能还没有)。
+    fn machine_prefix(&self) -> Option<PathBuf> {
+        let status = self.wine_status.as_ref()?;
+        [
+            status.configured.clone(),
+            Some(status.default_prefix.clone()),
+            status.detected.first().cloned(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(PathBuf::from)
+        .find(|path| path.is_dir())
+    }
+
+    /// 那个 prefix 里的 Windows 用户目录(`drive_c/users/<用户>`)。
+    fn prefix_user_dir(&self) -> Option<PathBuf> {
+        let prefix = self.machine_prefix()?;
+        let user = crate::wine::windows_user_dir(&prefix);
+        user.is_dir().then_some(user)
+    }
+
+    /// 对话框里挑回来的路径,填进对应的那个框。
+    ///
+    /// 单游戏设置页的目标还要多做一件事:值写进 `draft`、按改动自动保存,同时记下这次
+    /// 填的是什么 —— 那些输入框由**页面自己**持有,Rust 平时不往里写(见
+    /// `game-settings.slint` 的文件头),所以 `render` 要靠这条记录推一次。
+    pub(super) fn apply_picked_path(&mut self, target: PathTarget, picked: &Path) -> Task<Message> {
+        let text = picked.display().to_string();
+
+        match target {
+            PathTarget::NewGameDir => self.new_game_dir = text,
+            PathTarget::NewExe => self.new_exe = text,
+            PathTarget::WinePrefix => {
+                self.wine_prefix_input = text;
+                // 用户亲手选的路径不许被随后回来的 `wine.status` 盖掉。
+                self.wine_prefix_dirty = true;
+            }
+            PathTarget::GameDir | PathTarget::Exe => {
+                let Some(draft) = self.draft.as_mut() else {
+                    return Task::none();
+                };
+                if target == PathTarget::GameDir {
+                    draft.game_dir = text.clone();
+                } else {
+                    draft.exe = text.clone();
+                }
+                self.picked_path = Some((target, text));
+                return self.schedule_auto_save();
+            }
+            PathTarget::SavePath(index) => {
+                // 挑选的位置得先翻译成档案里那种写法(相对游戏根目录 / 前缀里的令牌)
+                // —— 翻译不了就什么都不改:存一个假的路径比存不下去更糟。
+                let translated = {
+                    let Some(draft) = self.draft.as_ref() else {
+                        return Task::none();
+                    };
+                    let Some(entry) = draft.save_paths.get(index) else {
+                        return Task::none();
+                    };
+                    match entry.kind.as_str() {
+                        "relative" => {
+                            crate::wine::to_relative_path(Path::new(draft.game_dir.trim()), picked)
+                        }
+                        "windows" => crate::wine::to_windows_token(picked),
+                        _ => Ok(text.clone()),
+                    }
+                };
+                let value = match translated {
+                    Ok(value) => value,
+                    Err(reason) => {
+                        self.report_saved(reason, false);
+                        return Task::none();
+                    }
+                };
+                if let Some(entry) = self
+                    .draft
+                    .as_mut()
+                    .and_then(|draft| draft.save_paths.get_mut(index))
+                {
+                    entry.path = value.clone();
+                }
+                self.picked_path = Some((target, value));
+                return self.schedule_auto_save();
+            }
+        }
+        Task::none()
+    }
+}
+
+/// 一个输入框里的目录(不存在、或者还空着就是 `None`)。
+fn existing_dir(text: &str) -> Option<PathBuf> {
+    let path = PathBuf::from(text.trim());
+    path.is_dir().then_some(path)
+}
+
+/// 一个输入框里的文件的上级目录。
+fn parent_dir(text: &str) -> Option<PathBuf> {
+    Path::new(text.trim())
+        .parent()
+        .map(Path::to_path_buf)
+        .filter(|path| path.is_dir())
 }
 
 #[cfg(test)]
@@ -429,6 +631,113 @@ mod tests {
         assert_eq!(draft.game_id, "other");
         assert_eq!(draft.exe_original, draft.exe, "别人的书签不许被动");
         assert!(app.saved_msg.is_none(), "已经离开那一页了,别在这儿报");
+    }
+
+    /// 「浏览…」挑回来的路径要落到**它自己那个**目标上,并且该自动保存的立刻挂上。
+    ///
+    /// 串了目标的话,用户会在另一个框里看到刚挑的路径 —— 而那种错误在编译期完全看不出来。
+    #[test]
+    fn a_picked_path_lands_on_its_own_field_and_schedules_a_save() {
+        let (mut app, _task) = App::new();
+        app.games = vec![ui_game()];
+        app.update(Message::GameSelected("demo".into()));
+
+        // 单游戏页:游戏根目录 → 草稿 + 推给页面的令牌 + 一次自动保存。
+        let generation = app.autosave_generation;
+        app.apply_picked_path(PathTarget::GameDir, Path::new("/games/other"));
+        let draft = app.draft.as_ref().unwrap();
+        assert_eq!(draft.game_dir, "/games/other");
+        assert_eq!(draft.exe, ui_game().exe, "别的一个字都不该动");
+        assert_eq!(
+            app.picked_path.as_ref().map(|(t, v)| (*t, v.as_str())),
+            Some((PathTarget::GameDir, "/games/other"))
+        );
+        assert_eq!(app.autosave_generation, generation + 1);
+
+        // 存档行的相对路径:挑游戏目录里面的位置 → 存成相对的。
+        app.draft.as_mut().unwrap().save_paths = vec![SavePathDraft {
+            kind: "relative".into(),
+            path: "savedata".into(),
+            exclude: String::new(),
+        }];
+        app.draft.as_mut().unwrap().game_dir = "/games/other".into();
+        app.apply_picked_path(
+            PathTarget::SavePath(0),
+            Path::new("/games/other/savedata/backup"),
+        );
+        assert_eq!(
+            app.draft.as_ref().unwrap().save_paths[0].path,
+            "savedata/backup"
+        );
+
+        // 挑到游戏目录外面:什么都不改,而且要说清怎么办。
+        app.apply_picked_path(PathTarget::SavePath(0), Path::new("/elsewhere/save"));
+        assert_eq!(
+            app.draft.as_ref().unwrap().save_paths[0].path,
+            "savedata/backup",
+            "翻译不过来就不许改"
+        );
+        assert!(!app.saved_ok, "那行小字得是红的");
+        assert!(
+            app.saved_msg
+                .as_deref()
+                .unwrap_or_default()
+                .contains("absolute"),
+            "{:?}",
+            app.saved_msg
+        );
+
+        // 添加游戏页的两个框走各自的字段,不进草稿,也不用那个推给页面的令牌。
+        let stale = app.picked_path.clone();
+        app.apply_picked_path(PathTarget::NewGameDir, Path::new("/games/new"));
+        app.apply_picked_path(PathTarget::NewExe, Path::new("/games/new/game.exe"));
+        assert_eq!(app.new_game_dir, "/games/new");
+        assert_eq!(app.new_exe, "/games/new/game.exe");
+        assert_eq!(app.picked_path, stale, "这两个框由页面从状态读,不用令牌");
+
+        // wine prefix:填上,并立起"别被随后回来的 wine.status 盖掉"的旗。
+        app.apply_picked_path(PathTarget::WinePrefix, Path::new("/prefixes/games"));
+        assert_eq!(app.wine_prefix_input, "/prefixes/games");
+        assert!(app.wine_prefix_dirty);
+    }
+
+    /// 没有对话框的机器上按钮不能点,而且要说清为什么(用户 2026-09-13:"没有就不能用")。
+    #[test]
+    fn browsing_is_refused_when_the_machine_has_no_dialog() {
+        let (mut app, _task) = App::new();
+        assert!(!app.can_browse(), "还没探完就先别放行");
+
+        app.update(Message::PickerProbed(Err("没有 xdg-desktop-portal".into())));
+        assert!(!app.can_browse());
+        assert!(
+            app.path_hint().contains("xdg-desktop-portal"),
+            "{}",
+            app.path_hint()
+        );
+
+        app.update(Message::PickerProbed(Ok(())));
+        assert!(app.can_browse());
+        assert!(app.path_hint().is_empty(), "能用的时候一个字都不显示");
+
+        // 框开着的时候不给再开一个(点两下 = 弹两个对话框)。
+        app.update(Message::PickPath(PathTarget::GameDir));
+        assert!(app.picking && !app.can_browse());
+    }
+
+    /// 每次"请对话框出来"都要带上合适的标题与类别:目录 / 文件这两类认错了,
+    /// 用户会在一个"选 exe"的框里被逼着选目录。
+    #[test]
+    fn a_pick_request_says_what_kind_of_thing_it_wants() {
+        use crate::picker::Want;
+
+        let (mut app, _task) = App::new();
+        app.games = vec![ui_game()];
+        app.update(Message::GameSelected("demo".into()));
+
+        assert_eq!(app.pick_request(PathTarget::GameDir).want, Want::Folder);
+        assert_eq!(app.pick_request(PathTarget::Exe).want, Want::Exe);
+        assert_eq!(app.pick_request(PathTarget::NewExe).want, Want::Exe);
+        assert_eq!(app.pick_request(PathTarget::WinePrefix).want, Want::Folder);
     }
 
     /// 「重置」:回到已存值、作废还挂着的防抖,而且"没东西可还原"时要如实说。

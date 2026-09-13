@@ -15,10 +15,11 @@ import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
 import { Divider, IconButton, RevealItem } from "../widgets/base.slint";
 import { Slider, Switch, TextField } from "../widgets/controls.slint";
+import { PathField } from "../widgets/path-field.slint";
 import { DropdownList, Select } from "../widgets/select.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
-import { GameItem, GameDetail, SaveItem } from "../types.slint";
+import { GameItem, GameDetail, PathPick, SaveItem } from "../types.slint";
 import { GameSavesGroup } from "game-saves.slint";
 import { GameHeader } from "game-header.slint";
 import { GameActions } from "game-actions.slint";
@@ -46,6 +47,11 @@ export component GameSettingsPage inherits Rectangle {
     in property <bool> sync-can-act: false;
     in property <bool> sync-pending: false;
     in property <bool> sync-busy: false;
+    // 「浏览…」:系统里有没有可用的文件对话框(没有就灰掉按钮),以及没有时的理由。
+    in property <bool> browse-enabled: true;
+    in property <string> path-hint: "";
+    // 刚挑回来的值:窗口只能推一个令牌过来,填哪个框由**这一页**决定(见 types.slint)。
+    in property <PathPick> path-pick: { token: 0, target: -1, value: "" };
 
     callback back();
     callback launch();
@@ -56,6 +62,9 @@ export component GameSettingsPage inherits Rectangle {
 
     callback game-dir-changed(string);
     callback exe-changed(string);
+    callback browse-game-dir();
+    callback browse-exe();
+    callback browse-save(int);
     callback ratio-changed(string);
     callback algo-picked(int);
     callback sharpness-changed(int);
@@ -113,6 +122,13 @@ export component GameSettingsPage inherits Rectangle {
     init => { root.seed-copy(); }
     changed seed => { root.seed-copy(); }
 
+    // 「浏览…」挑回来的值:只填那一个框(别的一个都不碰 —— 用户手上可能还有
+    // 半截没改完的输入)。`token` 每次都变,所以同一个路径再挑一次也会触发。
+    changed path-pick => {
+        if root.path-pick.target == 0 { root.game-dir = root.path-pick.value; }
+        if root.path-pick.target == 1 { root.exe-path = root.path-pick.value; }
+    }
+
     background: #00000000;
     Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
 
@@ -147,10 +163,12 @@ export component GameSettingsPage inherits Rectangle {
                     CardRow {
                         title: "游戏根目录";
                         description: "启动时的 CWD,也是 relative 存档路径的基准。";
-                        TextField {
+                        PathField {
                             field-width: 340px;
                             text <=> root.game-dir;
                             edited(text) => { root.game-dir-changed(text); }
+                            browse-enabled: root.browse-enabled;
+                            browse-clicked => { root.browse-game-dir(); }
                             placeholder: "/path/to/game";
                         }
                     }
@@ -158,11 +176,25 @@ export component GameSettingsPage inherits Rectangle {
                     CardRow {
                         title: "可执行文件";
                         description: "exe 的完整路径。";
-                        TextField {
+                        PathField {
                             field-width: 340px;
                             text <=> root.exe-path;
                             edited(text) => { root.exe-changed(text); }
+                            browse-enabled: root.browse-enabled;
+                            browse-clicked => { root.browse-exe(); }
                             placeholder: "/path/to/game.exe";
+                        }
+                    }
+                    if root.path-hint != "" : VerticalLayout {
+                        Divider { }
+                        VerticalLayout {
+                            padding: 12px;
+                            Text {
+                                text: root.path-hint;
+                                font-size: 11px;
+                                color: Tokens.text-3;
+                                wrap: word-wrap;
+                            }
                         }
                     }
                 }
@@ -286,6 +318,8 @@ export component GameSettingsPage inherits Rectangle {
                 GameSavesGroup {
                     saves: root.saves;
                     save-kinds: root.save-kinds;
+                    browse-enabled: root.browse-enabled;
+                    path-hint: root.path-hint;
                     open-save <=> root.open-save;
                     open-save-kind <=> root.open-save-kind;
                     add-save => { root.add-save(); }
@@ -296,6 +330,7 @@ export component GameSettingsPage inherits Rectangle {
                     }
                     path-changed(index, text) => { root.save-path-changed(index, text); }
                     exclude-changed(index, text) => { root.save-exclude-changed(index, text); }
+                    browse-save(index) => { root.browse-save(index); }
                 }
             }
 

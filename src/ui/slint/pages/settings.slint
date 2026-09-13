@@ -8,7 +8,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
 import { Divider, RevealItem } from "../widgets/base.slint";
-import { TextField } from "../widgets/controls.slint";
+import { PathField } from "../widgets/path-field.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { HotkeyState } from "../types.slint";
@@ -34,6 +34,9 @@ export component SettingsPage inherits ScrollView {
     in property <string> wine-default: "";
     in property <string> wine-environment: "";
     in property <[string]> wine-detected: [];
+    // 「浏览…」:系统里有没有可用的文件对话框(没有就灰掉按钮),以及没有时的理由。
+    in property <bool> browse-enabled: true;
+    in property <string> path-hint: "";
 
     // ── 快捷键 ────────────────────────────────────────────────────────────
     in property <HotkeyState> hotkeys: {
@@ -44,6 +47,7 @@ export component SettingsPage inherits ScrollView {
     callback service-start();
     callback service-stop();
     callback wine-prefix-changed(string);
+    callback browse-wine-prefix();
     callback save-wine-prefix();
     callback clear-wine-prefix();
 
@@ -156,10 +160,12 @@ export component SettingsPage inherits ScrollView {
                     HorizontalLayout {
                         spacing: 8px;
                         alignment: center;
-                        TextField {
+                        PathField {
                             field-width: 300px;
                             text <=> root.wine-prefix;
                             edited(text) => { root.wine-prefix-changed(text); }
+                            browse-enabled: root.browse-enabled;
+                            browse-clicked => { root.browse-wine-prefix(); }
                             placeholder: "留空即自动探测";
                         }
                         AccentButton {
@@ -171,6 +177,18 @@ export component SettingsPage inherits ScrollView {
                             label: "自动";
                             button-width: 68px;
                             clicked => { root.clear-wine-prefix(); }
+                        }
+                    }
+                }
+                if root.path-hint != "" : VerticalLayout {
+                    Divider { }
+                    VerticalLayout {
+                        padding: 12px;
+                        Text {
+                            text: root.path-hint;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
                         }
                     }
                 }

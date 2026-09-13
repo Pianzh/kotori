@@ -33,11 +33,24 @@ mod window_test;
 
 pub(super) fn render(ui: &mut Ui) {
     push_shell(ui);
+    push_browse(ui);
     push_games(ui);
     push_detail(ui);
     push_add(ui);
     push_sync(ui);
     push_settings(ui);
+}
+/// 「浏览…」:按钮能不能点,以及不能点时那行理由。
+///
+/// 一个窗口级属性而不是每页一份:能不能用只取决于**这台机器**上有没有文件对话框
+/// (见 `crate::picker`),和哪个输入框无关。
+fn push_browse(ui: &mut Ui) {
+    let app = &ui.app;
+    let w = &ui.window;
+    push_bool(w.get_browse_enabled(), app.can_browse(), |v| {
+        w.set_browse_enabled(v)
+    });
+    push_str(w.get_path_hint(), &app.path_hint(), |v| w.set_path_hint(v));
 }
 fn push_shell(ui: &mut Ui) {
     let app = &ui.app;

@@ -394,6 +394,94 @@ fn join_windows(base: &Path, relative: &str) -> PathBuf {
     path
 }
 
+// ── 反方向:用户用「浏览…」挑了一个真实路径 → 档案里那种写法 ──────────────────
+//
+// 上面那个方向是给"启动游戏 / 同步存档"用的,这个是给**界面**用的:选择框回来的
+// 永远是本机的真实路径,而档案里存的必须是能跨系统的那三种写法之一(ADR-008)。
+// 转换失败时给的是一句人能照做的话 —— 界面直接把这句话显示给用户。
+
+/// 本机路径 → `relative` 写法(相对游戏根目录)。
+///
+/// 挑到游戏目录**外面**时明确拒绝:`relative` 的语义就是"相对这个游戏",塞一份绝对
+/// 路径进去只会在另一台机器上变成另一个位置。宁可选不了,也不要存一个假的相对路径。
+pub fn to_relative_path(game_dir: &Path, picked: &Path) -> Result<String, String> {
+    let relative = picked.strip_prefix(game_dir).map_err(|_| {
+        format!(
+            "只能选游戏根目录({})里面的位置才能写成 relative;要么把存档放进游戏目录,\
+             要么把这一行改成 absolute。",
+            game_dir.display()
+        )
+    })?;
+
+    // Windows 上 `Path::display` 会用 `\` 分隔,而档案里两种写法都吃(见 join_windows),
+    // 统一成 `/` 是为了让同一份配置在两个系统上都好看。
+    let text = relative
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/");
+    if text.is_empty() {
+        return Err("选的是游戏根目录本身,不是它里面的某个位置。".to_string());
+    }
+    Ok(text)
+}
+
+/// 本机路径 → `windows` 写法(`%APPDATA%\Game\save`)。
+///
+/// 认的是**路径的形状**而不是"这是哪个 prefix":任何 `…/drive_c/users/<用户名>/…`
+/// 都是一个 Windows 用户目录,它后面那一段就是 Windows 眼里的相对路径。这样不需要
+/// 先知道游戏用的是哪个 prefix —— 连游戏自带的便携 prefix 也照样认得出。
+pub fn to_windows_token(picked: &Path) -> Result<String, String> {
+    let segments: Vec<&str> = picked
+        .components()
+        .map(|part| part.as_os_str().to_str().unwrap_or_default())
+        .collect();
+
+    // `drive_c/users/<user>` 之后就是 Windows 用户目录里面的相对路径。
+    let user_at = segments.windows(3).position(|window| {
+        window[0].eq_ignore_ascii_case("drive_c")
+            && window[1].eq_ignore_ascii_case("users")
+            && !window[2].is_empty()
+    });
+    let Some(user_at) = user_at else {
+        return Err(format!(
+            "{} 不在某个 wine prefix 的用户目录里(drive_c/users/<用户名>),写不成跨平台的令牌;\
+             请挑 prefix 用户目录里的位置,或者把这一行改成 absolute。",
+            picked.display()
+        ));
+    };
+    let tail = &segments[user_at + 3..];
+    if tail.is_empty() {
+        return Ok("%USERPROFILE%".to_string());
+    }
+
+    // 最长匹配优先:`AppData/Local` 必须赢过任何更短的前缀(`%USERPROFILE%` 的映射
+    // 是空的,它只在前面的令牌都不匹配时才兜底)。
+    let mut best: Option<(&str, &str)> = None;
+    for (token, mapped) in TOKENS {
+        if mapped.is_empty() || tail.len() < mapped.split('/').count() {
+            continue;
+        }
+        let matches = mapped
+            .split('/')
+            .zip(tail)
+            .all(|(want, got)| want.eq_ignore_ascii_case(got));
+        if matches && best.is_none_or(|(_, best)| mapped.len() > best.len()) {
+            best = Some((token, mapped));
+        }
+    }
+
+    let (token, skip) = best.unwrap_or(("%USERPROFILE%", ""));
+    let rest = &tail[skip.split('/').filter(|s| !s.is_empty()).count()..];
+
+    let mut text = token.to_string();
+    for segment in rest {
+        text.push('\\');
+        text.push_str(segment);
+    }
+    Ok(text)
+}
+
 /// The Windows user directory inside a prefix (`drive_c/users/<user>`).
 ///
 /// The name depends on how the prefix was made: plain wine uses the Linux
@@ -579,6 +667,65 @@ mod tests {
             err.contains("%APPDATA%"),
             "the message should list the tokens"
         );
+    }
+
+    /// 「浏览…」挑回来的本机路径 → 档案里的写法:两个方向必须能对上(挑完存进去,
+    /// 下次启动时再解析出来,得回到同一个地方)。
+    #[test]
+    fn a_picked_path_turns_into_the_written_form_and_back() {
+        // relative:只在游戏目录里面才成立,出来就明说。
+        assert_eq!(
+            to_relative_path(
+                Path::new("/games/demo"),
+                Path::new("/games/demo/savedata/x")
+            )
+            .unwrap(),
+            "savedata/x"
+        );
+        let outside =
+            to_relative_path(Path::new("/games/demo"), Path::new("/elsewhere/save")).unwrap_err();
+        assert!(outside.contains("absolute"), "{outside}");
+        assert!(to_relative_path(Path::new("/games/demo"), Path::new("/games/demo")).is_err());
+
+        let prefix = FakePrefix::new("reverse", &["tester"]);
+        let user = prefix.path().join("drive_c/users/tester");
+        for (picked, written) in [
+            (
+                user.join("AppData/Roaming/Game/save"),
+                "%APPDATA%\\Game\\save",
+            ),
+            // 长前缀优先:AppData/Local 不能被更短的规则吃掉。
+            (user.join("AppData/Local/Game"), "%LOCALAPPDATA%\\Game"),
+            (user.join("Documents/Game"), "%DOCUMENTS%\\Game"),
+            (user.join("Saved Games/Game"), "%SAVEDGAMES%\\Game"),
+            // 用户目录里的其它地方(桌面、下载……)用 %USERPROFILE% 兜底,照样跨系统。
+            (user.join("Desktop/Game"), "%USERPROFILE%\\Desktop\\Game"),
+            (user.clone(), "%USERPROFILE%"),
+        ] {
+            assert_eq!(
+                to_windows_token(&picked).unwrap(),
+                written,
+                "for {picked:?}"
+            );
+
+            // 反过来解析:回到挑出来的那个位置。
+            let back = resolve_save_path(
+                &SaveRoot::WinePrefix(prefix.path()),
+                Path::new("/games/demo"),
+                &SavePath::new(SavePathKind::Windows, written),
+            )
+            .unwrap();
+            assert_eq!(back, picked, "for {written}");
+        }
+    }
+
+    /// 不在任何 prefix 里的路径写不成令牌 —— 说清楚,别编一个 `C:\...` 出来
+    /// (那种东西在真 Windows 上必然解析失败,ADR-008)。
+    #[test]
+    fn a_path_outside_a_prefix_is_refused_with_a_way_out() {
+        let err = to_windows_token(Path::new("/opt/saves/demo")).unwrap_err();
+        assert!(err.contains("drive_c"), "{err}");
+        assert!(err.contains("absolute"), "{err}");
     }
 
     #[test]

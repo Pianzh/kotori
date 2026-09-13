@@ -24,6 +24,24 @@ pub enum SyncField {
     PasswordAgain,
 }
 
+/// 「浏览…」要往哪个输入框里填。
+///
+/// 一个枚举而不是"页面上第几个框":回调是各页各自声明的(`wire.rs` 里一对一映射),
+/// 所以这里多一点名字换来的是"改一个页面不会串到另一个页面"。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathTarget {
+    /// 添加游戏页的两个框。
+    NewGameDir,
+    NewExe,
+    /// 单个游戏设置页:路径那一组的两个框。
+    GameDir,
+    Exe,
+    /// 单个游戏设置页:第几行存档位置。
+    SavePath(usize),
+    /// 设置页:wine prefix。
+    WinePrefix,
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     TabChanged(Tab),
@@ -74,6 +92,14 @@ pub enum Message {
     ClearWinePrefix,
     WinePrefixSaved(Result<(), String>),
     WineStatusLoaded(Result<WineStatus, String>),
+
+    // ── 「浏览…」:借系统自己的对话框挑一个位置 ──────────────────────────────
+    /// 这台机器上有没有可用的对话框(没有就给出理由)。开机问一次。
+    PickerProbed(Result<(), String>),
+    /// 用户点了「浏览…」。
+    PickPath(PathTarget),
+    /// 对话框回来了:`Ok(None)` 是用户取消,`Err` 是它根本打不开。
+    PathPicked(PathTarget, Result<Option<std::path::PathBuf>, String>),
     /// 设置页的「后台服务」:手动把守护进程拉起来 / 停掉(以前只能敲命令行)。
     ServiceStart,
     ServiceStarted(Result<String, String>),

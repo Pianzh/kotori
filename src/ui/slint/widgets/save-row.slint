@@ -6,6 +6,7 @@
 import { Tokens } from "../theme.slint";
 import { IconButton } from "base.slint";
 import { TextField } from "controls.slint";
+import { StdButton } from "buttons.slint";
 import { Select } from "select.slint";
 import { SaveItem } from "../types.slint";
 
@@ -18,9 +19,12 @@ export component SaveRow inherits Rectangle {
     in property <string> placeholder: "存放路径";
     in property <bool> open: false;
     in property <[string]> kinds;
+    // 「浏览…」:系统里没有文件对话框时灰掉(理由由页面那行灰字说)。
+    in property <bool> browse-enabled: true;
     callback kind-clicked(Point);
     callback path-changed(string);
     callback exclude-changed(string);
+    callback browse-clicked();
     callback remove-clicked();
 
     height: layout.preferred-height;
@@ -46,8 +50,17 @@ export component SaveRow inherits Rectangle {
             edited(text) => { root.path-changed(text); }
         }
 
+        // 挑回来的路径要先过一遍 `wine.rs` 的翻译(relative / %APPDATA% 令牌),
+        // 所以这里只是"请对话框出来",填什么由 Rust 决定。
+        StdButton {
+            label: "浏览…";
+            button-width: 64px;
+            button-enabled: root.browse-enabled;
+            clicked => { root.browse-clicked(); }
+        }
+
         TextField {
-            field-width: 170px;
+            field-width: 150px;
             text: root.exclude;
             placeholder: "排除:*.log, cache/";
             edited(text) => { root.exclude-changed(text); }

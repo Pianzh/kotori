@@ -69,3 +69,16 @@ export struct HotkeyState {
     unbound: string,
     hint: string,
 }
+
+// 「浏览…」刚挑回来的那个值:告诉单游戏设置页"往哪个框里填"。
+//
+// 为什么不是直接写属性:那一页的输入框由**页面自己**持有(见 game-settings.slint
+// 的文件头),窗口上没有对应的属性可写。所以 Rust 推一个令牌过去,页面自己动手 ——
+// `token` 每次都 +1,这样连"又挑了一次同一个路径"也会真的触发一次 `changed`
+// (属性是按值比较的,值一样就不算变化)。
+export struct PathPick {
+    token: int,
+    // 0 = 游戏根目录、1 = 可执行文件、-1 = 谁也不填。
+    target: int,
+    value: string,
+}

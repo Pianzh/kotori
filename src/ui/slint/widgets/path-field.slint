@@ -1,0 +1,37 @@
+// 一个路径输入框 + 「浏览…」:借系统自己的对话框挑一个位置(见 src/picker.rs)。
+//
+// 单独一个组件,是因为"填一个位置"这件事在界面里有好几处(添加游戏 / 单游戏设置 /
+// wine prefix),而它们要做的事完全一样:手填得进去;点「浏览…」时请系统自己的那个
+// 对话框出来;系统里**没有**这个东西时按钮灰掉,理由由页面里那行灰字说明
+// (用户 2026-09-13:"没有就不能用")。
+//
+// ⚠ 按钮的可用状态不能叫 `enabled`:std-widgets 的 ScrollView 自带一个同名属性。
+
+import { TextField } from "controls.slint";
+import { StdButton } from "buttons.slint";
+
+export component PathField inherits HorizontalLayout {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <length> field-width: 300px;
+    in property <bool> browse-enabled: true;
+    callback edited(string);
+    callback browse-clicked();
+
+    spacing: 8px;
+    alignment: center;
+
+    TextField {
+        field-width: root.field-width;
+        text <=> root.text;
+        placeholder: root.placeholder;
+        edited(value) => { root.edited(value); }
+    }
+
+    StdButton {
+        label: "浏览…";
+        button-width: 76px;
+        button-enabled: root.browse-enabled;
+        clicked => { root.browse-clicked(); }
+    }
+}

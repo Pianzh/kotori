@@ -5,6 +5,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
 import { Divider, RevealItem } from "../widgets/base.slint";
+import { PathField } from "../widgets/path-field.slint";
 import { TextField } from "../widgets/controls.slint";
 import { AccentButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
@@ -18,10 +19,15 @@ export component AddPage inherits ScrollView {
     // 成功与失败都走这一行(Rust 决定措辞):空串表示还没动作。
     in property <string> message: "";
     in property <bool> message-ok: true;
+    // 「浏览…」:系统里有没有可用的文件对话框,以及没有时的理由。
+    in property <bool> browse-enabled: true;
+    in property <string> path-hint: "";
 
     callback name-changed(string);
     callback game-dir-changed(string);
     callback exe-changed(string);
+    callback browse-game-dir();
+    callback browse-exe();
     callback create-requested();
 
     Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
@@ -74,10 +80,12 @@ export component AddPage inherits ScrollView {
                 CardRow {
                     title: "游戏根目录";
                     description: "启动时的工作目录,也是 relative 存档路径的基准。";
-                    TextField {
+                    PathField {
                         field-width: 340px;
                         text <=> root.new-game-dir;
                         edited(text) => { root.game-dir-changed(text); }
+                        browse-enabled: root.browse-enabled;
+                        browse-clicked => { root.browse-game-dir(); }
                         placeholder: "/path/to/game";
                     }
                 }
@@ -85,11 +93,25 @@ export component AddPage inherits ScrollView {
                 CardRow {
                     title: "可执行文件";
                     description: "exe 的完整路径。";
-                    TextField {
+                    PathField {
                         field-width: 340px;
                         text <=> root.new-exe;
                         edited(text) => { root.exe-changed(text); }
+                        browse-enabled: root.browse-enabled;
+                        browse-clicked => { root.browse-exe(); }
                         placeholder: "/path/to/game.exe";
+                    }
+                }
+                if root.path-hint != "" : VerticalLayout {
+                    Divider { }
+                    VerticalLayout {
+                        padding: 12px;
+                        Text {
+                            text: root.path-hint;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
                     }
                 }
                 Divider { }

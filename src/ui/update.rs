@@ -875,13 +875,13 @@ impl App {
                                 draft.exe_original = attempt.draft.exe.clone();
                                 draft.save_paths_original = attempt.draft.save_paths.clone();
                             }
-                            self.saved_msg = Some("已自动保存".to_string());
+                            self.report_saved("已自动保存", true);
                         }
                     }
                     Err(e) => {
                         // 草稿一个字都不动:用户正在打的那半截不能被回包吃掉。
                         if same_game {
-                            self.saved_msg = Some(format!("保存失败: {e}"));
+                            self.report_saved(format!("保存失败: {e}"), false);
                         } else {
                             // 已经离开那一页了,别把失败吞掉 —— 挂到顶部的错误条上。
                             self.error = Some(format!("自动保存失败: {e}"));
@@ -914,12 +914,49 @@ impl App {
                     .as_ref()
                     .is_none_or(|draft| draft.matches_stored(&game));
                 self.draft = Some(Draft::from_game(&game));
-                self.saved_msg = Some(if unchanged {
-                    "没有未保存的改动".to_string()
-                } else {
-                    "已还原为已保存的设置".to_string()
-                });
+                self.report_saved(
+                    if unchanged {
+                        "没有未保存的改动"
+                    } else {
+                        "已还原为已保存的设置"
+                    },
+                    true,
+                );
                 Task::none()
+            }
+            Message::PickerProbed(result) => {
+                if let Err(reason) = &result {
+                    // 不是"出错了",是这台机器上确实没有 —— 记一条,界面据此灰掉按钮。
+                    tracing::info!("系统文件选择框不可用：{reason}");
+                }
+                self.picker = Some(result);
+                Task::none()
+            }
+            Message::PickPath(target) => {
+                // 框已经开着:再来一次只会弹出第二个(用户点的是同一个按钮)。
+                if self.picking {
+                    return Task::none();
+                }
+                self.picking = true;
+                let request = self.pick_request(target);
+                Task::perform(
+                    async move { crate::picker::pick(request).await },
+                    move |result| Message::PathPicked(target, result),
+                )
+            }
+            Message::PathPicked(target, result) => {
+                self.picking = false;
+                match result {
+                    // 用户按了取消:什么都不改(这不是失败)。
+                    Ok(None) => Task::none(),
+                    Err(e) => {
+                        // 顶部错误条(它不挑页面),并顺手把按钮灰掉 —— 打不开就别再让人点。
+                        self.error = Some(format!("打开文件选择框失败：{e}"));
+                        self.picker = Some(Err(e));
+                        Task::none()
+                    }
+                    Ok(Some(path)) => self.apply_picked_path(target, &path),
+                }
             }
         }
     }

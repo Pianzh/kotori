@@ -12,6 +12,11 @@
 //!   — driven through the message loop (not by poking properties), so what is
 //!   photographed is the real page for that state.
 //! - `KOTORI_UI_SEED_DELAY=<ms>` — when to apply the three above (default 1500).
+//! - `KOTORI_UI_PICK=<path>` — pretend the file dialog returned that path for the
+//!   single game page's 游戏根目录. It is the only way to photograph the
+//!   "「浏览…」→ 页面自己填那个框" chain: the test backend's
+//!   `accessible_value()` is stale, so a headless assertion would lie (see
+//!   `render/window_test.rs`).
 //!
 //! PPM on purpose: it needs no encoder, and one line of Python turns it into
 //! something viewable.
@@ -58,6 +63,13 @@ fn seed() {
         with_ui(|ui| {
             ui.window.set_game_open(true);
             ui.reseed_detail();
+        });
+    }
+    // 走过整条链:草稿 → 令牌 → 页面自己填那个输入框(只有快照看得见,见文件头)。
+    if let Ok(path) = std::env::var("KOTORI_UI_PICK") {
+        let _ = with_ui(|ui| {
+            ui.app
+                .apply_picked_path(PathTarget::GameDir, std::path::Path::new(&path))
         });
     }
 }
