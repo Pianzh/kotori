@@ -86,11 +86,6 @@ impl Daemon {
             return Err("这个名称无法生成合法的游戏 ID，请换一个".to_string());
         }
 
-        let output = crate::display::primary_resolution_or((
-            crate::config::FALLBACK_OUTPUT_WIDTH,
-            crate::config::FALLBACK_OUTPUT_HEIGHT,
-        ));
-
         self.mutate_config(|config| {
             if config.games.contains_key(&id) {
                 return Err(format!("已存在同名游戏（ID: {id}）"));
@@ -106,7 +101,7 @@ impl Daemon {
                     wine_prefix: None,
                     watch_only: false,
                     process_name: None,
-                    scale_profile: crate::config::ScaleProfile::default_for(output),
+                    scale_profile: crate::config::ScaleProfile::default_for(),
                     created_at: chrono::Utc::now(),
                 },
             );

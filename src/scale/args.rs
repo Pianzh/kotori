@@ -23,14 +23,23 @@ pub fn sharpness_to_gamescope(sharpness: u32) -> u32 {
 /// (it swallows the following argument), and `--fsr-sharpness` is only an
 /// alias of `--sharpness` that older code passed with the wrong polarity.
 ///
-/// `-W/-H` are the *initial* output size in physical pixels, taken from
-/// [`ScaleProfile::output_size`] (scaling ratio first, stored output size as the
-/// fallback). gamescope treats them as a preferred size only: a nested window
-/// stays freely resizable and gamescope follows every resize by adopting the new
-/// content size as its output size, so `follow_window = false` cannot be
-/// expressed here — it needs the compositor (see `config::ScaleProfile`).
-pub fn build_gamescope_args(profile: &ScaleProfile, game_cmd: &[String]) -> Vec<String> {
-    let (output_width, output_height) = profile.output_size();
+/// `-W/-H` are the *initial* output size in physical pixels, from
+/// [`ScaleProfile::output_size_for`]: whatever the profile explicitly asks for,
+/// otherwise `screen` — and "the screen" is exactly what "start maximised" means,
+/// because these are only the *initial* size. gamescope treats them as a preferred
+/// size only: a nested window stays freely resizable and gamescope follows every
+/// resize by adopting the new content size as its output size, so
+/// `follow_window = false` cannot be expressed here — it needs the compositor (see
+/// `config::ScaleProfile`).
+///
+/// `screen` is passed in rather than probed here, so this stays a pure function of
+/// its arguments and no test depends on the machine it runs on.
+pub fn build_gamescope_args(
+    profile: &ScaleProfile,
+    screen: (u32, u32),
+    game_cmd: &[String],
+) -> Vec<String> {
+    let (output_width, output_height) = profile.output_size_for(screen);
     let mut args = vec![
         "-w".into(),
         profile.internal_width.to_string(),
@@ -102,9 +111,13 @@ mod tests {
             algorithm,
             framerate_limit: None,
             force_fullscreen: false,
-            ..ScaleProfile::default_for((2560, 1440))
+            ..ScaleProfile::default_for()
         }
     }
+
+    /// The display every test pretends to be on. Passed in explicitly, so these
+    /// tests say nothing about the machine they happen to run on.
+    const SCREEN: (u32, u32) = (2560, 1440);
 
     fn game_cmd() -> Vec<String> {
         vec!["/usr/bin/wine".into(), "/games/x/game.exe".into()]
@@ -117,9 +130,12 @@ mod tests {
             .unwrap_or_else(|| panic!("{flag} missing from {args:?}"))
     }
 
+    /// 两样都留空时,窗口就开在屏幕上 —— `-W/-H` 等于屏幕分辨率(＝启动即最大化)。
     #[test]
-    fn resolutions_are_mapped_to_geometry_flags() {
-        let args = build_gamescope_args(&profile(ScaleAlgorithm::Integer), &game_cmd());
+    fn an_empty_profile_opens_at_the_screen_size() {
+        let p = profile(ScaleAlgorithm::Integer);
+        assert_eq!(p.explicit_output_size(), None);
+        let args = build_gamescope_args(&p, SCREEN, &game_cmd());
         assert_eq!(
             &args[..8],
             ["-w", "1280", "-h", "720", "-W", "2560", "-H", "1440"]
@@ -127,26 +143,27 @@ mod tests {
     }
 
     #[test]
-    fn a_scaling_ratio_overrides_the_stored_output_size() {
+    fn a_scaling_ratio_wins_over_an_explicit_size() {
         let mut p = profile(ScaleAlgorithm::Fsr { sharpness: 2 });
-        p.output_width = 2560;
-        p.output_height = 1440;
+        p.output_width = Some(2560);
+        p.output_height = Some(1440);
         p.scale_ratio = Some(1.5);
-        let args = build_gamescope_args(&p, &game_cmd());
-        // 1280x720 * 1.5, not the stored 2560x1440.
+        let args = build_gamescope_args(&p, SCREEN, &game_cmd());
+        // 1280x720 * 1.5,不是填进去的 2560x1440。
         assert_eq!(
             &args[..8],
             ["-w", "1280", "-h", "720", "-W", "1920", "-H", "1080"]
         );
     }
 
+    /// 高级设置里填了尺寸就以它为准 —— 不填才按屏幕。
     #[test]
-    fn without_a_ratio_the_stored_output_size_still_drives_the_window() {
+    fn an_explicit_size_overrides_the_screen() {
         let mut p = profile(ScaleAlgorithm::Integer);
-        p.output_width = 1600;
-        p.output_height = 900;
+        p.output_width = Some(1600);
+        p.output_height = Some(900);
         assert_eq!(p.scale_ratio, None);
-        let args = build_gamescope_args(&p, &game_cmd());
+        let args = build_gamescope_args(&p, SCREEN, &game_cmd());
         assert_eq!(
             &args[..8],
             ["-w", "1280", "-h", "720", "-W", "1600", "-H", "900"]
@@ -161,15 +178,18 @@ mod tests {
         pinned.follow_window = false;
         let floating = profile(ScaleAlgorithm::Integer);
         assert_eq!(
-            build_gamescope_args(&pinned, &game_cmd()),
-            build_gamescope_args(&floating, &game_cmd())
+            build_gamescope_args(&pinned, SCREEN, &game_cmd()),
+            build_gamescope_args(&floating, SCREEN, &game_cmd())
         );
     }
 
     #[test]
     fn fsr_uses_the_316_scaler_model() {
-        let args =
-            build_gamescope_args(&profile(ScaleAlgorithm::Fsr { sharpness: 2 }), &game_cmd());
+        let args = build_gamescope_args(
+            &profile(ScaleAlgorithm::Fsr { sharpness: 2 }),
+            SCREEN,
+            &game_cmd(),
+        );
         assert_eq!(args[index_of(&args, "-S") + 1], "fit");
         assert_eq!(args[index_of(&args, "-F") + 1], "fsr");
         assert_eq!(args[index_of(&args, "--sharpness") + 1], "12");
@@ -185,7 +205,7 @@ mod tests {
             ScaleAlgorithm::Integer,
             ScaleAlgorithm::Bilinear,
         ] {
-            let args = build_gamescope_args(&profile(algorithm), &game_cmd());
+            let args = build_gamescope_args(&profile(algorithm), SCREEN, &game_cmd());
             assert!(!args.iter().any(|a| a == "-s"), "legacy -s in {args:?}");
             assert!(
                 !args.iter().any(|a| a == "--fsr-sharpness"),
@@ -205,32 +225,37 @@ mod tests {
 
     #[test]
     fn nis_and_bilinear_pick_their_filters() {
-        let nis = build_gamescope_args(&profile(ScaleAlgorithm::Nis { sharpness: 5 }), &game_cmd());
+        let nis = build_gamescope_args(
+            &profile(ScaleAlgorithm::Nis { sharpness: 5 }),
+            SCREEN,
+            &game_cmd(),
+        );
         assert_eq!(nis[index_of(&nis, "-F") + 1], "nis");
         assert_eq!(nis[index_of(&nis, "--sharpness") + 1], "0");
 
-        let bilinear = build_gamescope_args(&profile(ScaleAlgorithm::Bilinear), &game_cmd());
+        let bilinear =
+            build_gamescope_args(&profile(ScaleAlgorithm::Bilinear), SCREEN, &game_cmd());
         assert_eq!(bilinear[index_of(&bilinear, "-F") + 1], "linear");
         assert!(!bilinear.iter().any(|a| a == "--sharpness"));
     }
 
     #[test]
     fn integer_scaling_uses_nearest_neighbour() {
-        let args = build_gamescope_args(&profile(ScaleAlgorithm::Integer), &game_cmd());
+        let args = build_gamescope_args(&profile(ScaleAlgorithm::Integer), SCREEN, &game_cmd());
         assert_eq!(args[index_of(&args, "-S") + 1], "integer");
         assert_eq!(args[index_of(&args, "-F") + 1], "nearest");
     }
 
     #[test]
     fn optional_flags_are_only_emitted_when_requested() {
-        let bare = build_gamescope_args(&profile(ScaleAlgorithm::Integer), &game_cmd());
+        let bare = build_gamescope_args(&profile(ScaleAlgorithm::Integer), SCREEN, &game_cmd());
         assert!(!bare.iter().any(|a| a == "-r"));
         assert!(!bare.iter().any(|a| a == "-f"));
 
         let mut p = profile(ScaleAlgorithm::Integer);
         p.framerate_limit = Some(60);
         p.force_fullscreen = true;
-        let full = build_gamescope_args(&p, &game_cmd());
+        let full = build_gamescope_args(&p, SCREEN, &game_cmd());
         assert_eq!(full[index_of(&full, "-r") + 1], "60");
         assert!(full.iter().any(|a| a == "-f"));
     }
@@ -242,7 +267,7 @@ mod tests {
     /// 用户要的"最大化"了,而且还能自己缩小。
     #[test]
     fn a_brand_new_profile_launches_as_a_resizable_window() {
-        let args = build_gamescope_args(&ScaleProfile::default_for((2560, 1440)), &game_cmd());
+        let args = build_gamescope_args(&ScaleProfile::default_for(), SCREEN, &game_cmd());
         assert!(
             !args.iter().any(|a| a == "-f"),
             "默认不该带 -f,否则窗口在合成器眼里就不可缩放了：{args:?}"
@@ -251,7 +276,7 @@ mod tests {
 
     #[test]
     fn game_command_follows_the_separator_last() {
-        let args = build_gamescope_args(&profile(ScaleAlgorithm::Integer), &game_cmd());
+        let args = build_gamescope_args(&profile(ScaleAlgorithm::Integer), SCREEN, &game_cmd());
         let sep = index_of(&args, "--");
         assert_eq!(&args[sep + 1..], ["/usr/bin/wine", "/games/x/game.exe"]);
         // Nothing after the separator may look like a gamescope flag.

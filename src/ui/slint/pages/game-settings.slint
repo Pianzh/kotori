@@ -22,7 +22,7 @@ import { GameItem, GameDetail, SaveItem } from "../types.slint";
 import { GameSavesGroup } from "game-saves.slint";
 import { GameHeader } from "game-header.slint";
 import { GameActions } from "game-actions.slint";
-import { GameScaleGroup } from "game-scale.slint";
+import { GameScaleAdvancedGroup, GameScaleGroup } from "game-scale.slint";
 import { GameSyncGroup } from "game-sync.slint";
 
 
@@ -212,26 +212,42 @@ export component GameSettingsPage inherits Rectangle {
                     algo-index: root.algo-index;
                     algo-open: root.open-select == 0;
                     show-sharpness: root.show-sharpness;
-                    ratio <=> root.ratio;
                     sharpness <=> root.sharpness;
                     internal-w <=> root.internal-w;
                     internal-h <=> root.internal-h;
-                    output-w <=> root.output-w;
-                    output-h <=> root.output-h;
                     fullscreen <=> root.fullscreen;
                     framerate <=> root.framerate;
                     algo-toggled(anchor) => {
                         root.algo-anchor = anchor;
                         root.open-select = root.open-select == 0 ? -1 : 0;
                     }
-                    ratio-changed(text) => { root.ratio-changed(text); }
                     sharpness-changed(value) => { root.sharpness-changed(value); }
                     internal-w-changed(text) => { root.internal-w-changed(text); }
                     internal-h-changed(text) => { root.internal-h-changed(text); }
-                    output-w-changed(text) => { root.output-w-changed(text); }
-                    output-h-changed(text) => { root.output-h-changed(text); }
                     fullscreen-toggled(value) => { root.fullscreen-toggled(value); }
                     framerate-changed(text) => { root.framerate-changed(text); }
+                }
+            }
+
+            // ── 高级设置 ──────────────────────────────────────────────
+            // 和下面那两行灰字共用 step 5:它们说的就是这两项,一起进场更像一整段。
+            RevealItem {
+                revealed: root.revealed;
+                step: 5;
+                bottom: 8px;
+                SectionTitle { text: "高级设置"; }
+            }
+            RevealItem {
+                revealed: root.revealed;
+                step: 5;
+                bottom: 24px;
+                GameScaleAdvancedGroup {
+                    ratio <=> root.ratio;
+                    output-w <=> root.output-w;
+                    output-h <=> root.output-h;
+                    ratio-changed(text) => { root.ratio-changed(text); }
+                    output-w-changed(text) => { root.output-w-changed(text); }
+                    output-h-changed(text) => { root.output-h-changed(text); }
                 }
             }
 

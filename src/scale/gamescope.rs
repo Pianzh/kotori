@@ -7,6 +7,7 @@ use tokio::process::Command;
 use tokio::sync::RwLock;
 use tokio::sync::broadcast;
 
+use crate::config::{FALLBACK_OUTPUT_HEIGHT, FALLBACK_OUTPUT_WIDTH};
 use crate::process;
 use crate::util::executor::find_binary;
 
@@ -79,15 +80,17 @@ impl GamescopeScaleEngine {
             ));
         };
 
+        let screen = screen_size();
         let session = ScaleSession {
             session_id: uuid::Uuid::new_v4().to_string(),
             game_id: Some(spec.game_id.to_string()),
             gamescope_pid: None,
             profile: spec.profile.clone(),
-            runtime_ratio: profile_ratio(spec.profile),
+            runtime_ratio: profile_ratio(spec.profile, screen),
             started_at: std::time::Instant::now(),
             process_group: None,
             process_name: Some(name.to_string()),
+            output_size: spec.profile.output_size_for(screen),
             // Nothing was launched, so there is no prefix of ours to close.
             wine_prefix: None,
             watch_only: true,
@@ -153,11 +156,11 @@ impl GamescopeScaleEngine {
     }
 
     /// Wrap a game command so it runs inside gamescope via `gamescope <args> -- wine game.exe`.
-    fn compose_command(&self, spec: &LaunchSpec<'_>) -> Vec<String> {
+    fn compose_command(&self, spec: &LaunchSpec<'_>, screen: (u32, u32)) -> Vec<String> {
         let mut game_cmd = vec![self.wine_path.clone(), spec.exe.to_string()];
         game_cmd.extend(spec.args.iter().cloned());
 
-        build_gamescope_args(spec.profile, &game_cmd)
+        build_gamescope_args(spec.profile, screen, &game_cmd)
     }
 
     /// The settings gamescope is actually running with, as far as anyone can tell.
@@ -266,7 +269,7 @@ impl GamescopeScaleEngine {
         let ratio = if action == ScaleAction::ToggleScale {
             super::toggled_ratio(
                 session.runtime_ratio,
-                super::toggle_target(&session.profile),
+                super::toggle_target(&session.profile, session.output_size),
             )
         } else {
             let index = super::ladder_index_for(session.runtime_ratio);
@@ -293,6 +296,18 @@ impl GamescopeScaleEngine {
         );
         Ok(format!("输出 {width}x{height}（{ratio}×）"))
     }
+}
+
+/// The output a launch should size its window for, as far as kotori can tell before
+/// the window exists.
+///
+/// The window is placed by the compositor, not by us, so this is the *primary*
+/// output rather than the one the game will land on — good enough for the initial
+/// size, and the only thing available this early. A profile with no explicit size
+/// can still be corrected afterwards against whichever output the window actually
+/// turned up on (that is what `desktop::kde` is for).
+fn screen_size() -> (u32, u32) {
+    crate::display::primary_resolution_or((FALLBACK_OUTPUT_WIDTH, FALLBACK_OUTPUT_HEIGHT))
 }
 
 /// Wine's own half of a teardown.
@@ -407,7 +422,8 @@ impl ScaleEngine for GamescopeScaleEngine {
             return Err(ScaleError::WineNotFound);
         }
 
-        let cmd = self.compose_command(spec);
+        let screen = screen_size();
+        let cmd = self.compose_command(spec, screen);
         tracing::debug!("gamescope command: {} {:?}", self.gamescope_path, cmd);
 
         // Run gamescope (and thus wine) with the *game root* as CWD: many
@@ -484,10 +500,11 @@ impl ScaleEngine for GamescopeScaleEngine {
             game_id: Some(spec.game_id.to_string()),
             gamescope_pid: Some(pgid),
             profile: spec.profile.clone(),
-            runtime_ratio: profile_ratio(spec.profile),
+            runtime_ratio: profile_ratio(spec.profile, screen),
             started_at: std::time::Instant::now(),
             process_group: Some(pgid),
             process_name: spec.process_name.map(str::to_string),
+            output_size: spec.profile.output_size_for(screen),
             wine_prefix: spec.wine_prefix.map(Path::to_path_buf),
             watch_only: false,
         };
@@ -700,7 +717,7 @@ impl ScaleEngine for GamescopeScaleEngine {
                 session.profile.algorithm,
                 crate::config::ScaleAlgorithm::Integer
             ),
-            current_resolution: (session.profile.output_width, session.profile.output_height),
+            current_resolution: session.output_size,
         })
     }
 }

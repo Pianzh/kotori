@@ -123,6 +123,14 @@ pub struct ScaleSession {
     /// `None` for watch-only sessions: kotori launched nothing.
     pub gamescope_pid: Option<u32>,
     pub profile: ScaleProfile,
+    /// The output size this session's window was opened at, in physical pixels:
+    /// what the profile asked for, or the screen (see
+    /// [`ScaleProfile::output_size_for`]).
+    ///
+    /// Recorded at launch rather than re-derived, because it is the one number that
+    /// actually describes this session — and the one clients want when they ask what
+    /// resolution a running game is being drawn at.
+    pub output_size: (u32, u32),
     /// The upscale ratio this session is running at *now*: output pixels ÷ the
     /// game's own resolution. It starts as whatever the profile asked for and is
     /// stepped by the window-scale hotkeys.

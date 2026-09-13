@@ -691,9 +691,10 @@ fn manual_add_and_wine_settings_over_ipc() {
     assert_eq!(created["game_dir"], game_dir.to_string_lossy().as_ref());
     assert_eq!(created["watch_only"], false);
     assert!(created["save_paths"].as_array().unwrap().is_empty());
-    // New games inherit the detected output resolution (pinned by the fixture).
-    assert_eq!(created["scale_profile"]["output_width"], 2560);
-    assert_eq!(created["scale_profile"]["output_height"], 1440);
+    // 新游戏的窗口尺寸**留空**(＝启动时按屏幕算,见 `ScaleProfile::output_size_for`):
+    // 档案里不再记录某台机器的分辨率,换显示器/换机器都不用重扫。`null` 就是"自动"。
+    assert!(created["scale_profile"]["output_width"].is_null());
+    assert!(created["scale_profile"]["output_height"].is_null());
 
     // Duplicates, a missing exe and a bad game dir are refused.
     let response = fixture.rpc(

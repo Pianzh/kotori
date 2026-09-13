@@ -64,13 +64,15 @@ pub fn list() -> anyhow::Result<()> {
     for (id, game) in &config.games {
         println!("  {} - {}", id, game.name);
         println!("    exe:     {}", game.exe_path.display());
+        let scale = &game.scale_profile;
+        // 留空＝自动(启动时按屏幕算),所以这里要说"自动"而不是印两个 0。
+        let output = match scale.explicit_output_size() {
+            Some((width, height)) => format!("{width}x{height}"),
+            None => "自动（按屏幕）".to_string(),
+        };
         println!(
-            "    scale:   {} ({}x{} -> {}x{})",
-            game.scale_profile.name,
-            game.scale_profile.internal_width,
-            game.scale_profile.internal_height,
-            game.scale_profile.output_width,
-            game.scale_profile.output_height,
+            "    scale:   {} ({}x{} -> {})",
+            scale.name, scale.internal_width, scale.internal_height, output,
         );
         println!(
             "    saved:   {}",
@@ -135,7 +137,7 @@ pub fn scan(directory: &Path) -> anyhow::Result<Vec<GameConfig>> {
                 wine_prefix: None,
                 watch_only: false,
                 process_name: None,
-                scale_profile: ScaleProfile::default_for(output),
+                scale_profile: ScaleProfile::default_for(),
                 created_at: chrono::Utc::now(),
             });
         }
@@ -475,18 +477,12 @@ mod tests {
         assert_eq!(found[0].name, "GameA");
         assert_eq!(file_name(&found[0].exe_path), "game.chs.exe");
         assert_eq!(found[0].scale_profile.internal_width, 1280);
-        // The output resolution comes from display discovery, never a constant.
-        let expected = crate::display::primary_resolution_or((
-            crate::config::FALLBACK_OUTPUT_WIDTH,
-            crate::config::FALLBACK_OUTPUT_HEIGHT,
-        ));
-        assert_eq!(
-            (
-                found[0].scale_profile.output_width,
-                found[0].scale_profile.output_height
-            ),
-            expected
-        );
+        // 扫描**不再**把某台机器的分辨率写进档案(2026-09-13):窗口尺寸留空,
+        // 启动时按游戏实际落在的那块屏算(见 `ScaleProfile::output_size_for`)。
+        // 这样换显示器、换机器都不用重新扫描。
+        assert_eq!(found[0].scale_profile.output_width, None);
+        assert_eq!(found[0].scale_profile.output_height, None);
+        assert_eq!(found[0].scale_profile.explicit_output_size(), None);
     }
 
     #[test]

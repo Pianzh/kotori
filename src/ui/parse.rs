@@ -305,9 +305,8 @@ pub(super) fn profile_from_draft(draft: &Draft) -> Result<ScaleProfile, String> 
         .ok_or_else(|| format!("未知缩放算法: {}", draft.algo))?
         .with_sharpness(draft.sharpness);
 
-    // An empty field means "no ratio": the stored output size keeps driving the
-    // window. A half-typed number is an error the user can fix, not a silent
-    // fallback that would throw their ratio away.
+    // 留空＝自动(启动时按屏幕算);填了才覆盖。半截数字是用户能改的错误,
+    // 不是"静默退回自动" —— 那等于把他刚填的东西悄悄丢掉。
     let scale_ratio = match draft.scale_ratio.trim() {
         "" => None,
         raw => Some(
@@ -321,8 +320,8 @@ pub(super) fn profile_from_draft(draft: &Draft) -> Result<ScaleProfile, String> 
         algorithm,
         internal_width: parse_u32(&draft.internal_w, "游戏分辨率宽")?,
         internal_height: parse_u32(&draft.internal_h, "游戏分辨率高")?,
-        output_width: parse_u32(&draft.output_w, "输出分辨率宽")?,
-        output_height: parse_u32(&draft.output_h, "输出分辨率高")?,
+        output_width: parse_optional_u32(&draft.output_w, "输出分辨率宽")?,
+        output_height: parse_optional_u32(&draft.output_h, "输出分辨率高")?,
         scale_ratio,
         follow_window: draft.follow_window,
         framerate_limit: if draft.framerate.trim().is_empty() {
@@ -338,6 +337,14 @@ pub(super) fn parse_u32(s: &str, label: &str) -> Result<u32, String> {
     s.trim()
         .parse::<u32>()
         .map_err(|_| format!("{label} 必须是正整数"))
+}
+
+/// 留空的数字字段＝"不说"(＝自动),不是 0。
+pub(super) fn parse_optional_u32(s: &str, label: &str) -> Result<Option<u32>, String> {
+    if s.trim().is_empty() {
+        return Ok(None);
+    }
+    parse_u32(s, label).map(Some)
 }
 
 pub(super) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
@@ -399,8 +406,8 @@ pub(super) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     u32_field(scale, "internal_height").unwrap_or(0),
                 ),
                 output: (
-                    u32_field(scale, "output_width").unwrap_or(0),
-                    u32_field(scale, "output_height").unwrap_or(0),
+                    u32_field(scale, "output_width"),
+                    u32_field(scale, "output_height"),
                 ),
                 scale_ratio: scale
                     .and_then(|s| s.get("scale_ratio"))
@@ -505,7 +512,7 @@ mod tests {
         assert_eq!(game.algo, "Nis");
         assert_eq!(game.sharpness, 4);
         assert_eq!(game.internal, (1920, 1080));
-        assert_eq!(game.output, (2560, 1440));
+        assert_eq!(game.output, (Some(2560), Some(1440)));
         assert_eq!(game.framerate, Some(60));
         assert!(!game.fullscreen);
     }
@@ -551,7 +558,7 @@ mod tests {
         let profile = profile_from_draft(&draft).unwrap();
         assert_eq!(profile.algorithm, ScaleAlgorithm::Integer);
         assert_eq!(profile.internal_width, 640);
-        assert_eq!(profile.output_width, 1280);
+        assert_eq!(profile.output_width, Some(1280));
     }
 
     #[test]

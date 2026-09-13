@@ -335,10 +335,12 @@ mod tests {
                 scale_profile: ScaleProfile {
                     algorithm: ScaleAlgorithm::Nis { sharpness: 4 },
                     framerate_limit: Some(60),
-                    // Explicitly *not* the default, so the round trip below proves
-                    // a non-default value survives being written and read back.
+                    // Explicitly *not* the defaults, so the round trip below proves
+                    // non-default values survive being written and read back.
                     force_fullscreen: true,
-                    ..ScaleProfile::default_for((2560, 1440))
+                    output_width: Some(2560),
+                    output_height: Some(1440),
+                    ..ScaleProfile::default_for()
                 },
                 wine_prefix: None,
                 created_at: chrono::Utc::now(),
@@ -362,7 +364,7 @@ mod tests {
             ScaleAlgorithm::Nis { sharpness: 4 }
         );
         assert_eq!(game.scale_profile.framerate_limit, Some(60));
-        assert_eq!(game.scale_profile.output_width, 2560);
+        assert_eq!(game.scale_profile.output_width, Some(2560));
         assert!(game.scale_profile.force_fullscreen);
         assert_eq!(game.save_paths.len(), 1);
 

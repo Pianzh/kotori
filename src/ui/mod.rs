@@ -146,7 +146,7 @@ mod test_support {
             algo: "Fsr".into(),
             sharpness: 2,
             internal: (1280, 720),
-            output: (2560, 1440),
+            output: (Some(2560), Some(1440)),
             scale_ratio: None,
             follow_window: true,
             fullscreen: true,

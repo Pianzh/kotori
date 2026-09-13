@@ -499,7 +499,7 @@ mod tests {
             wine_prefix: None,
             watch_only: false,
             process_name: None,
-            scale_profile: ScaleProfile::default_for((1920, 1080)),
+            scale_profile: ScaleProfile::default_for(),
             created_at: chrono::Utc::now(),
         }
     }

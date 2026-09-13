@@ -1,4 +1,6 @@
-// 「缩放」那一组(单游戏设置页用):倍数、算法、锐度、全屏、两个分辨率、帧率。
+// 「缩放」那一组(单游戏设置页用):算法、锐度、全屏、游戏分辨率、帧率。
+// 「缩放倍数」与「输出分辨率」在下面的 GameScaleAdvancedGroup 里 —— 它们默认留空
+// (=自动),混在常用项里会让人以为必须填。
 //
 // 它自己不管浮层:算法下拉打开时把**锚点**报给页面,由页面在 ScrollView 之外画浮层
 // (Slint 的 PopupWindow 既不能定位也不能逐帧动画,见 UI_GUIDE §7)。
@@ -15,38 +17,21 @@ export component GameScaleGroup inherits Rectangle {
     in property <bool> algo-open: false;
     in property <bool> show-sharpness: true;
 
-    in-out property <string> ratio: "";
     in-out property <int> sharpness: 0;
     in-out property <string> internal-w: "";
     in-out property <string> internal-h: "";
-    in-out property <string> output-w: "";
-    in-out property <string> output-h: "";
     in-out property <bool> fullscreen: false;
     in-out property <string> framerate: "";
 
     callback algo-toggled(Point);
-    callback ratio-changed(string);
     callback sharpness-changed(int);
     callback internal-w-changed(string);
     callback internal-h-changed(string);
-    callback output-w-changed(string);
-    callback output-h-changed(string);
     callback fullscreen-toggled(bool);
     callback framerate-changed(string);
 
     height: group.height;
     group := Group {
-                    CardRow {
-                        title: "缩放倍数";
-                        description: "输出像素 ÷ 游戏分辨率。留空则沿用输出分辨率。";
-                        TextField {
-                            field-width: 120px;
-                            text <=> root.ratio;
-                            edited(text) => { root.ratio-changed(text); }
-                            placeholder: "例如 1.75";
-                        }
-                    }
-                    Divider { }
                     CardRow {
                         title: "缩放算法";
                         description: "决定画面放大的方式。";
@@ -111,26 +96,6 @@ export component GameScaleGroup inherits Rectangle {
                     }
                     Divider { }
                     CardRow {
-                        title: "输出分辨率";
-                        description: "窗口实际开多大。填了缩放倍数时它只作参考。";
-                        HorizontalLayout {
-                            spacing: 6px;
-                            alignment: center;
-                            TextField {
-                                field-width: 88px;
-                                text <=> root.output-w;
-                                edited(text) => { root.output-w-changed(text); }
-                            }
-                            Text { text: "×"; font-size: 13px; color: Tokens.text-3; vertical-alignment: center; }
-                            TextField {
-                                field-width: 88px;
-                                text <=> root.output-h;
-                                edited(text) => { root.output-h-changed(text); }
-                            }
-                        }
-                    }
-                    Divider { }
-                    CardRow {
                         title: "帧率限制";
                         description: "留空表示不限。";
                         TextField {
@@ -138,6 +103,57 @@ export component GameScaleGroup inherits Rectangle {
                             text <=> root.framerate;
                             edited(text) => { root.framerate-changed(text); }
                             placeholder: "60";
+                        }
+                    }
+    }
+}
+
+// 「高级设置」:平时不用碰的两项 —— **留空＝自动**。
+//
+// 单独一张卡片、而不是塞在上面那张里,是因为这两项的正常状态就是空着:混在常用项里
+// 会让人以为必须填。填了才覆盖自动算出来的窗口尺寸,判定只有一处
+// (`ScaleProfile::output_size_for`)。
+export component GameScaleAdvancedGroup inherits Rectangle {
+    in-out property <string> ratio: "";
+    in-out property <string> output-w: "";
+    in-out property <string> output-h: "";
+
+    callback ratio-changed(string);
+    callback output-w-changed(string);
+    callback output-h-changed(string);
+
+    height: group.height;
+    group := Group {
+                    CardRow {
+                        title: "缩放倍数";
+                        description: "留空＝自动(按屏幕开满)。填了就按它开窗:输出像素 ÷ 游戏分辨率。";
+                        TextField {
+                            field-width: 120px;
+                            text <=> root.ratio;
+                            edited(text) => { root.ratio-changed(text); }
+                            placeholder: "自动";
+                        }
+                    }
+                    Divider { }
+                    CardRow {
+                        title: "输出分辨率";
+                        description: "留空＝自动(跟随屏幕,也就是启动即最大化)。填了窗口就开这个尺寸;填了上面的倍数时以倍数优先。";
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: center;
+                            TextField {
+                                field-width: 88px;
+                                text <=> root.output-w;
+                                edited(text) => { root.output-w-changed(text); }
+                                placeholder: "自动";
+                            }
+                            Text { text: "×"; font-size: 13px; color: Tokens.text-3; vertical-alignment: center; }
+                            TextField {
+                                field-width: 88px;
+                                text <=> root.output-h;
+                                edited(text) => { root.output-h-changed(text); }
+                                placeholder: "自动";
+                            }
                         }
                     }
     }

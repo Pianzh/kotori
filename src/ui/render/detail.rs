@@ -74,8 +74,19 @@ fn game_detail(game: &UiGame) -> GameDetail {
         sharpness: game.sharpness.min(5) as i32,
         internal_w: game.internal.0.to_string().into(),
         internal_h: game.internal.1.to_string().into(),
-        output_w: game.output.0.to_string().into(),
-        output_h: game.output.1.to_string().into(),
+        // 留空的输出尺寸＝自动(启动时按屏幕算),所以空字符串是正常值,不是漏填。
+        output_w: game
+            .output
+            .0
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+            .into(),
+        output_h: game
+            .output
+            .1
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+            .into(),
         fullscreen: game.fullscreen,
         framerate: game
             .framerate

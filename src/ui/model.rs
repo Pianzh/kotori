@@ -279,9 +279,11 @@ pub struct UiGame {
     pub algo: String,
     pub sharpness: u32,
     pub internal: (u32, u32),
-    pub output: (u32, u32),
-    /// Scaling ratio as stored; `None` means the profile still drives the output
-    /// size from `output` alone.
+    /// Explicit window size, or `None` on either half for "work it out at launch" —
+    /// which is what an empty field in the advanced section means.
+    pub output: (Option<u32>, Option<u32>),
+    /// Scaling ratio as stored; `None` means the window opens at the screen's size
+    /// (see `ScaleProfile::output_size_for`).
     pub scale_ratio: Option<f32>,
     /// Whether the window size may drive the output size (i.e. dragging the
     /// window rescales live).
@@ -344,8 +346,8 @@ impl Draft {
             sharpness: game.sharpness,
             internal_w: game.internal.0.to_string(),
             internal_h: game.internal.1.to_string(),
-            output_w: game.output.0.to_string(),
-            output_h: game.output.1.to_string(),
+            output_w: game.output.0.map(|v| v.to_string()).unwrap_or_default(),
+            output_h: game.output.1.map(|v| v.to_string()).unwrap_or_default(),
             scale_ratio: game.scale_ratio.map(|r| r.to_string()).unwrap_or_default(),
             follow_window: game.follow_window,
             fullscreen: game.fullscreen,

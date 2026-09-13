@@ -34,8 +34,18 @@ pub struct ScaleProfile {
     pub algorithm: ScaleAlgorithm,
     pub internal_width: u32,
     pub internal_height: u32,
-    pub output_width: u32,
-    pub output_height: u32,
+    /// An explicit window size, in physical pixels — the override for the automatic
+    /// "open at the screen's size".
+    ///
+    /// **Empty by default** (user's call, 2026-09-13): both fields moved into the
+    /// UI's advanced section, and a profile that names neither a ratio nor a size
+    /// simply gets the screen. `Option` rather than `0`-means-unset, because "the
+    /// user did not say" and "1920x1080" are different answers and a sentinel would
+    /// have to be special-cased everywhere they are read.
+    #[serde(default)]
+    pub output_width: Option<u32>,
+    #[serde(default)]
+    pub output_height: Option<u32>,
     /// Upscale factor relative to the internal resolution. When present it
     /// *wins* over `output_*` — those stay for profiles written before ratios
     /// existed, and for the UI, which still edits them.
@@ -126,15 +136,20 @@ impl ScaleAlgorithm {
 }
 
 impl ScaleProfile {
-    /// Sensible default profile for a game on an output of `output` resolution.
-    pub fn default_for(output: (u32, u32)) -> Self {
+    /// Sensible default profile for a new game.
+    ///
+    /// Takes no screen, because kotori no longer writes one machine's resolution
+    /// into a game's config: the window size is worked out at launch from the output
+    /// the game actually lands on (see [`ScaleProfile::output_size_for`]), so moving
+    /// the config to another monitor — or another machine — needs no re-scan.
+    pub fn default_for() -> Self {
         Self {
             name: "默认".to_string(),
             algorithm: ScaleAlgorithm::Fsr { sharpness: 2 },
             internal_width: DEFAULT_INTERNAL_WIDTH,
             internal_height: DEFAULT_INTERNAL_HEIGHT,
-            output_width: output.0,
-            output_height: output.1,
+            output_width: None,
+            output_height: None,
             scale_ratio: None,
             follow_window: true,
             framerate_limit: None,
@@ -142,20 +157,38 @@ impl ScaleProfile {
         }
     }
 
-    /// Output size in *physical* pixels for this profile.
+    /// The window size this profile *asks for*, if the user filled either field in.
     ///
-    /// `scale_ratio` wins when it is usable; otherwise the stored `output_*`
-    /// pair is used, so old profiles behave exactly as before. gamescope's
-    /// `-W/-H` expect physical pixels and divide by the compositor's
-    /// fractional scale themselves, so no desktop-scale maths belongs here.
-    pub fn output_size(&self) -> (u32, u32) {
-        let Some(ratio) = self.scale_ratio.filter(|r| r.is_finite() && *r > 0.0) else {
-            return (self.output_width, self.output_height);
-        };
-        let upscale = |value: u32| -> u32 {
-            ((value as f32 * ratio).round() as i64).clamp(1, MAX_RESOLUTION as i64) as u32
-        };
-        (upscale(self.internal_width), upscale(self.internal_height))
+    /// `scale_ratio` wins when it is usable — it is the more specific statement.
+    /// Otherwise the stored pair does, but only when **both** halves are there: half
+    /// a size is not a size, and inventing the other half would be worse than
+    /// ignoring what was typed.
+    ///
+    /// `None` means "work it out", which [`ScaleProfile::output_size_for`] does from
+    /// the screen. Both are physical pixels, which is what gamescope's `-W/-H`
+    /// expect; gamescope divides by the compositor's fractional scale itself, so no
+    /// desktop-scale maths belongs here.
+    pub fn explicit_output_size(&self) -> Option<(u32, u32)> {
+        if let Some(ratio) = self.scale_ratio.filter(|r| r.is_finite() && *r > 0.0) {
+            let upscale = |value: u32| -> u32 {
+                ((value as f32 * ratio).round() as i64).clamp(1, MAX_RESOLUTION as i64) as u32
+            };
+            return Some((upscale(self.internal_width), upscale(self.internal_height)));
+        }
+
+        match (self.output_width, self.output_height) {
+            (Some(width), Some(height)) if width > 0 && height > 0 => Some((width, height)),
+            _ => None,
+        }
+    }
+
+    /// Where the nested window opens: what the profile asked for, or the screen.
+    ///
+    /// Opening at the screen's size **is** what "maximised" means here, and it is all
+    /// `-W/-H` do: they are the *initial* size, and the compositor may resize from
+    /// there. Nothing pins the window — that would be `-f`, i.e. `force_fullscreen`.
+    pub fn output_size_for(&self, screen: (u32, u32)) -> (u32, u32) {
+        self.explicit_output_size().unwrap_or(screen)
     }
 
     /// Clamp values that are representable but outside the supported range.
@@ -181,10 +214,22 @@ impl ScaleProfile {
         for (label, value) in [
             ("游戏分辨率宽", self.internal_width),
             ("游戏分辨率高", self.internal_height),
+        ] {
+            if value == 0 || value > MAX_RESOLUTION {
+                return Err(format!(
+                    "{label} 必须在 1..={MAX_RESOLUTION} 之间（当前 {value}）"
+                ));
+            }
+        }
+
+        // 留空是正常状态(＝自动),不是错误;填了才要求合法。
+        for (label, value) in [
             ("输出分辨率宽", self.output_width),
             ("输出分辨率高", self.output_height),
         ] {
-            if value == 0 || value > MAX_RESOLUTION {
+            if let Some(value) = value
+                && (value == 0 || value > MAX_RESOLUTION)
+            {
                 return Err(format!(
                     "{label} 必须在 1..={MAX_RESOLUTION} 之间（当前 {value}）"
                 ));
@@ -249,34 +294,51 @@ mod tests {
         assert!(ScaleAlgorithm::from_label("Lanczos").is_none());
     }
 
+    /// 留空＝自动(启动时按屏幕来);填了才覆盖。用户 2026-09-13 定的语义。
     #[test]
-    fn a_scaling_ratio_decides_the_output_size() {
-        let mut profile = ScaleProfile::default_for((2560, 1440));
-        // No ratio: the stored output pair is what gamescope is told.
-        assert_eq!(profile.output_size(), (2560, 1440));
+    fn an_empty_profile_gets_the_screen_and_a_filled_one_overrides_it() {
+        let screen = (2560, 1440);
+        let mut profile = ScaleProfile::default_for();
 
-        profile.scale_ratio = Some(2.0);
-        assert_eq!(profile.output_size(), (2560, 1440));
+        // 两样都留空:窗口就开在屏幕上 —— 这就是"启动即最大化"。
+        assert_eq!(profile.explicit_output_size(), None);
+        assert_eq!(profile.output_size_for(screen), screen);
+
+        // 输出分辨率只填一半不算数:半个尺寸不是尺寸,宁可忽略也不要瞎猜另一半。
+        profile.output_width = Some(1600);
+        assert_eq!(profile.explicit_output_size(), None);
+        assert_eq!(profile.output_size_for(screen), screen);
+
+        profile.output_height = Some(900);
+        assert_eq!(profile.explicit_output_size(), Some((1600, 900)));
+        assert_eq!(profile.output_size_for(screen), (1600, 900));
+
+        // 倍数更具体,填了就以它为准。
         profile.scale_ratio = Some(1.5);
-        assert_eq!(profile.output_size(), (1920, 1080));
+        assert_eq!(profile.explicit_output_size(), Some((1920, 1080)));
 
-        // Odd ratios round to whole pixels and never collapse to zero.
+        // 小倍数会取整,但绝不塌成 0 尺寸窗口。
         profile.internal_width = 1000;
         profile.internal_height = 999;
         profile.scale_ratio = Some(0.25);
-        assert_eq!(profile.output_size(), (250, 250));
+        assert_eq!(profile.explicit_output_size(), Some((250, 250)));
 
-        // An unusable ratio falls back instead of producing a zero-size window.
+        // 不可用的倍数(0 / NaN)当没填,退回尺寸。
         profile.scale_ratio = Some(0.0);
-        assert_eq!(profile.output_size(), (2560, 1440));
-        // ...and an absurd one is clamped rather than overflowing.
+        assert_eq!(profile.explicit_output_size(), Some((1600, 900)));
+        profile.scale_ratio = Some(f32::NAN);
+        assert_eq!(profile.explicit_output_size(), Some((1600, 900)));
+        // ...而离谱的那个是夹取,不是溢出。
         profile.scale_ratio = Some(1e30);
-        assert_eq!(profile.output_size(), (MAX_RESOLUTION, MAX_RESOLUTION));
+        assert_eq!(
+            profile.explicit_output_size(),
+            Some((MAX_RESOLUTION, MAX_RESOLUTION))
+        );
     }
 
     #[test]
     fn profile_validation_bounds_the_scaling_ratio() {
-        let mut profile = ScaleProfile::default_for((2560, 1440));
+        let mut profile = ScaleProfile::default_for();
 
         profile.scale_ratio = Some(MIN_SCALE_RATIO / 2.0);
         assert!(profile.validate().unwrap_err().contains("缩放比例"));
@@ -297,7 +359,7 @@ mod tests {
 
     #[test]
     fn profile_validation_rejects_impossible_values() {
-        let ok = ScaleProfile::default_for((2560, 1440));
+        let ok = ScaleProfile::default_for();
         assert!(ok.validate().is_ok());
 
         let mut zero = ok.clone();
@@ -305,8 +367,17 @@ mod tests {
         assert!(zero.validate().unwrap_err().contains("游戏分辨率宽"));
 
         let mut huge = ok.clone();
-        huge.output_height = MAX_RESOLUTION + 1;
+        huge.output_height = Some(MAX_RESOLUTION + 1);
         assert!(huge.validate().unwrap_err().contains("输出分辨率高"));
+
+        // 留空是正常状态(＝自动),0 才是错的。
+        let mut empty = ok.clone();
+        empty.output_width = None;
+        empty.output_height = None;
+        assert!(empty.validate().is_ok());
+        let mut zero_out = ok.clone();
+        zero_out.output_width = Some(0);
+        assert!(zero_out.validate().unwrap_err().contains("输出分辨率宽"));
 
         let mut fps = ok.clone();
         fps.framerate_limit = Some(0);
@@ -326,7 +397,7 @@ mod tests {
     fn normalize_clamps_sharpness_only() {
         let mut profile = ScaleProfile {
             algorithm: ScaleAlgorithm::Nis { sharpness: 99 },
-            ..ScaleProfile::default_for((1920, 1080))
+            ..ScaleProfile::default_for()
         };
         profile.normalize();
         assert_eq!(
@@ -338,7 +409,7 @@ mod tests {
 
         let mut unit = ScaleProfile {
             algorithm: ScaleAlgorithm::Integer,
-            ..ScaleProfile::default_for((1920, 1080))
+            ..ScaleProfile::default_for()
         };
         unit.normalize();
         assert_eq!(unit.algorithm, ScaleAlgorithm::Integer);

@@ -603,7 +603,11 @@ mod tests {
             algorithm: crate::config::ScaleAlgorithm::Nis { sharpness: 4 },
             framerate_limit: Some(60),
             force_fullscreen: false,
-            ..crate::config::ScaleProfile::default_for((1920, 1080))
+            // 显式填过的输出尺寸(留空＝自动,所以这里必须自己给),顺手一起验证
+            // 它不会在 RPC 上被丢掉。
+            output_width: Some(1920),
+            output_height: Some(1080),
+            ..crate::config::ScaleProfile::default_for()
         };
         config.games.insert(
             "demo".into(),
@@ -649,7 +653,7 @@ mod tests {
                     wine_prefix: None,
                     watch_only: false,
                     process_name: None,
-                    scale_profile: crate::config::ScaleProfile::default_for((1920, 1080)),
+                    scale_profile: crate::config::ScaleProfile::default_for(),
                     created_at: chrono::Utc::now(),
                 },
             );

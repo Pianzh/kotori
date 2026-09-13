@@ -76,11 +76,15 @@ pub fn ladder_step(index: usize, up: bool) -> usize {
 /// size, which is exactly what the ladder's first step means. This is where a
 /// session's ratio starts, so the first hotkey press steps from what the user is
 /// looking at rather than from a default.
-pub fn profile_ratio(profile: &ScaleProfile) -> f32 {
+///
+/// `screen` is needed because a profile that names neither a ratio nor a size opens
+/// at the screen's size (see [`ScaleProfile::output_size_for`]): what the user is
+/// looking at depends on the display, not on the config alone.
+pub fn profile_ratio(profile: &ScaleProfile, screen: (u32, u32)) -> f32 {
     if profile.internal_width == 0 {
         return 1.0;
     }
-    let (width, _) = profile.output_size();
+    let (width, _) = profile.output_size_for(screen);
     let ratio = width as f32 / profile.internal_width as f32;
     if ratio.is_finite() && ratio > 0.0 {
         ratio
@@ -97,11 +101,12 @@ pub const RATIO_EPSILON: f32 = 0.001;
 
 /// The ratio one press of the scaling hotkey scales to — 「设定比例」.
 ///
-/// That is the profile's own ratio: `scale_ratio` when the profile sets one, and
-/// otherwise the ratio its `output_*` pair encodes. It is the same number the
-/// launch used, so the key always means "the size this game is configured for".
-pub fn toggle_target(profile: &ScaleProfile) -> f32 {
-    profile_ratio(profile)
+/// That is the ratio the launch used: `scale_ratio` when the profile sets one, and
+/// otherwise whatever the window was opened at. `screen` is only consulted when the
+/// profile has no explicit size, so passing a running session's own `output_size`
+/// is always the right call there.
+pub fn toggle_target(profile: &ScaleProfile, screen: (u32, u32)) -> f32 {
+    profile_ratio(profile, screen)
 }
 
 /// One press of the scaling hotkey: to the configured ratio, or back to 1:1.
@@ -250,7 +255,7 @@ mod tests {
             algorithm,
             framerate_limit: None,
             force_fullscreen: false,
-            ..ScaleProfile::default_for((2560, 1440))
+            ..ScaleProfile::default_for()
         }
     }
 
@@ -282,20 +287,20 @@ mod tests {
 
     #[test]
     fn profile_ratio_is_the_one_the_launch_arguments_encode() {
+        let screen = (2560, 1440);
         let profile = profile(ScaleAlgorithm::Fsr { sharpness: 2 });
-        // `profile()` is 1280x720 into the display resolution; whatever that is,
-        // the ratio is what the output size says it is.
-        let (width, _) = profile.output_size();
-        assert_eq!(profile_ratio(&profile), width as f32 / 1280.0);
+        // `profile()` 是 1280x720 开在这块屏上;比例就是输出尺寸说出来的那个。
+        let (width, _) = profile.output_size_for(screen);
+        assert_eq!(profile_ratio(&profile, screen), width as f32 / 1280.0);
 
         let mut unscaled = profile;
         unscaled.scale_ratio = Some(1.25);
-        assert_eq!(profile_ratio(&unscaled), 1.25);
-        assert_eq!(ladder_index_for(profile_ratio(&unscaled)), 1);
+        assert_eq!(profile_ratio(&unscaled, screen), 1.25);
+        assert_eq!(ladder_index_for(profile_ratio(&unscaled, screen)), 1);
 
         let mut broken = unscaled;
         broken.internal_width = 0;
-        assert_eq!(profile_ratio(&broken), 1.0);
+        assert_eq!(profile_ratio(&broken, screen), 1.0);
     }
 
     #[test]
@@ -306,7 +311,7 @@ mod tests {
         configured.scale_ratio = Some(1.25);
 
         // The target is what the profile configures, not the ladder's next step.
-        assert_eq!(toggle_target(&configured), 1.25);
+        assert_eq!(toggle_target(&configured, (2560, 1440)), 1.25);
 
         // Launched straight into the configured size: the first press cancels,
         // which is the only reading of "press again to turn it off" that works
@@ -317,11 +322,11 @@ mod tests {
         // Pressing from a size nobody asked for (a ladder step, a dragged
         // window) still lands on the configured ratio rather than toggling off.
         assert_eq!(toggled_ratio(1.75, 1.25), 1.25);
-        // A profile without an explicit ratio uses the one its output size
-        // encodes, so the same key works for games configured the old way.
+        // 没有显式倍数的档案,用的是启动时那块屏给它的倍率,同一个键照样成立。
+        let screen = (2560, 1440);
         let legacy = profile(ScaleAlgorithm::Integer);
-        let expected = profile_ratio(&legacy);
-        assert_eq!(toggle_target(&legacy), expected);
+        let expected = profile_ratio(&legacy, screen);
+        assert_eq!(toggle_target(&legacy, screen), expected);
         assert_eq!(toggled_ratio(expected, expected), 1.0);
         assert_eq!(toggled_ratio(1.0, expected), expected);
     }
