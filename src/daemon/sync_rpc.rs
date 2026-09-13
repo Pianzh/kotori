@@ -1071,7 +1071,12 @@ mod tests {
             "encrypted-file"
         );
         assert_eq!(status["result"]["keyring"]["store"]["locked"], false);
-        assert_eq!(status["result"]["ready"], true, "{status}");
+        // ⚠ 不要断言 `ready`:它还要求 PATH 上有 rclone(`ready = enabled &&
+        // problem.is_none() && rclone.is_some()`),而这条测试讲的是凭据本身 ——
+        // 在没装 rclone 的机器上(CI 就是)它会红得毫无道理。凭据在不在,
+        // 看 `secrets` 与 `ephemeral` 就够了。
+        assert_eq!(status["result"]["secrets"].as_array().unwrap().len(), 2);
+        assert_eq!(status["result"]["keyring"]["ephemeral"], false, "{status}");
 
         // --- the same machine after a restart ------------------------------
         let restarted = Daemon::with_master_file(daemon_config(), path.clone());
@@ -1119,7 +1124,8 @@ mod tests {
         let status = call(&restarted, "sync.status", "").await;
         assert_eq!(status["result"]["keyring"]["store"]["locked"], false);
         assert_eq!(status["result"]["secrets"].as_array().unwrap().len(), 2);
-        assert_eq!(status["result"]["ready"], true, "{status}");
+        // 同上:这里证明"解锁之后凭据回来了",不是"这台机器能同步"。
+        assert_eq!(status["result"]["keyring"]["ephemeral"], false, "{status}");
 
         // Locking again hides them without destroying anything.
         let value = call(&restarted, "sync.lock", "").await;

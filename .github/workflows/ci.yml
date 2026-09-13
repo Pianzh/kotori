@@ -20,6 +20,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # ⚠ 测试**不许依赖 PATH 上的外部程序**(rclone / gamescope / wine / KWin)—— 它们一律
+  # 通过 `KOTORI_RCLONE` 这类变量指向测试自己写的假货。第一次跑 ARM 时被咬过一次:
+  # 一条讲"凭据文件重启后还在"的测试顺手断言了 `sync.status.ready`,而 `ready` 还要求
+  # PATH 上有 rclone ⇒ 在 runner 上红得毫无道理(见 AGENTS.md §9)。
 
 jobs:
   # ── x86_64:格式、lint、全部测试 ─────────────────────────────────────────
