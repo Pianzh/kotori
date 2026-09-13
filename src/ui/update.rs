@@ -11,8 +11,9 @@ impl App {
                 self.draft = None;
                 self.confirm_delete = false;
                 self.error = None;
-                if tab == Tab::Settings {
-                    // Re-read both, they may have changed on disk.
+                if tab == Tab::Settings || tab == Tab::Sync {
+                    // Re-read them all, they may have changed on disk (or in the
+                    // daemon, which is the only writer).
                     return Task::batch([
                         Task::perform(
                             async { load_wine_status().await },
@@ -22,6 +23,7 @@ impl App {
                             async { load_sync_status().await },
                             Message::SyncStatusLoaded,
                         ),
+                        Task::perform(async { load_hotkeys().await }, Message::HotkeysLoaded),
                     ]);
                 }
                 Task::none()
@@ -87,6 +89,7 @@ impl App {
                 Task::none()
             }
             Message::GameSelected(id) => {
+                let mut load_sync = false;
                 if let Some(g) = self.games.iter().find(|g| g.id == id) {
                     self.selected = Some(g.id.clone());
                     self.saved_msg = None;
@@ -94,6 +97,15 @@ impl App {
                     // Seed the form from the *stored* profile. Anything else
                     // means a plain "open + save" silently rewrites settings.
                     self.draft = Some(Draft::from_game(g));
+                    // 这一页现在也显示这个游戏的云存档状况,而 `sync.status` 平时只在
+                    // 打开「云同步」/「设置」页时才读 —— 直接从游戏库点进来时补一次。
+                    load_sync = self.sync_status.is_none();
+                }
+                if load_sync {
+                    return Task::perform(
+                        async { load_sync_status().await },
+                        Message::SyncStatusLoaded,
+                    );
                 }
                 Task::none()
             }
@@ -373,6 +385,17 @@ impl App {
                 // mark the daemon as gone and let the user see it.
                 self.daemon_connected = Some(false);
                 tracing::debug!("status poll failed: {e}");
+                Task::none()
+            }
+
+            Message::HotkeysLoaded(Ok(status)) => {
+                self.hotkeys = Some(status);
+                Task::none()
+            }
+            Message::HotkeysLoaded(Err(e)) => {
+                // Keep the last answer: "we could not ask" is not "there are no
+                // hotkeys", and the page says so on its own when nothing arrived.
+                tracing::debug!("hotkey status failed: {e}");
                 Task::none()
             }
 

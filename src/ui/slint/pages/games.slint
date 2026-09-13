@@ -1,0 +1,211 @@
+// 游戏库:一行一款游戏。**点整行**就打开这款游戏的设置(Win11 里列表项点击即进入),
+// 右侧留一个「启动/停止」按钮做动作,行尾的 chevron 表示"点进去还有内容"。
+//
+// 这一页是纯视图:列表、搜索词、副标题都由 Rust 推(`src/ui/render.rs`),这里只上报意图。
+
+import { ScrollView } from "std-widgets.slint";
+import { Tokens } from "../theme.slint";
+import { Ico, RevealItem, StdButton, TextField, AccentButton } from "../widgets.slint";
+import { GameItem } from "../types.slint";
+
+component GameRow inherits Rectangle {
+    in property <GameItem> game;
+    callback open();
+    callback launch();
+
+    height: 66px;
+    border-radius: Tokens.radius-card;
+    border-width: 1px;
+    border-color: Tokens.stroke;
+    background: ta.has-hover ? Tokens.card-hover : Tokens.card;
+    animate background { duration: 120ms; }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 12px;
+        spacing: 12px;
+
+        // 永远是两行:游戏名 + exe。仅监视的说明不进这里 ——
+        // ⚠ 曾经用第三行 + `visible: false` 藏它,结果**布局里隐藏元素照样占位**,
+        //    两行的游戏下面白空一行,非常难看。要真的不占位只能用 `if`。
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 4px;
+            Text {
+                text: root.game.name;
+                font-size: 14px;
+                font-weight: 600;
+                color: Tokens.text;
+                overflow: elide;
+            }
+            Text {
+                text: root.game.exe;
+                font-size: 11px;
+                color: Tokens.text-3;
+                overflow: elide;
+            }
+        }
+
+        // ⚠ 固定高度的子元素在布局里是**顶对齐**的,不会跟着文字块居中 ⇒ 每个右侧元素
+        //    都套一层 VerticalLayout(alignment: center)。踩过:按钮比左边的文字高出一截。
+        VerticalLayout {
+            alignment: center;
+            Text {
+                text: root.game.state == 1 ? "● 运行中" : (root.game.state == 2 ? "● 仅监视" : "");
+                font-size: 11px;
+                color: root.game.state == 2 ? Tokens.warn : Tokens.ok;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            Text {
+                // 只写数字:字体里的 ×(U+00D7)天生是细的,加粗也粗不起来(微软雅黑 Bold 实测),
+                // 换成汉字「倍」又不好看 —— 所以干脆不带单位,靠列的位置表达"这是缩放倍数"。
+                // 没配倍数的游戏**什么都不显示**,但 min-width 要留着,否则这一列为空的那些行
+                // 会把右边的按钮往右挪,整列就错开了。
+                text: root.game.ratio;
+                font-size: 13px;
+                font-weight: 600;
+                color: Tokens.accent;
+                horizontal-alignment: right;
+                min-width: 40px;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            AccentButton {
+                label: root.game.state != 0
+                    ? "停止"
+                    : (root.game.launching ? "启动中…" : (root.game.watch-only ? "监视" : "启动"));
+                button-width: 84px;
+                button-enabled: !root.game.launching;
+                clicked => { root.launch(); }
+            }
+        }
+
+        Ico { glyph: "\u{E76C}"; icon-size: 12px; tint: Tokens.text-3; width: 12px; }
+    }
+
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.open(); } }
+}
+
+export component GamesPage inherits ScrollView {
+    in property <[GameItem]> games;
+    in property <string> subtitle;
+    // 空列表 / 没有搜索结果时要说的话;空串表示不必说。
+    in property <string> empty;
+    in property <bool> loading: false;
+    in-out property <string> search: "";
+    in-out property <bool> revealed: false;
+
+    callback search-changed(string);
+    callback refresh();
+    callback open-game(string);
+    callback launch(string);
+    callback stop(string);
+
+    Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
+
+    VerticalLayout {
+        // 切页时的横向入场:从右边 40px 滑到位。用"动画 padding"而不是 x ——
+        // 组件实例上的 x 只吃初始值,事后改它页面不会跟(真机量过)。
+        padding-left: root.revealed ? 28px : 68px;
+        animate padding-left { duration: 260ms; easing: ease-out; }
+        padding-right: 28px;
+        padding-top: 12px;
+        padding-bottom: 32px;
+        spacing: 0px;
+
+        RevealItem {
+            revealed: root.revealed;
+            step: 0;
+            bottom: 20px;
+            HorizontalLayout {
+                spacing: 12px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+                    Text { text: "游戏库"; font-size: 28px; font-weight: 600; color: Tokens.text; }
+                    Text {
+                        text: root.subtitle;
+                        font-size: 14px;
+                        color: Tokens.text-3;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    StdButton {
+                        label: root.loading ? "加载中…" : "刷新";
+                        button-width: 84px;
+                        button-enabled: !root.loading;
+                        clicked => { root.refresh(); }
+                    }
+                }
+            }
+        }
+
+        RevealItem {
+            revealed: root.revealed;
+            step: 1;
+            bottom: 16px;
+            TextField {
+                width: 100%;
+                horizontal-stretch: 1;
+                placeholder: "搜索游戏名或路径…";
+                text <=> root.search;
+                edited(text) => { root.search-changed(text); }
+            }
+        }
+
+        // ⚠ 不能用 `visible` 包一行 —— 布局里隐藏元素照样占位。
+        if root.empty != "" : RevealItem {
+            revealed: root.revealed;
+            step: 2;
+            bottom: 8px;
+            Text { text: root.empty; font-size: 13px; color: Tokens.text-3; }
+        }
+
+        for game[index] in root.games : RevealItem {
+            revealed: root.revealed;
+            step: 2 + index;
+            bottom: 8px;
+            GameRow {
+                game: game;
+                open => { root.open-game(game.id); }
+                launch => {
+                    if (game.state != 0) { root.stop(game.id); } else { root.launch(game.id); }
+                }
+            }
+        }
+
+        // 「仅监视」不是个自解释的说法,所以在这儿留一行灰字(悬停提示那套在真机上没弹出来,
+        // 见 UI_GUIDE §7 —— Slint 的 Tooltip 是 PopupWindow 实现的)。
+        RevealItem {
+            revealed: root.revealed;
+            step: 3;
+            bottom: 0px;
+            HorizontalLayout {
+                padding-top: 14px;
+                spacing: 8px;
+                Text {
+                    text: "●";
+                    font-size: 11px;
+                    color: Tokens.warn;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: "仅监视 = 这个游戏由你自己启动(比如从快捷方式),kotori 不替它开 gamescope、也不做缩放,只跟着它的进程;退出后照常自动同步存档。";
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; background: #00000000; }
+    }
+}

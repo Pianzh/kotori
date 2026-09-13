@@ -1,0 +1,450 @@
+// 主窗口:左侧 NavigationView + 右侧内容区。
+//
+// 导航是「一层列表 + 一层详情的就地切换」:游戏库列表点某一行,就在**内容区**换成那款游戏的
+// 设置页(左上角返回),左侧导航保持不动 —— Win11 里这叫 breadcrumb 式下钻,比再开一个窗口省心。
+//
+// 这一层只做两件事:**摆放**(导航 + 内容 + 错误条)与**接线**(把窗口属性交给各页、把各页的
+// 意图转成回调)。所有值都来自 Rust(`src/ui/render.rs` 推属性,`src/ui/wire.rs` 收回调)。
+
+import { Tokens } from "theme.slint";
+import { Gap, NavItem, StdButton } from "widgets.slint";
+import { GameItem, GameDetail, SaveItem, HotkeyState } from "types.slint";
+import { GamesPage } from "pages/games.slint";
+import { GameSettingsPage } from "pages/game-settings.slint";
+import { AddPage } from "pages/add.slint";
+import { SyncPage } from "pages/sync.slint";
+import { SettingsPage } from "pages/settings.slint";
+
+export component AppWindow inherits Window {
+    title: "Kotori";
+    // ⚠ 千万别写 width/height:那等于告诉 Slint「固定尺寸」,它会 set_resizable(false),
+    // 系统层面这个窗口就不可缩放(连平铺也会失效)。初始尺寸要用 preferred-*。
+    preferred-width: 1120px;
+    preferred-height: 740px;
+    // 最宽的一行(卡片里的「描述 + 输入框 + 两个按钮」)约占 640 逻辑像素,
+    // 加上导航 252 与两侧留白 56 —— 低于 1000 就只能靠压缩输入框勉强挤下。
+    min-width: 1000px;
+    min-height: 600px;
+    // 用系统标题栏:自绘那套在 KDE 上拖动会把窗口卡死(Slint 不提供 CSD),详见 UI_GUIDE.md。
+    no-frame: false;
+    background: Tokens.base;
+
+    in-out property <string> ui-font: "Microsoft YaHei UI";
+    default-font-family: root.ui-font;
+    default-font-size: 14px;
+
+    // ── 外壳 ──────────────────────────────────────────────────────────────
+    in-out property <int> tab: 0;                    // 0 游戏库 / 1 添加 / 2 云同步 / 3 设置
+    in-out property <bool> game-open: false;         // 游戏库下钻到单游戏设置
+    in-out property <string> connection-label: "";
+    in-out property <int> connection-state: 0;       // 0 检测中 / 1 已连接 / 2 未连接
+    in-out property <bool> can-reconnect: false;
+    in-out property <string> error: "";
+    in-out property <bool> loading: false;
+
+    callback tab-changed(int);
+    callback refresh();
+
+    // ── 游戏库 ────────────────────────────────────────────────────────────
+    in-out property <[GameItem]> games: [];
+    in-out property <string> library-subtitle: "";
+    in-out property <string> library-empty: "";
+    in-out property <string> search: "";
+
+    callback search-changed(string);
+    callback open-game(string);
+    callback launch(string);
+    callback stop(string);
+
+    // ── 添加游戏 ──────────────────────────────────────────────────────────
+    in-out property <string> new-name: "";
+    in-out property <string> new-game-dir: "";
+    in-out property <string> new-exe: "";
+    in-out property <bool> creating: false;
+    in-out property <string> create-message: "";
+    in-out property <bool> create-message-ok: true;
+
+    callback new-name-changed(string);
+    callback new-game-dir-changed(string);
+    callback new-exe-changed(string);
+    callback create-requested();
+
+    // ── 单个游戏 ──────────────────────────────────────────────────────────
+    in-out property <GameItem> game;
+    in-out property <GameDetail> detail;
+    in-out property <int> detail-seed: 0;
+    in-out property <[SaveItem]> saves: [];
+    in-out property <[string]> algo-options: [];
+    in-out property <[string]> save-kinds: [];
+    in-out property <bool> show-sharpness: true;
+    in-out property <bool> saving: false;
+    in-out property <string> saved-message: "";
+    in-out property <bool> saved-ok: true;
+    in-out property <bool> confirm-delete: false;
+    // 这个游戏的云存档状况(措辞由 Rust 拼好,见 render.rs 的 sync_line)
+    in-out property <string> detail-sync-line: "";
+    in-out property <bool> detail-sync-can-act: false;
+    in-out property <bool> detail-sync-pending: false;
+    in-out property <bool> detail-sync-busy: false;
+
+    callback back();
+    callback save();
+    callback reset();
+    callback delete-requested();
+    callback delete-cancelled();
+    callback delete-confirmed();
+    callback game-dir-changed(string);
+    callback exe-changed(string);
+    callback ratio-changed(string);
+    callback algo-picked(int);
+    callback sharpness-changed(int);
+    callback internal-w-changed(string);
+    callback internal-h-changed(string);
+    callback output-w-changed(string);
+    callback output-h-changed(string);
+    callback fullscreen-toggled(bool);
+    callback framerate-changed(string);
+    callback add-save();
+    callback remove-save(int);
+    callback save-kind-picked(int, int);
+    callback save-path-changed(int, string);
+    callback save-exclude-changed(int, string);
+    callback detail-sync-now();
+    callback detail-sync-restore();
+    callback detail-sync-restore-confirmed();
+    callback detail-sync-restore-cancelled();
+
+    // ── 云同步 ────────────────────────────────────────────────────────────
+    in-out property <bool> sync-loaded: false;
+    in-out property <string> sync-remote: "";
+    in-out property <string> sync-rclone: "";
+    in-out property <string> sync-keyring: "";
+    in-out property <bool> sync-ephemeral: false;
+    in-out property <string> sync-keyring-hint: "";
+    in-out property <string> sync-problem: "";
+    in-out property <bool> sync-ready: false;
+    in-out property <string> sync-credentials-label: "";
+    in-out property <string> sync-password-hint: "";
+    in-out property <string> sync-master-hint: "";
+    in-out property <int> sync-store-kind: 0;
+    in-out property <bool> sync-store-locked: false;
+    in-out property <string> sync-store-path: "";
+    in-out property <bool> sync-has-password: false;
+    in-out property <bool> sync-has-credentials: false;
+    in-out property <bool> sync-enabled: false;
+    in-out property <string> sync-bucket: "";
+    in-out property <string> sync-prefix: "";
+    in-out property <string> sync-endpoint: "";
+    in-out property <string> sync-keep-versions: "";
+    in-out property <bool> sync-encryption: false;
+    in-out property <int> sync-confirm-encryption: 0;
+    in-out property <string> sync-key-id: "";
+    in-out property <string> sync-app-key: "";
+    in-out property <string> sync-password: "";
+    in-out property <string> sync-password-again: "";
+    in-out property <string> sync-master-password: "";
+    in-out property <bool> sync-busy: false;
+    in-out property <string> sync-message: "";
+    in-out property <bool> sync-message-ok: true;
+
+    callback sync-enabled-toggled(bool);
+    callback sync-encryption-toggled(bool);
+    callback sync-confirm-encryption-clicked();
+    callback sync-cancel-encryption-clicked();
+    callback sync-field(int, string);
+    callback sync-save-settings();
+    callback sync-test();
+    callback sync-now(string);
+    callback sync-restore(string);
+    callback sync-restore-confirmed();
+    callback sync-restore-cancelled();
+    callback sync-save-credentials();
+    callback sync-clear-credentials();
+    callback sync-save-password();
+    callback sync-clear-password();
+    callback sync-unlock();
+    callback sync-set-master-password();
+
+    // ── 设置(全局) ───────────────────────────────────────────────────────
+    in-out property <string> wine-prefix: "";
+    in-out property <string> wine-message: "";
+    in-out property <bool> wine-message-ok: true;
+    in-out property <string> wine-effective: "";
+    in-out property <string> wine-default: "";
+    in-out property <string> wine-environment: "";
+    in-out property <[string]> wine-detected: [];
+    in-out property <HotkeyState> hotkeys;
+    in-out property <bool> hotkeys-loaded: false;
+
+    callback wine-prefix-changed(string);
+    callback save-wine-prefix();
+    callback clear-wine-prefix();
+
+    VerticalLayout {
+        spacing: 0px;
+
+        HorizontalLayout {
+            spacing: 0px;
+
+            // ── 左侧导航栏(NavigationView) ──
+            Rectangle {
+                width: 252px;
+                background: #00000000;
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        padding-left: 13px;
+                        padding-top: 6px;
+                        Text {
+                            text: "Kotori";
+                            font-size: 20px;
+                            font-weight: 600;
+                            color: Tokens.text;
+                        }
+                    }
+                    Gap { size: 10px; }
+                    NavItem {
+                        label: "游戏库"; glyph: "\u{E8F1}";
+                        selected: root.tab == 0;
+                        clicked => { root.tab = 0; root.game-open = false; root.tab-changed(0); }
+                    }
+                    NavItem {
+                        label: "添加游戏"; glyph: "\u{E710}";
+                        selected: root.tab == 1;
+                        clicked => { root.tab = 1; root.game-open = false; root.tab-changed(1); }
+                    }
+                    NavItem {
+                        label: "云同步"; glyph: "\u{E753}";
+                        selected: root.tab == 2;
+                        clicked => { root.tab = 2; root.game-open = false; root.tab-changed(2); }
+                    }
+                    NavItem {
+                        label: "设置"; glyph: "\u{E713}";
+                        selected: root.tab == 3;
+                        clicked => { root.tab = 3; root.game-open = false; root.tab-changed(3); }
+                    }
+
+                    Rectangle { vertical-stretch: 1; background: #00000000; }
+
+                    // 守护进程的连接状态。它比页面标题更重要 —— 没有守护进程时,
+                    // 列表是空的,而"空"和"连不上"从界面上看是一样的。
+                    HorizontalLayout {
+                        padding-left: 13px;
+                        padding-right: 8px;
+                        padding-bottom: 6px;
+                        spacing: 6px;
+                        Text {
+                            text: "●";
+                            font-size: 11px;
+                            color: root.connection-state == 1
+                                ? Tokens.ok
+                                : (root.connection-state == 2 ? Tokens.danger : Tokens.text-3);
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.connection-label;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        if root.can-reconnect : StdButton {
+                            label: "重连";
+                            button-width: 62px;
+                            clicked => { root.refresh(); }
+                        }
+                    }
+                }
+            }
+
+            // ── 内容区 ──
+            Rectangle {
+                background: #00000000;
+                // 裁剪:页面横滑入场时,溢出的部分不能画到窗口外面去
+                clip: true;
+
+                VerticalLayout {
+                    spacing: 0px;
+
+                    // 出错的统一出口(旧 UI 是每页各自在结尾贴一条,容易漏掉)。
+                    if root.error != "" : Rectangle {
+                        height: error-layout.preferred-height;
+                        background: #3a2222;
+                        border-radius: Tokens.radius-card;
+                        error-layout := HorizontalLayout {
+                            padding: 12px;
+                            spacing: 10px;
+                            Text {
+                                text: "⚠ " + root.error;
+                                font-size: 13px;
+                                color: Tokens.danger;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                            }
+                            StdButton {
+                                label: "重试";
+                                button-width: 76px;
+                                clicked => { root.refresh(); }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        vertical-stretch: 1;
+                        background: #00000000;
+
+                        if (root.tab == 0) && !root.game-open : GamesPage {
+                            width: 100%;
+                            height: 100%;
+                            games: root.games;
+                            subtitle: root.library-subtitle;
+                            empty: root.library-empty;
+                            loading: root.loading;
+                            search <=> root.search;
+                            search-changed(text) => { root.search-changed(text); }
+                            refresh => { root.refresh(); }
+                            open-game(id) => { root.open-game(id); }
+                            launch(id) => { root.launch(id); }
+                            stop(id) => { root.stop(id); }
+                        }
+
+                        if (root.tab == 0) && root.game-open : GameSettingsPage {
+                            width: 100%;
+                            height: 100%;
+                            game: root.game;
+                            stored: root.detail;
+                            seed: root.detail-seed;
+                            saves: root.saves;
+                            algo-options: root.algo-options;
+                            save-kinds: root.save-kinds;
+                            show-sharpness: root.show-sharpness;
+                            saving: root.saving;
+                            saved-msg: root.saved-message;
+                            saved-ok: root.saved-ok;
+                            confirm-delete: root.confirm-delete;
+                            sync-line: root.detail-sync-line;
+                            sync-can-act: root.detail-sync-can-act;
+                            sync-pending: root.detail-sync-pending;
+                            sync-busy: root.detail-sync-busy;
+                            back => { root.back(); }
+                            launch => { root.launch(root.game.id); }
+                            save => { root.save(); }
+                            reset => { root.reset(); }
+                            delete-requested => { root.delete-requested(); }
+                            delete-cancelled => { root.delete-cancelled(); }
+                            delete-confirmed => { root.delete-confirmed(); }
+                            game-dir-changed(text) => { root.game-dir-changed(text); }
+                            exe-changed(text) => { root.exe-changed(text); }
+                            ratio-changed(text) => { root.ratio-changed(text); }
+                            algo-picked(index) => { root.algo-picked(index); }
+                            sharpness-changed(value) => { root.sharpness-changed(value); }
+                            internal-w-changed(text) => { root.internal-w-changed(text); }
+                            internal-h-changed(text) => { root.internal-h-changed(text); }
+                            output-w-changed(text) => { root.output-w-changed(text); }
+                            output-h-changed(text) => { root.output-h-changed(text); }
+                            fullscreen-toggled(value) => { root.fullscreen-toggled(value); }
+                            framerate-changed(text) => { root.framerate-changed(text); }
+                            add-save => { root.add-save(); }
+                            remove-save(index) => { root.remove-save(index); }
+                            save-kind-picked(index, kind) => { root.save-kind-picked(index, kind); }
+                            save-path-changed(index, text) => { root.save-path-changed(index, text); }
+                            save-exclude-changed(index, text) => { root.save-exclude-changed(index, text); }
+                            sync-now => { root.detail-sync-now(); }
+                            sync-restore => { root.detail-sync-restore(); }
+                            sync-restore-confirmed => { root.detail-sync-restore-confirmed(); }
+                            sync-restore-cancelled => { root.detail-sync-restore-cancelled(); }
+                        }
+
+                        if root.tab == 1 : AddPage {
+                            width: 100%;
+                            height: 100%;
+                            new-name <=> root.new-name;
+                            new-game-dir <=> root.new-game-dir;
+                            new-exe <=> root.new-exe;
+                            creating: root.creating;
+                            message: root.create-message;
+                            message-ok: root.create-message-ok;
+                            name-changed(text) => { root.new-name-changed(text); }
+                            game-dir-changed(text) => { root.new-game-dir-changed(text); }
+                            exe-changed(text) => { root.new-exe-changed(text); }
+                            create-requested => { root.create-requested(); }
+                        }
+
+                        if root.tab == 2 : SyncPage {
+                            width: 100%;
+                            height: 100%;
+                            loaded: root.sync-loaded;
+                            remote: root.sync-remote;
+                            rclone: root.sync-rclone;
+                            keyring: root.sync-keyring;
+                            ephemeral: root.sync-ephemeral;
+                            keyring-hint: root.sync-keyring-hint;
+                            problem: root.sync-problem;
+                            ready: root.sync-ready;
+                            credentials-label: root.sync-credentials-label;
+                            password-hint: root.sync-password-hint;
+                            master-hint: root.sync-master-hint;
+                            store-kind: root.sync-store-kind;
+                            store-locked: root.sync-store-locked;
+                            store-path: root.sync-store-path;
+                            has-password: root.sync-has-password;
+                            can-delete-credentials: root.sync-has-credentials;
+                            sync-enabled <=> root.sync-enabled;
+                            bucket <=> root.sync-bucket;
+                            prefix <=> root.sync-prefix;
+                            endpoint <=> root.sync-endpoint;
+                            keep-versions <=> root.sync-keep-versions;
+                            encryption <=> root.sync-encryption;
+                            confirm-encryption: root.sync-confirm-encryption;
+                            key-id <=> root.sync-key-id;
+                            app-key <=> root.sync-app-key;
+                            password <=> root.sync-password;
+                            password-again <=> root.sync-password-again;
+                            master-password <=> root.sync-master-password;
+                            busy: root.sync-busy;
+                            message: root.sync-message;
+                            message-ok: root.sync-message-ok;
+                            enabled-toggled(value) => { root.sync-enabled-toggled(value); }
+                            encryption-toggled(value) => { root.sync-encryption-toggled(value); }
+                            confirm-encryption-clicked => { root.sync-confirm-encryption-clicked(); }
+                            cancel-encryption-clicked => { root.sync-cancel-encryption-clicked(); }
+                            field(id, text) => { root.sync-field(id, text); }
+                            save-settings => { root.sync-save-settings(); }
+                            test => { root.sync-test(); }
+                            sync-now(id) => { root.sync-now(id); }
+                            restore(id) => { root.sync-restore(id); }
+                            restore-confirmed => { root.sync-restore-confirmed(); }
+                            restore-cancelled => { root.sync-restore-cancelled(); }
+                            save-credentials => { root.sync-save-credentials(); }
+                            clear-credentials => { root.sync-clear-credentials(); }
+                            save-password => { root.sync-save-password(); }
+                            clear-password => { root.sync-clear-password(); }
+                            unlock => { root.sync-unlock(); }
+                            set-master-password => { root.sync-set-master-password(); }
+                        }
+
+                        if root.tab == 3 : SettingsPage {
+                            width: 100%;
+                            height: 100%;
+                            wine-prefix <=> root.wine-prefix;
+                            wine-msg: root.wine-message;
+                            wine-msg-ok: root.wine-message-ok;
+                            wine-effective: root.wine-effective;
+                            wine-default: root.wine-default;
+                            wine-environment: root.wine-environment;
+                            wine-detected: root.wine-detected;
+                            hotkeys: root.hotkeys;
+                            hotkeys-loaded: root.hotkeys-loaded;
+                            wine-prefix-changed(text) => { root.wine-prefix-changed(text); }
+                            save-wine-prefix => { root.save-wine-prefix(); }
+                            clear-wine-prefix => { root.clear-wine-prefix(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

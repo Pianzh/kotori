@@ -106,6 +106,11 @@ fn main() -> anyhow::Result<()> {
         }
         cli::Command::Ui => {
             tracing::info!("Starting UI mode");
+            // Slint runs the event loop itself (it must be the main thread), but
+            // the effects of the message loop are tokio futures — so this thread
+            // has to be inside the runtime context for `Handle::current()` to
+            // find it. The guard only needs to live as long as `ui::run`.
+            let _guard = rt.enter();
             ui::run()?;
         }
         cli::Command::Launch { game_id } => {

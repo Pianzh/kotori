@@ -44,6 +44,26 @@ pub(super) fn matches_query(game: &UiGame, query: &str) -> bool {
     game.name.to_lowercase().contains(&query) || game.exe.to_lowercase().contains(&query)
 }
 
+/// `daemon.status` 里的 `hotkeys` 对象。缺字段一律按"没注册"算 ——
+/// 宁可说"还没有热键",不要说成"已就绪"。
+pub(super) fn parse_hotkeys(value: &Value) -> HotkeyStatus {
+    let hotkeys = value.get("hotkeys");
+    let field = |key: &str| hotkeys.and_then(|hotkeys| hotkeys.get(key));
+    HotkeyStatus {
+        requested: field("requested").and_then(Value::as_bool).unwrap_or(false),
+        ready: field("ready").and_then(Value::as_bool).unwrap_or(false),
+        error: field("error")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|message| !message.is_empty()),
+        unbound: string_list(field("unbound")),
+        assign_hint: field("assign_hint")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+    }
+}
+
 pub(super) fn parse_wine_status(value: &Value) -> WineStatus {
     let text = |key: &str| value.get(key).and_then(|v| v.as_str()).map(str::to_string);
     WineStatus {
@@ -450,7 +470,6 @@ mod tests {
     fn draft_with(algo: &str) -> Draft {
         Draft {
             game_id: "x".into(),
-            game_name: "x".into(),
             profile_name: "默认".into(),
             game_dir: "/games/x".into(),
             game_dir_original: "/games/x".into(),

@@ -1,0 +1,200 @@
+// 全局设置:Wine 目录(prefix) + 全局快捷键状态。
+//
+// ⚠ 快捷键这一组是**只读**的:daemon 现在只报「注册得怎么样」
+// (`daemon.status.hotkeys` 的 requested / ready / error / unbound / assign_hint),
+// 不报「11 个动作各绑了什么键」。绑键本身在桌面环境里做(KDE:系统设置 → 快捷键),
+// 要让这一页能改键,daemon 侧得再加一个 RPC —— 见 AGENTS.md 的 P1-8。
+
+import { ScrollView } from "std-widgets.slint";
+import { Tokens } from "../theme.slint";
+import {
+    AccentButton, CardRow, Divider, Group, RevealItem, SectionTitle, StdButton, TextField,
+} from "../widgets.slint";
+import { HotkeyState } from "../types.slint";
+
+export component SettingsPage inherits ScrollView {
+    in-out property <bool> revealed: false;
+
+    // ── Wine ──────────────────────────────────────────────────────────────
+    in-out property <string> wine-prefix: "";
+    in property <string> wine-msg: "";
+    in property <bool> wine-msg-ok: true;
+    in property <string> wine-effective: "";
+    in property <string> wine-default: "";
+    in property <string> wine-environment: "";
+    in property <[string]> wine-detected: [];
+
+    // ── 快捷键 ────────────────────────────────────────────────────────────
+    in property <HotkeyState> hotkeys: {
+        requested: false, ready: false, error: "", unbound: "", hint: "",
+    };
+    in property <bool> hotkeys-loaded: false;
+
+    callback wine-prefix-changed(string);
+    callback save-wine-prefix();
+    callback clear-wine-prefix();
+
+    Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
+
+    VerticalLayout {
+        padding-left: root.revealed ? 28px : 68px;
+        animate padding-left { duration: 260ms; easing: ease-out; }
+        padding-right: 28px;
+        padding-top: 12px;
+        padding-bottom: 32px;
+        spacing: 0px;
+
+        RevealItem {
+            revealed: root.revealed;
+            step: 0;
+            bottom: 20px;
+            VerticalLayout {
+                spacing: 4px;
+                Text { text: "设置"; font-size: 28px; font-weight: 600; color: Tokens.text; }
+                Text {
+                    text: "这台机器上的启动与快捷键设置。云存档在「云同步」那一页,单个游戏的缩放/存档在游戏库里点进去。";
+                    font-size: 14px;
+                    color: Tokens.text-3;
+                }
+            }
+        }
+
+        // ── Wine ──────────────────────────────────────────────────────────
+        RevealItem {
+            revealed: root.revealed;
+            step: 1;
+            bottom: 8px;
+            SectionTitle { text: "Wine 目录(prefix)"; }
+        }
+        RevealItem {
+            revealed: root.revealed;
+            step: 2;
+            bottom: 24px;
+            Group {
+                CardRow {
+                    title: "prefix 路径";
+                    description: "启动游戏时使用。留空 = 自动探测:游戏目录内的可携式 prefix → 常见位置 → ~/.wine。";
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: center;
+                        TextField {
+                            field-width: 300px;
+                            text <=> root.wine-prefix;
+                            edited(text) => { root.wine-prefix-changed(text); }
+                            placeholder: "留空即自动探测";
+                        }
+                        AccentButton {
+                            label: "保存";
+                            button-width: 68px;
+                            clicked => { root.save-wine-prefix(); }
+                        }
+                        StdButton {
+                            label: "自动";
+                            button-width: 68px;
+                            clicked => { root.clear-wine-prefix(); }
+                        }
+                    }
+                }
+                if root.wine-msg != "" : VerticalLayout {
+                    Divider { }
+                    VerticalLayout {
+                        padding: 12px;
+                        Text {
+                            text: root.wine-msg;
+                            font-size: 12px;
+                            color: root.wine-msg-ok ? Tokens.ok : Tokens.danger;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                Divider { }
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 3px;
+                    Text { text: "当前生效:" + root.wine-effective; font-size: 12px; color: Tokens.text-3; wrap: word-wrap; }
+                    Text { text: "默认位置:" + root.wine-default; font-size: 11px; color: Tokens.text-3; wrap: word-wrap; }
+                    Text { text: "WINEPREFIX 环境变量:" + root.wine-environment; font-size: 11px; color: Tokens.text-3; wrap: word-wrap; }
+                    Text {
+                        text: root.wine-detected.length == 0 ? "没有在常见位置发现 wine prefix" : "自动探测到的 prefix:";
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                    }
+                    for prefix in root.wine-detected : Text {
+                        text: "· " + prefix;
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        // ── 快捷键 ────────────────────────────────────────────────────────
+        RevealItem {
+            revealed: root.revealed;
+            step: 3;
+            bottom: 8px;
+            SectionTitle { text: "全局快捷键"; }
+        }
+        RevealItem {
+            revealed: root.revealed;
+            step: 4;
+            bottom: 24px;
+            Group {
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        spacing: 8px;
+                        Text {
+                            text: !root.hotkeys-loaded
+                                ? "● 读取中…"
+                                : (root.hotkeys.error != "" ? "● 注册失败" : (root.hotkeys.ready ? "● 已注册" : "● 还没注册"));
+                            font-size: 13px;
+                            color: !root.hotkeys-loaded
+                                ? Tokens.text-3
+                                : (root.hotkeys.error != "" ? Tokens.danger : (root.hotkeys.ready ? Tokens.ok : Tokens.text-3));
+                        }
+                        Text {
+                            text: root.hotkeys.error != ""
+                                ? root.hotkeys.error
+                                : (root.hotkeys.ready
+                                    ? "缩放开关 / 全屏等动作已经交给桌面注册,按下时由守护进程分发。"
+                                    : "守护进程启动时才会向桌面申请一次;没有授权时游戏照常能玩,只是没有全局热键。");
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                            horizontal-stretch: 1;
+                        }
+                    }
+                    if root.hotkeys.unbound != "" : Text {
+                        text: "⚠ 下面这些动作桌面授权了,但没绑按键 —— 按下去不会有反应:" + root.hotkeys.unbound;
+                        font-size: 11px;
+                        color: Tokens.warn;
+                        wrap: word-wrap;
+                    }
+                    if root.hotkeys.hint != "" : Text {
+                        text: "去哪绑:" + root.hotkeys.hint;
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "只有「按设定比例缩放／取消缩放」(建议 Shift+Alt+Q)与「全屏」(建议 Shift+Alt+A)带默认建议键,其余动作留白,自己绑。";
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                    Text {
+                        text: "⚠ 这一页现在还改不了键:桌面只把「授权成没成」告诉 kotori,动作清单与各自当前按键需要守护进程再补一个 RPC(还没做);现在要改键请去系统设置的快捷键页找 kotori 的条目。";
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; background: #00000000; }
+    }
+}

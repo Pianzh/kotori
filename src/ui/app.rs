@@ -31,6 +31,8 @@ pub struct App {
     pub(super) wine_prefix_dirty: bool,
     pub(super) wine_status: Option<WineStatus>,
     pub(super) wine_msg: Option<String>,
+    /// 全局快捷键的注册情况(设置页);`None` = 还没问到。
+    pub(super) hotkeys: Option<HotkeyStatus>,
     /// Automatic reconnect bookkeeping.
     pub(super) retry_attempts: u32,
     /// Live sessions by game id (refreshed periodically).
@@ -70,6 +72,7 @@ impl App {
                 wine_prefix_dirty: false,
                 wine_status: None,
                 wine_msg: None,
+                hotkeys: None,
                 retry_attempts: 0,
                 running: std::collections::BTreeMap::new(),
                 sync_status: None,
@@ -92,6 +95,15 @@ impl App {
                 }),
             ]),
         )
+    }
+
+    /// 单游戏设置页正在看的那条库里的游戏。
+    ///
+    /// 注意是**库里的**(已存值),不是 `draft`:页面的可编辑副本以它为准来抄,
+    /// 拿草稿去填会把用户正在输入的内容一次次重置。
+    pub(super) fn selected_game(&self) -> Option<&UiGame> {
+        let id = self.selected.as_deref()?;
+        self.games.iter().find(|game| game.id == id)
     }
 
     /// Minimum master password length as reported by the daemon (with a sane

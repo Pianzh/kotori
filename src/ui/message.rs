@@ -6,6 +6,8 @@ use super::*;
 pub enum Tab {
     Games,
     Add,
+    /// 云同步独占一页(旧 UI 把它塞在「设置」里,Win11 的导航更适合分开)。
+    Sync,
     Settings,
 }
 
@@ -65,6 +67,9 @@ pub enum Message {
     WinePrefixSaved(Result<(), String>),
     WineStatusLoaded(Result<WineStatus, String>),
     StatusLoaded(Result<std::collections::BTreeMap<String, SessionInfo>, String>),
+    /// 全局快捷键的注册情况(`daemon.status.hotkeys`),设置页要看它。
+    /// 独立于 `StatusLoaded`:那是每 3 秒一次的会话轮询,这条只在打开设置页时问一次。
+    HotkeysLoaded(Result<HotkeyStatus, String>),
     Stop(String),
     StopDone(Result<(), String>),
     Tick,

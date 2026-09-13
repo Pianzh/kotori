@@ -6,8 +6,14 @@ description = "Galgame manager with scaling and cloud sync for Linux (Niri/Wayla
 authors = ["pzh"]
 
 [dependencies]
-# GUI
-iced = { version = "0.13", features = ["tokio", "svg"] }
+# GUI. Slint renders the whole front end (ADR-018: "maximise the Windows 11
+# resemblance" — WinUI 3 look, animations, and an IME that actually works under
+# Wayland). The `.slint` sources live next to the Rust modules that drive them in
+# `src/ui/slint/`; `build.rs` compiles them with the built-in `fluent` style.
+slint = { version = "1.17", features = ["compat-1-2"] }
+# Only for `KOTORI_UI_SNAPSHOT`: it writes a PNG of the window so the UI can be
+# inspected without a screen (see `ui::snapshot`).
+png = "0.17"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -51,34 +57,31 @@ futures-util = "0.3.34"
 # dependency of winit, so this adds nothing to build time.
 x11rb = "0.13.2"
 
-# The GUI stack is unusably slow when compiled without optimisation: wgpu, naga
-# and cosmic-text all do per-frame work, and at opt-level 0 a frame can take
+# The GUI stack is unusably slow when compiled without optimisation: a renderer
+# and a text shaper both do per-frame work, and at opt-level 0 a frame can take
 # hundreds of milliseconds — the window then trails the keyboard by about a
 # second, so typing or pasting looks like it "did not register". Optimise the
 # dependencies even in debug builds; our own crate stays cheap to rebuild.
 [profile.dev.package."*"]
 opt-level = 3
 
-# A little optimisation for kotori itself (the view tree is rebuilt per frame).
-# Debug info and debug assertions are untouched, so debugging still works.
+# A little optimisation for kotori itself (the property bindings are re-evaluated
+# on every change). Debug info and debug assertions are untouched, so debugging
+# still works.
 [profile.dev]
 opt-level = 1
-
-# …except inside the software rasteriser `iced_renderer` falls back to when the
-# GPU compositor cannot come up. It `debug_assert!`s that every quad it draws has
-# a "normal" width and height — and 0.0 is not normal — which aborts the entire
-# GUI ("Quad with non-normal width!", the crash the user reported twice on
-# 2026-09-12). A release build renders that same frame happily, so the assert
-# only ever punished debug builds. Keep it off for that one crate: a machine
-# whose driver refuses a surface should end up with a slow window, not a dead
-# process. (The deliberate `WGPU_BACKEND` choice in `ui::run` is what keeps us on
-# the GPU path in the first place; this is the safety net under it.)
-[profile.dev.package.iced_tiny_skia]
-opt-level = 3
-debug-assertions = false
 
 [profile.release]
 opt-level = "s"
 lto = true
 codegen-units = 1
 strip = true
+
+[build-dependencies]
+# Compiles `src/ui/slint/app.slint` (and everything it imports) into Rust.
+slint-build = "1.17"
+
+[dev-dependencies]
+# Lets a unit test build the real window without a display (see the smoke test in
+# `src/ui/render.rs`). Test-only: it is not linked into the binary.
+i-slint-backend-testing = "1.17.1"

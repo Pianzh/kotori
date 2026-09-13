@@ -1,0 +1,142 @@
+// 「添加游戏」:只有手动填写 —— kotori 不做目录扫描(那个只存在于 CLI 的 `kotori scan`,
+// 管理器里没有这个功能,也不打算加)。字段与旧 iced 版的 add.rs 一致:
+// 游戏名 / 游戏根目录 / 可执行文件。
+
+import { ScrollView } from "std-widgets.slint";
+import { Tokens } from "../theme.slint";
+import {
+    AccentButton, CardRow, Divider, Group, RevealItem, SectionTitle, TextField,
+} from "../widgets.slint";
+
+export component AddPage inherits ScrollView {
+    in-out property <bool> revealed: false;
+    in-out property <string> new-name: "";
+    in-out property <string> new-game-dir: "";
+    in-out property <string> new-exe: "";
+    in property <bool> creating: false;
+    // 成功与失败都走这一行(Rust 决定措辞):空串表示还没动作。
+    in property <string> message: "";
+    in property <bool> message-ok: true;
+
+    callback name-changed(string);
+    callback game-dir-changed(string);
+    callback exe-changed(string);
+    callback create-requested();
+
+    Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
+
+    VerticalLayout {
+        padding-left: root.revealed ? 28px : 68px;
+        animate padding-left { duration: 260ms; easing: ease-out; }
+        padding-right: 28px;
+        padding-top: 12px;
+        padding-bottom: 32px;
+        spacing: 0px;
+
+        RevealItem {
+            revealed: root.revealed;
+            step: 0;
+            bottom: 20px;
+            VerticalLayout {
+                spacing: 4px;
+                Text { text: "添加游戏"; font-size: 28px; font-weight: 600; color: Tokens.text; }
+                Text {
+                    text: "手动填写。游戏根目录是启动时的工作目录,也是存档相对路径的基准;留空则取可执行文件所在目录。";
+                    font-size: 14px;
+                    color: Tokens.text-3;
+                }
+            }
+        }
+
+        RevealItem {
+            revealed: root.revealed;
+            step: 1;
+            bottom: 8px;
+            SectionTitle { text: "新建条目"; }
+        }
+        RevealItem {
+            revealed: root.revealed;
+            step: 2;
+            bottom: 24px;
+            Group {
+                CardRow {
+                    title: "游戏名";
+                    description: "库里显示的名字。";
+                    TextField {
+                        field-width: 300px;
+                        text <=> root.new-name;
+                        edited(text) => { root.name-changed(text); }
+                        placeholder: "例如 3days";
+                    }
+                }
+                Divider { }
+                CardRow {
+                    title: "游戏根目录";
+                    description: "启动时的工作目录,也是 relative 存档路径的基准。";
+                    TextField {
+                        field-width: 340px;
+                        text <=> root.new-game-dir;
+                        edited(text) => { root.game-dir-changed(text); }
+                        placeholder: "/path/to/game";
+                    }
+                }
+                Divider { }
+                CardRow {
+                    title: "可执行文件";
+                    description: "exe 的完整路径。";
+                    TextField {
+                        field-width: 340px;
+                        text <=> root.new-exe;
+                        edited(text) => { root.exe-changed(text); }
+                        placeholder: "/path/to/game.exe";
+                    }
+                }
+                Divider { }
+                HorizontalLayout {
+                    padding: 12px;
+                    spacing: 12px;
+                    AccentButton {
+                        label: root.creating ? "添加中…" : "添加游戏";
+                        button-width: 108px;
+                        button-enabled: !root.creating;
+                        clicked => { root.create-requested(); }
+                    }
+                    Text {
+                        text: root.message;
+                        font-size: 12px;
+                        color: root.message-ok ? Tokens.ok : Tokens.danger;
+                        vertical-alignment: center;
+                        visible: root.message != "";
+                    }
+                    Rectangle { horizontal-stretch: 1; background: #00000000; }
+                }
+            }
+        }
+
+        RevealItem {
+            revealed: root.revealed;
+            step: 3;
+            bottom: 0px;
+            Group {
+                VerticalLayout {
+                    padding: 16px;
+                    spacing: 4px;
+                    Text {
+                        text: "添加之后";
+                        font-size: 14px;
+                        font-weight: 600;
+                        color: Tokens.text;
+                    }
+                    Text {
+                        text: "回到游戏库点这一行,就能继续配置缩放倍数 / 算法 / 锐度,以及这个游戏自己的存档位置。";
+                        font-size: 12px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        Rectangle { vertical-stretch: 1; background: #00000000; }
+    }
+}

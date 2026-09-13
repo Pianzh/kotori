@@ -68,6 +68,14 @@ pub(super) async fn set_wine_prefix(socket: &Path, prefix: Option<String>) -> Re
     Ok(())
 }
 
+/// 全局快捷键的注册情况。和 `load_status` 打同一个 RPC,但只取 `hotkeys` 那一块:
+/// 会话列表每 3 秒刷一次,热键状态没这个必要。
+pub(super) async fn load_hotkeys() -> Result<HotkeyStatus, String> {
+    let socket = crate::config::socket_path();
+    let value = crate::rpc::call(&socket, "daemon.status", None).await?;
+    Ok(parse_hotkeys(&value))
+}
+
 pub(super) async fn load_wine_status() -> Result<WineStatus, String> {
     let value = crate::rpc::call(&crate::config::socket_path(), "wine.status", None).await?;
     Ok(parse_wine_status(&value))

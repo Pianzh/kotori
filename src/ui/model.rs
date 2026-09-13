@@ -12,6 +12,20 @@ pub struct WineStatus {
     pub detected: Vec<String>,
 }
 
+/// 全局快捷键现在注册成什么样了,来自 `daemon.status.hotkeys`。
+///
+/// ⚠ 后端目前只报「注册得怎么样」,不报「11 个动作各绑了什么键」——
+/// `unbound` 是"桌面授权了但没给键"的那些动作,是"按了没反应"的唯一解释。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HotkeyStatus {
+    pub requested: bool,
+    pub ready: bool,
+    pub error: Option<String>,
+    pub unbound: Vec<String>,
+    /// 这个桌面去哪里绑键(KDE/GNOME 说法不同,由 `hotkeys::assign_hint` 定)。
+    pub assign_hint: String,
+}
+
 /// Maximum number of automatic reconnect attempts before giving up (a manual
 /// "重连" always works, and resets the counter).
 pub(super) const MAX_AUTO_RETRIES: u32 = 5;
@@ -182,20 +196,10 @@ pub struct UiGame {
     pub framerate: Option<u32>,
 }
 
-impl UiGame {
-    pub(super) fn scale_label(&self) -> String {
-        format!(
-            "{}  {}x{} -> {}x{}",
-            self.algo, self.internal.0, self.internal.1, self.output.0, self.output.1
-        )
-    }
-}
-
 /// Editable copy of a game's scale profile.
 #[derive(Debug, Clone)]
 pub(super) struct Draft {
     pub(super) game_id: String,
-    pub(super) game_name: String,
     pub(super) profile_name: String,
     /// Editable game root and exe path, plus their stored values so unchanged
     /// fields are not re-sent (the daemon rejects a path that does not exist,
@@ -227,7 +231,6 @@ impl Draft {
     pub(super) fn from_game(game: &UiGame) -> Self {
         Self {
             game_id: game.id.clone(),
-            game_name: game.name.clone(),
             profile_name: game.profile_name.clone(),
             game_dir: game.game_dir.clone(),
             game_dir_original: game.game_dir.clone(),

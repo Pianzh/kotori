@@ -1,0 +1,563 @@
+// 控件件库。这里只放「长得像 Win11、且动效正确」的原语,不放业务。
+// std-widgets 只借 ScrollView(见 build.rs 的 fluent 风格),其余全部自绘 ——
+// 理由:Win11 的辨识度一半在悬停/按下/展开的过渡上,内置样式改不动这些。
+
+import { Tokens } from "theme.slint";
+
+// ── 基础零件 ────────────────────────────────────────────────────────────────
+
+export component Gap inherits Rectangle {
+    in property <length> size: 8px;
+    height: size;
+    vertical-stretch: 0;
+    background: #00000000;
+}
+
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Tokens.divider;
+}
+
+// 入场:淡入 + 从下方 18px 滑上来,step 越大开始得越晚(逐个出现)。
+// Slint 没有"位移"原语、布局子元素也不能设 y,所以"上滑"用动画 padding-top 做。
+export component RevealItem inherits Rectangle {
+    in property <bool> revealed: false;
+    in property <int> step: 0;
+    in property <length> bottom: 0px;
+
+    vertical-stretch: 0;
+    background: #00000000;
+    opacity: revealed ? 1 : 0;
+    height: layout.preferred-height;
+
+    animate opacity { duration: 420ms; delay: step * 60ms; easing: ease-out; }
+
+    layout := VerticalLayout {
+        padding-top: revealed ? 0px : 18px;
+        padding-bottom: root.bottom;
+        animate padding-top { duration: 420ms; delay: step * 60ms; easing: ease-out; }
+        @children
+    }
+}
+
+// Win11 图标 = Segoe Fluent Icons 字形。
+// 图标字形的视觉重心比 em 盒中心略高,所以默认往下挪 1px 才和旁边文字对得上。
+export component Ico inherits Rectangle {
+    in property <string> glyph;
+    in property <length> icon-size: 16px;
+    in property <color> tint: Tokens.text-2;
+    in property <length> nudge: 1px;
+
+    // 宽度按图标尺寸,高度撑满所在行 —— 固定高度在布局里会变成顶对齐。
+    width: icon-size;
+    height: 100%;
+    background: #00000000;
+
+    Text {
+        text: root.glyph;
+        font-family: "Segoe Fluent Icons";
+        font-size: root.icon-size;
+        color: root.tint;
+        x: 0px;
+        y: root.nudge;
+        width: 100%;
+        height: 100%;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+
+export component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <length> button-size: 32px;
+    in property <length> icon-size: 14px;
+    in property <color> hover-bg: #ffffff14;
+    in property <color> tint: Tokens.text-2;
+    callback clicked();
+
+    width: button-size;
+    height: button-size;
+    border-radius: button-size / 2;
+    background: ta.has-hover ? hover-bg : #00000000;
+    animate background { duration: 100ms; }
+
+    Ico {
+        glyph: root.glyph;
+        icon-size: root.icon-size;
+        tint: ta.has-hover ? Tokens.text : root.tint;
+        width: 100%;
+        height: 100%;
+        animate tint { duration: 100ms; }
+    }
+
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+
+// ── 导航 ────────────────────────────────────────────────────────────────────
+
+export component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <string> glyph;
+    in property <bool> selected: false;
+    callback clicked();
+
+    height: 40px;
+    border-radius: Tokens.radius;
+    background: selected ? #ffffff0f : (ta.pressed ? #ffffff0a : (ta.has-hover ? #ffffff0a : #00000000));
+    animate background { duration: 120ms; easing: ease-out; }
+
+    Rectangle {
+        x: 0px;
+        y: (parent.height - self.height) / 2;
+        width: 3px;
+        height: 16px;
+        border-radius: 1.5px;
+        background: Tokens.accent;
+        opacity: selected ? 1 : 0;
+        animate opacity { duration: 120ms; easing: ease-out; }
+    }
+
+    HorizontalLayout {
+        padding-left: 13px;
+        padding-right: 12px;
+        spacing: 12px;
+        Ico {
+            glyph: root.glyph;
+            icon-size: 16px;
+            tint: root.selected ? Tokens.text : Tokens.text-2;
+        }
+        Text {
+            text: root.label;
+            font-size: 14px;
+            font-weight: root.selected ? 600 : 400;
+            color: root.selected ? Tokens.text : Tokens.text-2;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+// ── 输入类控件 ──────────────────────────────────────────────────────────────
+
+// Win11 开关:关 = 描边胶囊 + 白点;开 = accent 填充 + 黑点。
+export component Switch inherits Rectangle {
+    in-out property <bool> checked: false;
+    callback toggled();
+
+    width: 40px;
+    height: 20px;
+    border-radius: 10px;
+    background: checked ? Tokens.accent : #ffffff00;
+    border-width: checked ? 0px : 1px;
+    border-color: #ffffff6b;
+    animate background { duration: 150ms; easing: ease-in-out; }
+    animate border-width { duration: 150ms; }
+
+    Rectangle {
+        width: 12px;
+        height: 12px;
+        y: 4px;
+        x: checked ? 24px : 4px;
+        border-radius: 6px;
+        background: checked ? #000000 : #ffffff;
+        animate x { duration: 150ms; easing: ease-in-out; }
+        animate background { duration: 150ms; }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.checked = !root.checked; root.toggled(); }
+    }
+}
+
+// Win11 文本框:自己画底,内层用内置 TextInput(输入法走它)。
+// ⚠ 不写 width:布局里的宽度由 min-width/preferred-width + horizontal-stretch 决定;
+//   写死 width 会让它在横向布局里没法撑开(见 UI_GUIDE.md 的 Slint 铁律)。
+export component TextField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <length> field-width: 240px;
+    // 密码框:B2 的 applicationKey、同步密码、主密码都要遮住 —— 这三样东西
+    // 泄了就等于把备份交出去,而它们经常出现在投屏 / 截图里。
+    in property <bool> password: false;
+    callback edited(string);
+
+    // ⚠ min-width 必须比 preferred 小:布局挤不下的时候,Slint 只能压那些
+    //    min < preferred 的元素。两者写成一样时,窗口一窄整页就横向溢出
+    //    —— 卡片被切掉、描述文字被挤成一列竖字(真机量到过:900 逻辑像素宽时)。
+    min-width: Math.min(field-width, 96px);
+    preferred-width: field-width;
+    height: 32px;
+    border-radius: Tokens.radius;
+    background: input.has-focus ? #00000033 : Tokens.control;
+    border-width: 1px;
+    border-color: input.has-focus ? #ffffff00 : #ffffff17;
+    animate background { duration: 120ms; }
+
+    // 聚焦时的 accent 下划线
+    Rectangle {
+        x: 1px;
+        y: parent.height - 2px;
+        width: parent.width - 2px;
+        height: 2px;
+        border-radius: 1px;
+        background: Tokens.accent;
+        opacity: input.has-focus ? 1 : 0;
+        animate opacity { duration: 120ms; }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { input.focus(); }
+    }
+
+    input := TextInput {
+        x: 10px;
+        y: 0px;
+        width: root.width - 20px;
+        height: root.height;
+        text <=> root.text;
+        input-type: root.password ? InputType.password : InputType.text;
+        edited => { root.edited(root.text); }
+        font-size: 14px;
+        color: Tokens.text;
+        single-line: true;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 10px;
+        y: 0px;
+        width: root.width - 20px;
+        height: root.height;
+        text: root.placeholder;
+        font-size: 14px;
+        color: Tokens.text-3;
+        vertical-alignment: center;
+        visible: root.text == "" && !input.has-focus;
+    }
+}
+
+// Win11 滑块。用 TouchArea 的 moved + pressed-x 做拖动(和 Slint 自带 slider 同一套
+// 手法:指针按下后即使移出控件也继续收 move),整数步进。
+export component Slider inherits Rectangle {
+    in-out property <int> value: 0;
+    in property <int> max: 5;
+    in property <length> track-width: 200px;
+
+    width: track-width;
+    height: 32px;
+    background: #00000000;
+
+    private property <length> knob-size: 20px;
+    private property <length> travel: Math.max(1px, self.width - self.knob-size);
+    private property <length> knob-x: (self.value * self.travel) / Math.max(1, self.max);
+
+    // 轨道
+    Rectangle {
+        x: root.knob-size / 2;
+        y: (root.height - 4px) / 2;
+        width: Math.max(0px, root.width - root.knob-size);
+        height: 4px;
+        border-radius: 2px;
+        background: #ffffff14;
+    }
+    // 已选部分
+    Rectangle {
+        x: root.knob-size / 2;
+        y: (root.height - 4px) / 2;
+        width: Math.max(0px, root.knob-x);
+        height: 4px;
+        border-radius: 2px;
+        background: Tokens.accent;
+        animate width { duration: 120ms; easing: ease-out; }
+    }
+    // 手柄:外圈 + 内点(悬停/拖动时内点变大)
+    Rectangle {
+        x: root.knob-x;
+        y: (root.height - root.knob-size) / 2;
+        width: root.knob-size;
+        height: root.knob-size;
+        border-radius: root.knob-size / 2;
+        background: Tokens.base;
+        border-width: 2px;
+        border-color: Tokens.accent;
+    }
+    Rectangle {
+        x: root.knob-x + (root.knob-size - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: ta.pressed ? 12px : (ta.has-hover ? 11px : 8px);
+        height: self.width;
+        border-radius: self.width / 2;
+        background: Tokens.accent;
+        animate width { duration: 120ms; easing: ease-out; }
+        animate height { duration: 120ms; easing: ease-out; }
+    }
+
+    ta := TouchArea {
+        property <int> pressed-value: 0;
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.button != PointerEventButton.left) { return; }
+            if (event.kind == PointerEventKind.up) { return; }
+            root.set-from-x(ta.mouse-x);
+            self.pressed-value = root.value;
+        }
+        moved => {
+            root.value = Math.min(root.max, Math.max(0,
+                self.pressed-value + Math.round((ta.mouse-x - ta.pressed-x) / root.travel * root.max)));
+        }
+    }
+
+    function set-from-x(x: length) {
+        root.value = Math.min(root.max, Math.max(0,
+            Math.round((x - root.knob-size / 2) / root.travel * root.max)));
+    }
+}
+
+// ── 下拉框 ──────────────────────────────────────────────────────────────────
+
+// Win11 下拉框(自己实现,因为要控制展开动效)。浮层由页面负责画:DropdownList 必须
+// 放在 ScrollView 之外,否则会被视口裁掉;定位用锚定元素的 absolute-position 差值。
+export component Select inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected: 0;
+    in property <bool> open: false;
+    in property <length> select-width: 200px;
+    callback toggled();
+
+    width: select-width;
+    height: 32px;
+    border-radius: Tokens.radius;
+    background: open ? #00000033 : Tokens.control;
+    border-width: 1px;
+    border-color: open ? #ffffff00 : #ffffff17;
+    animate background { duration: 120ms; }
+
+    Rectangle {
+        x: 1px;
+        y: parent.height - 2px;
+        width: parent.width - 2px;
+        height: 2px;
+        border-radius: 1px;
+        background: Tokens.accent;
+        opacity: open ? 1 : 0;
+        animate opacity { duration: 120ms; }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            text: root.options[root.selected];
+            font-size: 14px;
+            color: Tokens.text;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Ico {
+            glyph: "\u{E70D}";
+            icon-size: 11px;
+            tint: Tokens.text-2;
+            transform-rotation: root.open ? 180deg : 0deg;
+            animate transform-rotation { duration: 220ms; easing: ease-out; }
+        }
+    }
+
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.toggled(); } }
+}
+
+// 下拉浮层:Windows 的 flyout 是「淡入 + 从顶部纵向展开」。
+// 锚点(private origin)必须先用属性接住:transform-origin 里不能直接写三元表达式。
+export component DropdownList inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected: 0;
+    in property <bool> up: false;
+    callback picked(int);
+
+    in-out property <bool> shown: false;
+    Timer { interval: 20ms; running: true; triggered => { root.shown = true; } }
+
+    height: options.length * 34px + 8px;
+    border-radius: Tokens.radius-card;
+    background: Tokens.flyout;
+    border-width: 1px;
+    border-color: Tokens.flyout-stroke;
+
+    opacity: shown ? 1 : 0;
+    transform-scale-y: shown ? 100% : 84%;
+    private property <Point> origin: { x: self.width / 2, y: self.up ? self.height : 0px };
+    transform-origin: root.origin;
+    animate opacity { duration: 160ms; easing: ease-out; }
+    animate transform-scale-y { duration: 220ms; easing: ease-out; }
+
+    VerticalLayout {
+        padding: 4px;
+        spacing: 0px;
+        for option[index] in root.options : Rectangle {
+            height: 34px;
+            border-radius: 4px;
+            background: row-ta.has-hover ? #ffffff0f : (index == root.selected ? #ffffff12 : #00000000);
+            animate background { duration: 90ms; }
+
+            if index == root.selected : Rectangle {
+                x: 3px;
+                y: (parent.height - self.height) / 2;
+                width: 3px;
+                height: 16px;
+                border-radius: 1.5px;
+                background: Tokens.accent;
+            }
+            Text {
+                x: 14px;
+                width: parent.width - 24px;
+                height: parent.height;
+                text: option;
+                font-size: 14px;
+                color: Tokens.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            row-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.picked(index); }
+            }
+        }
+    }
+}
+
+// ── 按钮 ────────────────────────────────────────────────────────────────────
+
+// Win11 按钮:悬停变亮,按下变深 + 轻微缩小(按下反馈)。
+export component AccentButton inherits Rectangle {
+    in property <string> label;
+    in property <length> button-width: 100px;
+    // 有请求在飞的时候把按钮按住 —— 旧 UI 用 on_press_maybe(!busy) 达成的效果。
+    // ⚠ 别把这个属性叫 `enabled`:`std-widgets` 的 ScrollView 自带一个同名属性,
+    //    在继承它的页面里就会撞上"不能覆盖已有属性"。
+    in property <bool> button-enabled: true;
+    callback clicked();
+
+    height: 32px;
+    width: button-width;
+    border-radius: Tokens.radius;
+    opacity: button-enabled ? 1 : 0.45;
+    background: ta.pressed ? Tokens.accent-press : (ta.has-hover ? Tokens.accent-hi : Tokens.accent);
+    transform-scale-x: ta.pressed ? 97% : 100%;
+    transform-scale-y: ta.pressed ? 97% : 100%;
+    animate background { duration: 100ms; }
+    animate transform-scale-x { duration: 90ms; easing: ease-out; }
+    animate transform-scale-y { duration: 90ms; easing: ease-out; }
+
+    HorizontalLayout {
+        alignment: center;
+        Text {
+            text: root.label;
+            font-size: 14px;
+            font-weight: 600;
+            color: #000000;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if (root.button-enabled) { root.clicked(); } }
+    }
+}
+
+export component StdButton inherits Rectangle {
+    in property <string> label;
+    in property <length> button-width: 100px;
+    // 见上面 AccentButton 的说明:这个属性不能叫 `enabled`。
+    in property <bool> button-enabled: true;
+    callback clicked();
+
+    height: 32px;
+    width: button-width;
+    border-radius: Tokens.radius;
+    opacity: button-enabled ? 1 : 0.45;
+    background: ta.pressed ? #ffffff08 : (ta.has-hover ? Tokens.control-hi : Tokens.control);
+    border-width: 1px;
+    border-color: ta.pressed ? #ffffff0f : #ffffff17;
+    transform-scale-x: ta.pressed ? 97% : 100%;
+    transform-scale-y: ta.pressed ? 97% : 100%;
+    animate background { duration: 100ms; }
+    animate border-color { duration: 100ms; }
+    animate transform-scale-x { duration: 90ms; easing: ease-out; }
+    animate transform-scale-y { duration: 90ms; easing: ease-out; }
+
+    HorizontalLayout {
+        alignment: center;
+        Text {
+            text: root.label;
+            font-size: 14px;
+            color: Tokens.text;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if (root.button-enabled) { root.clicked(); } }
+    }
+}
+
+// ── 卡片组(Win11 设置页的主结构) ──────────────────────────────────────────
+
+// 一张设置卡片(卡片组里的一行)。控件放右边、垂直居中。
+export component CardRow inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    in property <bool> interactive: true;
+
+    background: interactive && ta.has-hover ? #ffffff08 : #00000000;
+    animate background { duration: 120ms; }
+    height: layout.preferred-height;
+
+    ta := TouchArea { }
+
+    layout := HorizontalLayout {
+        padding: 16px;
+        spacing: 24px;
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 4px;
+            Text { text: root.title; font-size: 14px; font-weight: 600; color: Tokens.text; }
+            Text {
+                text: root.description;
+                font-size: 12px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+                visible: root.description != "";
+            }
+        }
+        VerticalLayout {
+            alignment: center;
+            @children
+        }
+    }
+}
+
+export component Group inherits Rectangle {
+    border-radius: Tokens.radius-card;
+    border-width: 1px;
+    border-color: Tokens.stroke;
+    background: Tokens.card;
+    height: layout.preferred-height;
+    layout := VerticalLayout { @children }
+}
+
+// 卡片上方的小标题(Win11 里是 14px 半粗,和卡片留 8px)
+export component SectionTitle inherits Text {
+    font-size: 14px;
+    font-weight: 600;
+    color: Tokens.text;
+}

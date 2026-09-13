@@ -1,0 +1,26 @@
+// 设计 token。Win11 的层级感来自「同一套中性色 + 不同透明度叠出来」,
+// 所以这里几乎所有颜色都是白色低透明度,而不是各自一个灰:
+// 以后要加毛玻璃(模糊自己 + 半透明)时,底色换掉、这一层不用重新调色。
+
+export global Tokens {
+    out property <color> base:          #202020;   // 窗口底
+    out property <color> card:          #ffffff0d; // 卡片组底(叠在 base 上)
+    out property <color> card-hover:    #ffffff12;
+    out property <color> stroke:        #ffffff14; // 卡片描边
+    out property <color> divider:       #ffffff0f; // 卡片内的分隔线
+    out property <color> flyout:        #2c2c2c;   // 下拉浮层(不透明,浮在内容之上)
+    out property <color> flyout-stroke: #ffffff1f;
+    out property <color> text:          #ffffff;
+    out property <color> text-2:        #c8c8c8;
+    out property <color> text-3:        #969696;   // 说明文字
+    out property <color> accent:        #60cdff;   // Win11 深色下的强调色
+    out property <color> accent-hi:     #7ad8ff;
+    out property <color> accent-press:  #3fb4e6;
+    out property <color> control:       #ffffff0f; // 输入框/下拉框底
+    out property <color> control-hi:    #ffffff17;
+    out property <color> ok:            #4caf50;   // 运行中
+    out property <color> warn:          #d8a657;   // 仅观测
+    out property <color> danger:        #ef9a9a;   // 删除/错误
+    out property <length> radius:       5px;       // Win11 控件的圆角基准
+    out property <length> radius-card:  7px;       // 卡片组略大一点
+}

@@ -1,0 +1,71 @@
+// 视图侧的数据形状。**只放 Rust 推给窗口的数据**,不放业务逻辑。
+//
+// 它们对应 `src/ui/model.rs` 里的 `UiGame` / `SavePathDraft` / `SyncGameRow`,
+// 而不是 wire 上的 JSON —— 视图不该认识 JSON(parse.rs 已经把那层做完了)。
+// Rust 侧用 `From` 从 model 类型构造它们,见 `src/ui/render.rs`。
+
+// 游戏库里的一行。`state` 0 = 未运行、1 = 运行中、2 = 仅监视(会话在跑)。
+export struct GameItem {
+    id: string,
+    name: string,
+    exe: string,
+    // 缩放倍数,**只有数字**(字体里的 × 天生细,见 UI_GUIDE);没配就是空串,
+    // 但列宽靠 min-width 保留,否则这一列为空的行会把按钮列挤错位。
+    ratio: string,
+    state: int,
+    watch-only: bool,
+    launching: bool,
+    // 仅观测的游戏跟的进程名(单游戏设置页会显示出来,否则用户无从知道 kotori 在盯什么)。
+    process: string,
+}
+
+// 单游戏设置页的**已存**值。它是「重置」的基准,也是进页面时那份副本的来源。
+// ⚠ 这份数据只在进页面 / 重置 / 保存成功后刷新,**不要**拿草稿去填它 ——
+// 那会让每次敲键盘都重置输入框。
+export struct GameDetail {
+    game-dir: string,
+    exe: string,
+    ratio: string,
+    algo: int,
+    sharpness: int,
+    internal-w: string,
+    internal-h: string,
+    output-w: string,
+    output-h: string,
+    fullscreen: bool,
+    framerate: string,
+}
+
+// 一行存档位置。`kind` 是下标:`0 = windows`、`1 = relative`、`2 = absolute`
+// (顺序与 `model::SAVE_PATH_KINDS` 一致,两边改动要一起改)。
+export struct SaveItem {
+    kind: int,
+    path: string,
+    exclude: string,
+    // 按形态给的示例(`%APPDATA%\Game\save` / `savedata` / 绝对路径)——
+    // 空输入框里放一句能照着抄的东西,比写"存放路径"有用。
+    placeholder: string,
+}
+
+// 「各游戏存档」里的一行。
+export struct SyncGameItem {
+    id: string,
+    name: string,
+    locations: int,
+    last: string,
+    // 这个游戏现在解析不出存档位置(盘没挂 / prefix 没了),如实写出来。
+    problem: string,
+    // 已经点了「恢复」、正等着二次确认。
+    pending: bool,
+}
+
+// 全局快捷键的状态,直接来自 `daemon.status.hotkeys`。
+// ⚠ 后端目前只报「注册得怎么样」,不报「11 个动作各绑了什么键」——
+// 那份清单要 daemon 再加一个 RPC(见 AGENTS.md P1-8),所以这一页先只读。
+export struct HotkeyState {
+    requested: bool,
+    ready: bool,
+    error: string,
+    unbound: string,
+    hint: string,
+}

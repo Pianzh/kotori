@@ -1,84 +1,63 @@
-//! Iced GUI for kotori.
+//! Slint GUI for kotori.
 //!
-//! This used to be one 4000-line module; it is now split by role: data
-//! ([`model`]), messages ([`message`]), the application state ([`app`]) and its
-//! message loop ([`update`]), the daemon calls that loop awaits ([`tasks`]), the
-//! widget tree ([`view`]), JSON <-> struct conversion ([`parse`]), and the two
-//! leaves that touch none of it ([`font`], [`crash`]).
+//! The front end was rebuilt on Slint in 2026-09-13 (ADR-018: the target is
+//! "maximise the Windows 11 resemblance", and iced had no animation system and
+//! could not talk to a Wayland input method). What changed is *only* how the
+//! window is drawn; the layers underneath are the ones that were already
+//! verified and they are untouched:
+//!
+//! - [`model`] — the plain data, [`message`] — the Elm-style message enum,
+//!   [`update`] — the message loop, [`tasks`] — the daemon calls it awaits,
+//!   [`parse`] — JSON <-> struct conversion.
+//! - [`task`] — the one thing iced owned: `update` still returns
+//!   `Task<Message>`, but the type is ours now.
+//!
+//! What is new is the bridge to the window: [`render`] pushes state into the
+//! window's properties, [`wire`] turns its callbacks into messages, and
+//! [`driver`] owns the message loop and the tokio runtime behind it. The
+//! `.slint` sources live in `src/ui/slint/` and are compiled by `build.rs`.
 //!
 //! Everything the modules share is visible to them through `use super::*;`,
 //! which pulls in the imports below plus the `use` globs that follow them.
 
 use std::path::{Path, PathBuf};
 
-use iced::widget::{
-    button, container, horizontal_rule, pick_list, row, scrollable, slider, text, text_input,
-    toggler,
-};
-use iced::{Color, Element, Length, Size, Task, Theme};
 use serde_json::Value;
 
 use crate::config::{ScaleAlgorithm, ScaleProfile};
 
+slint::include_modules!();
+
 mod app;
 mod crash;
+mod driver;
 mod font;
 mod message;
 mod model;
 mod parse;
+mod render;
+mod snapshot;
+mod task;
 mod tasks;
 mod update;
-mod view;
+mod wire;
 
 pub use app::App;
 pub use message::{Message, SyncField, Tab};
 pub use model::{SavePathDraft, SessionInfo, SyncGameRow, SyncStatus, UiGame, WineStatus};
 
 use crash::*;
-use font::*;
+use driver::*;
 use model::*;
 use parse::*;
+use render::*;
+use task::*;
 use tasks::*;
 
-/// The graphics backend to ask for when the user has not picked one.
-///
-/// `None` leaves wgpu's own choice alone (it prefers Vulkan). That is the right
-/// answer on KDE/Plasma, and leaving it alone there is not a preference but a
-/// fix: asking for `gl` makes wgpu fail to create a surface for the window on
-/// this hybrid Intel/NVIDIA Wayland session (`No config found!` from
-/// `wgpu_hal::gles::egl`), and `iced_renderer` then walks *per backend* —
-/// trying its software rasteriser before moving on to the next one — so the
-/// failure does not land on Vulkan, it lands on `iced_tiny_skia`. Software
-/// rendering is why the GUI felt slow, and a `debug_assert!` inside that
-/// rasteriser is what killed it outright: "Quad with non-normal width!" took
-/// the whole process down with it.
-///
-/// Under niri it is the Vulkan swapchain that misbehaves instead
-/// (`SurfaceError::Outdated` on every frame, a `log::error!` storm from
-/// `iced_winit`: 33k lines in 6s), so there GL is the one that works. `niri`
-/// exports `NIRI_SOCKET`; an explicit `WGPU_BACKEND` from the user always wins.
-fn default_backend() -> Option<&'static str> {
-    is_niri().then_some("gl")
-}
-
-/// Whether we are running under the niri compositor.
-fn is_niri() -> bool {
-    std::env::var_os("NIRI_SOCKET").is_some()
-        || std::env::var("XDG_CURRENT_DESKTOP")
-            .is_ok_and(|v| v.to_ascii_lowercase().contains("niri"))
-}
-
 pub fn run() -> anyhow::Result<()> {
-    if std::env::var_os("WGPU_BACKEND").is_none()
-        && let Some(backend) = default_backend()
-    {
-        unsafe { std::env::set_var("WGPU_BACKEND", backend) };
-    }
-
     let (crash_log, crash_log_ok) = install_crash_log();
     tracing::info!(
-        "UI 渲染后端 {}；崩溃报告 {}",
-        std::env::var("WGPU_BACKEND").unwrap_or_else(|_| "自动".into()),
+        "UI 启动；崩溃报告 {}",
         if crash_log_ok {
             crash_log.display().to_string()
         } else {
@@ -94,31 +73,13 @@ pub fn run() -> anyhow::Result<()> {
         tracing::warn!("{e}");
     }
 
-    iced::application("Kotori", App::update, App::view)
-        .font(UI_FONT_BYTES)
-        .default_font(ui_font())
-        .window(iced::window::Settings {
-            size: Size::new(960.0, 640.0),
-            min_size: Some(Size::new(760.0, 520.0)),
-            ..Default::default()
-        })
-        .theme(|_| Theme::Dark)
-        .run_with(App::new)
-        .map_err(|e| anyhow::anyhow!("UI error: {e}"))?;
-
-    // Reaching this line means the event loop ended because every window was
-    // closed — not because of a panic. Worth recording: "it just exited" is
-    // ambiguous otherwise.
-    tracing::info!("UI 退出：所有窗口已关闭（不是崩溃）");
-    Ok(())
+    driver::run()
 }
 
 #[cfg(test)]
 mod test_support {
     use super::*;
 
-    /// Building the widget tree must not panic in any reachable state. This
-    /// covers the empty-list / no-search-hit branches of the new pages.
     /// A `sync.status` payload as the daemon sends it.
     pub(super) fn sync_payload() -> Value {
         serde_json::json!({
