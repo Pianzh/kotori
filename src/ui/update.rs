@@ -136,61 +136,61 @@ impl App {
                 if let Some(d) = &mut self.draft {
                     d.algo = algo;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::SharpnessChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.sharpness = v.round() as u32;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::InternalWChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.internal_w = v;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::InternalHChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.internal_h = v;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::OutputWChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.output_w = v;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::OutputHChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.output_h = v;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::ScaleRatioChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.scale_ratio = v;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::FullscreenToggled(b) => {
                 if let Some(d) = &mut self.draft {
                     d.fullscreen = b;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::FramerateChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.framerate = v;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::ExePathChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.exe = v;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::DeleteRequested => {
                 self.confirm_delete = true;
@@ -374,7 +374,7 @@ impl App {
                 if let Some(draft) = &mut self.draft {
                     draft.game_dir = value;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::SavePathKindChanged(index, kind) => {
                 if let Some(entry) = self
@@ -384,7 +384,7 @@ impl App {
                 {
                     entry.kind = kind;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::SavePathChanged(index, value) => {
                 if let Some(entry) = self
@@ -394,7 +394,7 @@ impl App {
                 {
                     entry.path = value;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::SavePathExcludeChanged(index, value) => {
                 if let Some(entry) = self
@@ -404,7 +404,7 @@ impl App {
                 {
                     entry.exclude = value;
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::AddSavePath => {
                 if let Some(draft) = &mut self.draft {
@@ -414,7 +414,7 @@ impl App {
                         exclude: String::new(),
                     });
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::RemoveSavePath(index) => {
                 if let Some(draft) = &mut self.draft
@@ -422,7 +422,7 @@ impl App {
                 {
                     draft.save_paths.remove(index);
                 }
-                Task::none()
+                self.schedule_auto_save()
             }
             Message::Tick => {
                 let socket = self.daemon_socket.clone();
@@ -846,31 +846,79 @@ impl App {
                     Message::StatusLoaded,
                 )
             }
-            Message::SaveProfile => {
-                let Some(draft) = self.draft.clone() else {
+            Message::AutoSave(generation) => {
+                // 世代对不上 = 这 700ms 里又改过,这一次作废(防抖就是靠它)。
+                if generation != self.autosave_generation {
+                    return Task::none();
+                }
+                self.begin_auto_save()
+            }
+            Message::ProfileSaved(generation, result) => {
+                let Some(attempt) = self.save_in_flight.take() else {
+                    // 一笔只回一次,理论上到不了这儿;真到了也别让界面永远停在"保存中"。
+                    self.saving = false;
                     return Task::none();
                 };
-                self.saving = true;
-                self.saved_msg = None;
+                self.saving = false;
+                // 用户可能已经翻到别的游戏去了:回包只能落在它自己那一份草稿上,
+                // 否则会把别人的 `*_original` 写成这个游戏的值。
+                let same_game = self.selected.as_deref() == Some(attempt.draft.game_id.as_str());
+
+                match &result {
+                    Ok(()) => {
+                        if same_game {
+                            if let Some(draft) = self.draft.as_mut() {
+                                // 服务端现在有的就是这一笔带过去的东西 ⇒ 把这些书签
+                                // 推进过去,下一次只发改过的字段(游戏盘没挂载时也
+                                // 不会因为重发旧路径而白报错)。
+                                draft.game_dir_original = attempt.draft.game_dir.clone();
+                                draft.exe_original = attempt.draft.exe.clone();
+                                draft.save_paths_original = attempt.draft.save_paths.clone();
+                            }
+                            self.saved_msg = Some("已自动保存".to_string());
+                        }
+                    }
+                    Err(e) => {
+                        // 草稿一个字都不动:用户正在打的那半截不能被回包吃掉。
+                        if same_game {
+                            self.saved_msg = Some(format!("保存失败: {e}"));
+                        } else {
+                            // 已经离开那一页了,别把失败吞掉 —— 挂到顶部的错误条上。
+                            self.error = Some(format!("自动保存失败: {e}"));
+                        }
+                    }
+                }
+
+                // 这一笔已经过期(按过「重置」,或者又改过):配置里现在写着的是一个
+                // 用户不要的值,用手上的草稿再存一次把它拉回来。
+                if same_game && generation != self.autosave_generation {
+                    return self.begin_auto_save();
+                }
+                // 存完把库读一遍:列表与"已存值"要跟上,否则退出这一页再进来看到的是旧的。
+                // 页面自己的副本不会被它重置(种子没动,见 game-settings.slint)。
+                let socket = self.daemon_socket.clone();
                 Task::perform(
-                    async move { save_profile(draft).await },
-                    Message::ProfileSaved,
+                    async move { load_games_from(&socket).await },
+                    Message::GamesLoaded,
                 )
             }
-            Message::ProfileSaved(result) => {
-                self.saving = false;
-                self.saved_msg = Some(match &result {
-                    Ok(()) => "已保存并通知守护进程".to_string(),
-                    Err(e) => format!("保存失败: {e}"),
-                });
-                if let Err(e) = &result {
-                    self.error = Some(e.clone());
+            Message::ResetProfile => {
+                // 作废还挂在防抖窗口里的那一笔,然后把页面重新按「已存值」铺一遍
+                // (真正把副本抄回去的是 wire 里的 `reseed_detail`)。
+                self.cancel_auto_save();
+                let Some(game) = self.selected_game().cloned() else {
+                    return Task::none();
+                };
+                let unchanged = self
+                    .draft
+                    .as_ref()
+                    .is_none_or(|draft| draft.matches_stored(&game));
+                self.draft = Some(Draft::from_game(&game));
+                self.saved_msg = Some(if unchanged {
+                    "没有未保存的改动".to_string()
                 } else {
-                    // Refresh the library so the new scale shows up.
-                    return Task::perform(async { connect_and_load().await }, |r| {
-                        Message::GamesLoaded(r)
-                    });
-                }
+                    "已还原为已保存的设置".to_string()
+                });
                 Task::none()
             }
         }

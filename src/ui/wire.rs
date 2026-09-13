@@ -59,12 +59,10 @@ pub(super) fn install_callbacks(window: &AppWindow) {
         dispatch(Message::BackToList);
         with_ui(|ui| ui.window.set_game_open(false));
     });
-    window.on_save(|| dispatch(Message::SaveProfile));
     window.on_reset(|| {
         // 把草稿重新按「已存值」铺一遍,再让页面把副本重抄一次 —— 缺了后一半,
         // 用户看到的还是自己改过的内容,而草稿已经回到原样,两边就对不上了。
-        let id = with_ui(|ui| ui.window.get_game().id.to_string());
-        dispatch(Message::GameSelected(id));
+        dispatch(Message::ResetProfile);
         with_ui(Ui::reseed_detail);
     });
     window.on_delete_requested(|| dispatch(Message::DeleteRequested));

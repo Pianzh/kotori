@@ -1,10 +1,13 @@
-// 单游戏设置页的底部动作:保存配置 / 重置,以及「删除条目」的二次确认。
+// 单游戏设置页的底部动作:重置,以及「删除条目」的二次确认。
+//
+// ⚠ 这里**没有「保存」按钮**(2026-09-13 用户拍板):改一下就自动写回,状态由旁边那行
+//    小字如实汇报(保存中 / 已自动保存 / 保存失败)。
 //
 // 单独一个文件,是因为"破坏性操作要二次确认"这条规矩连着措辞一起,值得一眼看全。
 
 import { Tokens } from "../theme.slint";
 import { RevealItem } from "../widgets/base.slint";
-import { AccentButton, StdButton } from "../widgets/buttons.slint";
+import { StdButton } from "../widgets/buttons.slint";
 
 export component GameActions inherits Rectangle {
     in property <bool> revealed: false;
@@ -13,7 +16,6 @@ export component GameActions inherits Rectangle {
     in property <bool> saved-ok: true;
     in property <bool> confirm-delete: false;
 
-    callback save();
     callback reset();
     callback delete-requested();
     callback delete-cancelled();
@@ -26,23 +28,19 @@ export component GameActions inherits Rectangle {
                 bottom: 12px;
                 HorizontalLayout {
                     spacing: 10px;
-                    AccentButton {
-                        label: root.saving ? "保存中…" : "保存配置";
-                        button-width: 108px;
-                        button-enabled: !root.saving;
-                        clicked => { root.save(); }
-                    }
                     StdButton {
                         label: "重置";
                         button-width: 84px;
+                        // 自动保存之后它多半没什么可还原的 —— 那种情况会如实说
+                        // 「没有未保存的改动」,而不是装作干了活(见 update.rs)。
                         clicked => { root.reset(); }
                     }
                     Text {
-                        text: root.saved-msg;
+                        text: root.saving ? "保存中…" : root.saved-msg;
                         font-size: 12px;
                         color: root.saved-ok ? Tokens.ok : Tokens.danger;
                         vertical-alignment: center;
-                        visible: root.saved-msg != "";
+                        visible: root.saving || root.saved-msg != "";
                     }
                     Rectangle { horizontal-stretch: 1; background: #00000000; }
                 }

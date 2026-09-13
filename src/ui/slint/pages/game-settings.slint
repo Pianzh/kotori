@@ -49,7 +49,6 @@ export component GameSettingsPage inherits Rectangle {
 
     callback back();
     callback launch();
-    callback save();
     callback reset();
     callback delete-requested();
     callback delete-cancelled();
@@ -331,7 +330,6 @@ export component GameSettingsPage inherits Rectangle {
                 saved-msg: root.saved-msg;
                 saved-ok: root.saved-ok;
                 confirm-delete: root.confirm-delete;
-                save => { root.save(); }
                 reset => { root.reset(); }
                 delete-requested => { root.delete-requested(); }
                 delete-cancelled => { root.delete-cancelled(); }

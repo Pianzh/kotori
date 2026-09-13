@@ -96,8 +96,18 @@ fn every_page_renders_without_a_display() {
 
     ui.app.confirm_delete = true;
     render(&mut ui);
-    ui.app.saved_msg = Some("已保存并通知守护进程".into());
-    render(&mut ui);
+    // 没有「保存」按钮了:这一行小字就是自动保存的全部汇报(进行中 / 成功 / 无改动 / 失败)。
+    for (saving, message) in [
+        (true, "保存中…"),
+        (false, "已自动保存"),
+        (false, "没有未保存的改动"),
+        (false, "保存失败: 缩放比例必须是数字（当前 abc）"),
+    ] {
+        ui.app.saving = saving;
+        ui.app.saved_msg = Some(message.to_string());
+        render(&mut ui);
+    }
+    ui.app.saved_msg = None;
 
     // 仅观测的游戏(页面上会多一节,内容来自 process_name)。
     ui.app.games = vec![UiGame {
@@ -349,13 +359,22 @@ fn every_page_renders_without_a_display() {
     window.invoke_remove_save(0);
     assert!(draft().save_paths.is_empty());
 
-    // 「重置」= 草稿回到已存值 + 让页面重抄一份(种子必须 +1)。
+    // 改一笔 = 挂一次防抖自动保存(这里只断言它真的排上了;写回由 app.rs 的单测盯)。
+    let generation = with_ui(|ui| ui.app.autosave_generation);
     window.invoke_ratio_changed("9".into());
     assert_eq!(draft().scale_ratio, "9");
+    assert_eq!(
+        with_ui(|ui| ui.app.autosave_generation),
+        generation + 1,
+        "每改一笔都要排一次自动保存"
+    );
+
+    // 「重置」= 草稿回到已存值 + 作废挂着的那一笔 + 让页面重抄一份(种子必须 +1)。
     let seed_before = window.get_detail_seed();
     window.invoke_reset();
     assert_eq!(draft().scale_ratio, "");
     assert_eq!(window.get_detail_seed(), seed_before + 1);
+    assert!(with_ui(|ui| ui.app.autosave_generation) > generation + 1);
 
     window.invoke_delete_requested();
     assert_app(&|app| assert!(app.confirm_delete));

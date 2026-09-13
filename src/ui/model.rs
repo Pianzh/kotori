@@ -33,6 +33,12 @@ pub(super) const MAX_AUTO_RETRIES: u32 = 5;
 /// How often the UI polls the daemon for live sessions.
 pub(super) const STATUS_POLL: std::time::Duration = std::time::Duration::from_secs(3);
 
+/// 单游戏设置页的自动保存:最后一次编辑之后等这么久才真的去写。
+///
+/// 700ms 是"手感上仍然算即时"与"打一串字只写一次"之间的折中。改一下存一次的那套
+/// 见 `App::schedule_auto_save` 与 [`SaveAttempt`]。
+pub(super) const AUTOSAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(700);
+
 /// The three save-location kinds, as shown in the editor.
 pub(super) const SAVE_PATH_KINDS: [&str; 3] = ["windows", "relative", "absolute"];
 
@@ -373,6 +379,29 @@ impl Draft {
     pub(super) fn save_paths_changed(&self) -> bool {
         self.save_paths != self.save_paths_original
     }
+
+    /// 页面上看得见的那些值,是否已经和「已存值」一样。
+    ///
+    /// 比较时**故意忽略 `*_original`**:它们是"服务端有什么"的书签,不是页面内容。
+    /// 档案本身直接比(`ScaleProfile` 有 `PartialEq`),路径按去空白后的文本比 ——
+    /// 这样"重置"能如实回答"有没有东西可还原"。
+    pub(super) fn matches_stored(&self, game: &UiGame) -> bool {
+        let stored = Draft::from_game(game);
+        self.exe.trim() == stored.exe.trim()
+            && self.game_dir.trim() == stored.game_dir.trim()
+            && self.save_paths == stored.save_paths
+            && profile_from_draft(self).ok() == profile_from_draft(&stored).ok()
+    }
+}
+
+/// 一笔在路上的自动保存:带走了哪份草稿(以及它属于哪个游戏)。
+///
+/// 成功之后要把 `*_original` 推进到**带走的这份**上(不是手上这份 —— 用户可能又改过
+/// 了):它代表"服务端现在有的值",下一次自动保存据此只发改过的字段。少推进这一下,
+/// 游戏盘一没挂载就会连"改个锐度"都存不进去。
+#[derive(Debug, Clone)]
+pub(super) struct SaveAttempt {
+    pub(super) draft: Draft,
 }
 
 #[cfg(test)]

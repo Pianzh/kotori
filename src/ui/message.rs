@@ -50,8 +50,16 @@ pub enum Message {
     SavePathExcludeChanged(usize, String),
     AddSavePath,
     RemoveSavePath(usize),
-    SaveProfile,
-    ProfileSaved(Result<(), String>),
+    /// 改一下就自动存一次:这是防抖定时器到点。
+    ///
+    /// 带着世代号 —— 定时器醒来时它已经过期(用户还在改)就什么都不做,见
+    /// `App::schedule_auto_save`。没有「保存」按钮了,所以这条是唯一的写入入口。
+    AutoSave(u64),
+    /// 一次自动保存的回包。世代号对不上说明这一笔已经过期(用户按过「重置」或又改了),
+    /// 那时得拿手上的草稿再存一次,否则配置里留着的是一个用户已经不要的值。
+    ProfileSaved(u64, Result<(), String>),
+    /// 「重置」:回到已保存的设置(没有保存按钮之后,这是填错值的唯一退路)。
+    ResetProfile,
     DeleteRequested,
     DeleteCancelled,
     DeleteConfirmed,

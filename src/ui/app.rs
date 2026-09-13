@@ -15,6 +15,13 @@ pub struct App {
     pub(super) draft: Option<Draft>,
     pub(super) saving: bool,
     pub(super) saved_msg: Option<String>,
+    /// 自动保存用世代号:每改一笔 +1 并挂一个防抖定时器,定时器醒来发现号变了就作废
+    /// (说明用户还在改)。没有「保存」按钮之后,这一对(世代 + [`SaveAttempt`])是
+    /// 唯一防止"打一个字写一次""旧回包盖掉新内容"的东西,别省。
+    pub(super) autosave_generation: u64,
+    /// 正在路上的那一笔。**同一时刻只允许一笔**:两次全量写并发时,后到的旧快照会把
+    /// 新的盖掉(daemon 是并发的),所以第二笔一律等第一笔回来再发。
+    pub(super) save_in_flight: Option<SaveAttempt>,
     /// Library search query (matches name or exe path).
     pub(super) search: String,
     pub(super) confirm_delete: bool,
@@ -69,6 +76,8 @@ impl App {
                 draft: None,
                 saving: false,
                 saved_msg: None,
+                autosave_generation: 0,
+                save_in_flight: None,
                 search: String::new(),
                 confirm_delete: false,
                 new_name: String::new(),
@@ -152,6 +161,53 @@ impl App {
             async { load_sync_status().await },
             Message::SyncStatusLoaded,
         )
+    }
+
+    // ── 自动保存(没有「保存」按钮了,这一节就是那个按钮) ──────────────────
+
+    /// 一笔编辑之后安排一次自动保存。
+    ///
+    /// 不直接写:每一笔编辑都把世代 +1、挂一个 [`AUTOSAVE_DEBOUNCE`] 的定时器,定时器
+    /// 醒来时**世代对不上就不做**(说明这 700ms 里用户又改了)。所以连打一串字只写一次,
+    /// 而且永远写的是最后一次编辑之后的那份草稿。
+    pub(super) fn schedule_auto_save(&mut self) -> Task<Message> {
+        if self.draft.is_none() {
+            return Task::none();
+        }
+        self.autosave_generation = self.autosave_generation.wrapping_add(1);
+        let generation = self.autosave_generation;
+        Task::perform(
+            async move { tokio::time::sleep(AUTOSAVE_DEBOUNCE).await },
+            move |_| Message::AutoSave(generation),
+        )
+    }
+
+    /// 让还挂在防抖窗口里的那一次作废(换游戏、返回列表、按「重置」)。
+    pub(super) fn cancel_auto_save(&mut self) {
+        self.autosave_generation = self.autosave_generation.wrapping_add(1);
+    }
+
+    /// 真的发一次保存。除了防抖到点,「重置」也直接调它(那是明确的一次操作,不用等)。
+    ///
+    /// **同一时刻只允许一笔**:daemon 并发处理请求,两次全量写若重叠,后到的旧快照会
+    /// 把新的盖掉。所以这里见到在路上的就退回 —— 不用担心丢掉这一次,在路上的那笔回来
+    /// 时世代必然已经变了(见 `Message::ProfileSaved`),它会自己再存一遍。
+    pub(super) fn begin_auto_save(&mut self) -> Task<Message> {
+        let Some(draft) = self.draft.clone() else {
+            return Task::none();
+        };
+        if self.save_in_flight.is_some() {
+            tracing::debug!("上一笔自动保存还没回来，这一次等它");
+            return Task::none();
+        }
+        self.saving = true;
+        let generation = self.autosave_generation;
+        self.save_in_flight = Some(SaveAttempt {
+            draft: draft.clone(),
+        });
+        Task::perform(async move { save_profile(draft).await }, move |result| {
+            Message::ProfileSaved(generation, result)
+        })
     }
 }
 
@@ -285,6 +341,120 @@ mod tests {
         let _ = app.update(Message::StatusLoaded(Ok(Default::default())));
         assert!(!app.daemon_paused);
         assert_eq!(app.daemon_connected, Some(true));
+    }
+
+    /// 自动保存:连改几笔只会存最后一笔,而且过期回包必须让**新的**那份再存一次 ——
+    /// 否则配置里留下的是用户已经改掉的值。
+    #[test]
+    fn the_latest_edit_is_the_one_that_gets_saved() {
+        let (mut app, _task) = App::new();
+        app.games = vec![ui_game()];
+        app.update(Message::GameSelected("demo".into()));
+
+        // 第一笔:挂一个防抖定时器,而不是立刻写。
+        app.update(Message::AlgoChanged("Nis".into()));
+        assert_eq!(app.autosave_generation, 1);
+        assert!(
+            app.save_in_flight.is_none() && !app.saving,
+            "还没到点,不该发出去"
+        );
+
+        // 用户还在改:旧的定时器醒来时世代已经对不上,作废。
+        app.update(Message::SharpnessChanged(4.0));
+        app.update(Message::AutoSave(1));
+        assert!(app.save_in_flight.is_none(), "过期的定时器不许写");
+
+        // 最后那一笔到点,才真的发出去。
+        app.update(Message::AutoSave(2));
+        assert!(app.saving);
+        let in_flight = app
+            .save_in_flight
+            .as_ref()
+            .expect("一笔应该在路上")
+            .draft
+            .clone();
+        assert_eq!(in_flight.algo, "Nis");
+        assert_eq!(in_flight.sharpness, 4);
+
+        // 上一笔还没回来时又改了一笔:不发第二笔(并发写会互相覆盖)……
+        app.update(Message::FramerateChanged("60".into()));
+        app.update(Message::AutoSave(3));
+        assert_eq!(
+            app.save_in_flight
+                .as_ref()
+                .map(|a| a.draft.framerate.clone()),
+            Some(String::new()),
+            "在路上的那笔不该被替换"
+        );
+
+        // ……等它回来时发现世代变了,于是拿手上的草稿再存一次。
+        app.update(Message::ProfileSaved(2, Ok(())));
+        assert!(app.saving);
+        assert_eq!(
+            app.save_in_flight
+                .as_ref()
+                .map(|a| a.draft.framerate.clone()),
+            Some("60".to_string()),
+            "过期回包之后要把最新的那份补上"
+        );
+
+        let task = app.update(Message::ProfileSaved(3, Ok(())));
+        assert!(!app.saving && app.save_in_flight.is_none());
+        assert_eq!(app.saved_msg.as_deref(), Some("已自动保存"));
+        // 存成功后要重读一遍库,列表里的"已存值"才跟得上。
+        assert_eq!(task.into_effects().len(), 1);
+    }
+
+    /// 一条回包只能落在它自己那一份草稿上:用户中途翻到别的游戏时,不能把别人的
+    /// `*_original` 写成这个游戏的值。
+    #[test]
+    fn a_late_save_never_touches_another_games_draft() {
+        let (mut app, _task) = App::new();
+        app.games = vec![
+            ui_game(),
+            UiGame {
+                id: "other".into(),
+                name: "Other".into(),
+                ..ui_game()
+            },
+        ];
+        app.update(Message::GameSelected("demo".into()));
+        app.update(Message::ExePathChanged("/games/demo/renamed.exe".into()));
+        app.update(Message::AutoSave(app.autosave_generation));
+        assert!(app.save_in_flight.is_some());
+
+        app.update(Message::GameSelected("other".into()));
+        app.update(Message::ProfileSaved(1, Ok(())));
+        let draft = app.draft.as_ref().expect("换过去的游戏也有草稿");
+        assert_eq!(draft.game_id, "other");
+        assert_eq!(draft.exe_original, draft.exe, "别人的书签不许被动");
+        assert!(app.saved_msg.is_none(), "已经离开那一页了,别在这儿报");
+    }
+
+    /// 「重置」:回到已存值、作废还挂着的防抖,而且"没东西可还原"时要如实说。
+    #[test]
+    fn reset_goes_back_to_the_stored_settings() {
+        let (mut app, _task) = App::new();
+        app.games = vec![ui_game()];
+        app.update(Message::GameSelected("demo".into()));
+
+        app.update(Message::ResetProfile);
+        assert_eq!(
+            app.saved_msg.as_deref(),
+            Some("没有未保存的改动"),
+            "本来就没改,别装作还原了什么"
+        );
+
+        app.update(Message::GameDirChanged("/games/elsewhere".into()));
+        let generation = app.autosave_generation;
+        app.update(Message::ResetProfile);
+        assert_eq!(app.autosave_generation, generation + 1, "挂着的那笔要作废");
+        assert_eq!(
+            app.draft.as_ref().map(|d| d.game_dir.clone()),
+            Some("/games/demo".into())
+        );
+        assert_eq!(app.saved_msg.as_deref(), Some("已还原为已保存的设置"));
+        assert!(!app.draft.as_ref().unwrap().game_dir_changed());
     }
 
     #[test]

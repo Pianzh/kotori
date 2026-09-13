@@ -90,7 +90,7 @@ export component AppWindow inherits Window {
     in-out property <bool> detail-sync-busy: false;
 
     callback back();
-    callback save();
+    // 没有「保存」按钮了:改动由宿主防抖后自动写回(见 ui/app.rs 的 schedule_auto_save)。
     callback reset();
     callback delete-requested();
     callback delete-cancelled();
@@ -288,7 +288,6 @@ export component AppWindow inherits Window {
                             sync-busy: root.detail-sync-busy;
                             back => { root.back(); }
                             launch => { root.launch(root.game.id); }
-                            save => { root.save(); }
                             reset => { root.reset(); }
                             delete-requested => { root.delete-requested(); }
                             delete-cancelled => { root.delete-cancelled(); }
