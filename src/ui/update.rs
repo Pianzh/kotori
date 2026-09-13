@@ -502,6 +502,12 @@ impl App {
                     self.sync_form.msg = Some("两个字段都空着：这只会清掉已保存的凭据".to_string());
                     return Task::none();
                 }
+                // 内存那一级只是"过渡":没有可持久化的后端时,先把主密码设起来,
+                // 否则凭据活不过这个守护进程 —— 静默接受等于骗用户(ADR-014)。
+                if self.credential_store() == CredentialStore::Session {
+                    self.sync_form.msg = Some(CredentialStore::needs_master_password().to_string());
+                    return Task::none();
+                }
                 self.sync_form.busy = true;
                 self.sync_form.msg = None;
                 let socket = self.daemon_socket.clone();
@@ -569,6 +575,12 @@ impl App {
                 let password = self.sync_form.password.clone();
                 if !password.is_empty() && password != self.sync_form.password_again {
                     self.sync_form.msg = Some("两次输入的密码不一样".to_string());
+                    return Task::none();
+                }
+                // 加密密码尤其不能只留在内存里:重启后连自己上传的存档都解不开。
+                // 清空密码走的是 SyncClearPassword,不受这条限制。
+                if !password.is_empty() && self.credential_store() == CredentialStore::Session {
+                    self.sync_form.msg = Some(CredentialStore::needs_master_password().to_string());
                     return Task::none();
                 }
                 self.sync_form.busy = true;

@@ -323,6 +323,65 @@ mod tests {
         );
     }
 
+    /// 没有可持久化后端时,保存要被拒绝 —— **不许静默存进内存**。
+    ///
+    /// 内存那一级只是过渡态(命令行"先存凭据、再封进文件");没有密钥环的机器
+    /// (含还没接凭据管理器的 Windows)必须先设主密码,否则用户以为存好了,重启就没了。
+    #[test]
+    fn nothing_is_saved_while_only_memory_is_available() {
+        let (mut app, _task) = App::new();
+        app.sync_status = Some(SyncStatus {
+            store_kind: "session-only".into(),
+            ephemeral: true,
+            ..sync_status_fixture()
+        });
+        app.sync_form.apply(
+            app.sync_status.as_ref().unwrap(),
+            &sync_payload()["settings"],
+        );
+
+        // 凭据:拒绝,并指路到主密码那一行;框里的东西要留着(用户不用重打)。
+        let _ = app.update(Message::SyncField(SyncField::KeyId, "0046b5".into()));
+        let _ = app.update(Message::SyncField(SyncField::AppKey, "K004".into()));
+        let _ = app.update(Message::SyncSaveCredentials);
+        assert!(!app.sync_form.busy, "不该发请求");
+        assert_eq!(app.sync_form.key_id, "0046b5");
+        let refused = app.sync_form.msg.clone().unwrap_or_default();
+        assert!(refused.contains("主密码"), "{refused}");
+
+        // 同步密码同理(加密密码丢了,连自己上传的存档都解不开)。
+        let _ = app.update(Message::SyncField(
+            SyncField::Password,
+            "hunter2hunter2".into(),
+        ));
+        let _ = app.update(Message::SyncField(
+            SyncField::PasswordAgain,
+            "hunter2hunter2".into(),
+        ));
+        let _ = app.update(Message::SyncSavePassword);
+        assert!(!app.sync_form.busy, "不该发请求");
+        assert!(
+            app.sync_form
+                .msg
+                .as_deref()
+                .unwrap_or_default()
+                .contains("主密码")
+        );
+
+        // 清空密码不受影响:那是"删掉",不是"存下来"。
+        let _ = app.update(Message::SyncClearPassword);
+        assert!(app.sync_form.busy, "清密码应该照样发出去");
+
+        // 有了文件后端(或密钥环)就放行。
+        app.sync_form.busy = false;
+        app.sync_status = Some(SyncStatus {
+            store_kind: "encrypted-file".into(),
+            ..sync_status_fixture()
+        });
+        let _ = app.update(Message::SyncSaveCredentials);
+        assert!(app.sync_form.busy, "有可持久化后端就该发出去");
+    }
+
     /// 删除凭据文件是破坏性操作:没点过"删除"就直接确认,什么都不该发生。
     #[test]
     fn deleting_the_master_file_needs_the_confirmation_it_asked_for() {
