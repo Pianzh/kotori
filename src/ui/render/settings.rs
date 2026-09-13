@@ -1,4 +1,4 @@
-//! 设置页:后台服务(守护进程)的启停、Wine prefix 与全局快捷键状态。
+//! 设置页:后台服务(守护进程)的启停与 Wine prefix。
 
 use super::*;
 
@@ -71,22 +71,6 @@ pub(super) fn push_settings(ui: &mut Ui) {
     push_eq(w.get_wine_detected(), strings(detected), |v| {
         w.set_wine_detected(v)
     });
-
-    let hotkeys = app.hotkeys.clone().unwrap_or_default();
-    push_bool(w.get_hotkeys_loaded(), app.hotkeys.is_some(), |v| {
-        w.set_hotkeys_loaded(v)
-    });
-    push_eq(
-        w.get_hotkeys(),
-        HotkeyState {
-            requested: hotkeys.requested,
-            ready: hotkeys.ready,
-            error: hotkeys.error.unwrap_or_default().into(),
-            unbound: hotkeys.unbound.join(" / ").into(),
-            hint: hotkeys.assign_hint.into(),
-        },
-        |v| w.set_hotkeys(v),
-    );
 }
 
 /// 「守护进程」那一行的状态字与颜色码(0 检测中 / 1 运行中 / 2 未运行)。

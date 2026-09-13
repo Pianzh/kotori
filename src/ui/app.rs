@@ -62,8 +62,6 @@ pub struct App {
     pub(super) picked_path: Option<(PathTarget, String)>,
     /// 推给页面的"第几次选择"令牌:值一样也要能触发一次(见 `types.slint` 的 `PathPick`)。
     pub(super) pick_token: i32,
-    /// 全局快捷键的注册情况(设置页);`None` = 还没问到。
-    pub(super) hotkeys: Option<HotkeyStatus>,
     /// Automatic reconnect bookkeeping.
     pub(super) retry_attempts: u32,
     /// Live sessions by game id (refreshed periodically).
@@ -113,7 +111,6 @@ impl App {
                 picking: false,
                 picked_path: None,
                 pick_token: 0,
-                hotkeys: None,
                 retry_attempts: 0,
                 running: std::collections::BTreeMap::new(),
                 sync_status: None,

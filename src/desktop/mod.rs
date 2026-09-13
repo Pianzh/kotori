@@ -1,7 +1,7 @@
 //! Talking to the desktop environment.
 //!
-//! Only one thing lives here today: KDE's window control, which is how a hotkey
-//! can change a running gamescope's output size — and with it the upscale ratio,
+//! Only one thing lives here today: KDE's window control, which is how kotori
+//! changes a running gamescope's output size — and with it the upscale ratio,
 //! which is what "缩放" means to a user. Everything else in kotori talks to
 //! gamescope, X11 or the portal directly, so this module stays deliberately small.
 

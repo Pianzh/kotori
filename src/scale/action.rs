@@ -1,16 +1,16 @@
 //! The runtime scaling actions and the ratios they move between.
 //!
 //! Split out of `mod.rs`, which had grown into everything the scaling engine
-//! touches at once: this is the part a hotkey, the CLI and the GUI all name.
+//! touches at once: this is the part the CLI and the GUI both name.
 use crate::config::ScaleProfile;
 
-/// One runtime scaling action — what a hotkey, the CLI and the GUI all ask for.
+/// One runtime scaling action — what the CLI and the GUI both ask for.
 ///
 /// The list is deliberately short: an action exists only if kotori can actually
 /// carry it out. gamescope's own `Super+F` (toggle the nested window's
 /// fullscreen state) is **not** here, because the runtime channel
 /// ([`x11`]) can change the compositor's upscaler and nothing else — and a
-/// registered shortcut that cannot do anything is worse than a missing one.
+/// shortcut that cannot reach its action is worse than a missing one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScaleAction {
     ToggleFsr,
@@ -19,9 +19,9 @@ pub enum ScaleAction {
     ToggleLinear,
     Soften,
     Sharpen,
-    /// One press: draw the game at the ratio its profile configures; press again
-    /// and it is back at its own pixels. This is the user's key — the ladder
-    /// below exists for the CLI and for anyone who wants more than two states.
+    /// One call: draw the game at the ratio its profile configures; call it again
+    /// and it is back at its own pixels. This is the two-state toggle — the ladder
+    /// below exists for anyone who wants more than two states.
     ToggleScale,
     /// Step the upscale ratio up: gamescope's output — and with it the window —
     /// grows, so the game is drawn larger than its own resolution.
@@ -34,7 +34,7 @@ pub enum ScaleAction {
     ToggleFullscreen,
 }
 
-/// The ratios a window-scale hotkey steps through.
+/// The ratios a window-scale action steps through.
 ///
 /// 1.0 is the game at its own resolution, and each step is a quarter until 2×;
 /// above that the steps get bigger because the point is "as large as the screen
@@ -43,7 +43,7 @@ pub enum ScaleAction {
 pub const SCALE_LADDER: [f32; 7] = [1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 /// The ladder position closest to `ratio`, which is where a session starts (from
-/// its profile) and what a hotkey steps away from.
+/// its profile) and what a step moves away from.
 pub fn ladder_index_for(ratio: f32) -> usize {
     SCALE_LADDER
         .iter()
@@ -76,7 +76,7 @@ pub fn ladder_step(index: usize, up: bool) -> usize {
 /// (that is what the launch gets, since no `-w/-h` is passed), so the ratio is
 /// measured against the size actually being drawn rather than a number nobody
 /// chose. The ladder's first step means the same thing: the game at its own size.
-/// This is where a session's ratio starts, so the first hotkey press steps from
+/// This is where a session's ratio starts, so the first runtime step moves from
 /// what the user is looking at rather than from a default.
 ///
 /// `screen` is needed because a profile that names neither a ratio nor a size opens
@@ -99,7 +99,7 @@ pub fn profile_ratio(profile: &ScaleProfile, screen: (u32, u32)) -> f32 {
 /// round trip, so this only absorbs float noise, not a real difference.
 pub const RATIO_EPSILON: f32 = 0.001;
 
-/// The ratio one press of the scaling hotkey scales to — 「设定比例」.
+/// The ratio the two-state toggle scales to — 「设定比例」.
 ///
 /// That is the ratio the launch used: `scale_ratio` when the profile sets one, and
 /// otherwise whatever the window was opened at. `screen` is only consulted when the
@@ -109,13 +109,13 @@ pub fn toggle_target(profile: &ScaleProfile, screen: (u32, u32)) -> f32 {
     profile_ratio(profile, screen)
 }
 
-/// One press of the scaling hotkey: to the configured ratio, or back to 1:1.
+/// The two-state toggle: to the configured ratio, or back to 1:1.
 ///
-/// A toggle rather than a ladder, because the user asked for *one* key: press and
-/// the game is drawn at the ratio the profile configures, press again and it is
-/// back at its own pixels. Being at the target is what tells the two apart —
-/// which also covers a game that was launched straight into the target size, so
-/// the first press cancels rather than doing nothing visible.
+/// A toggle rather than a ladder, because two states are all config vs. native
+/// needs: ask once and the game is drawn at the ratio the profile configures, ask
+/// again and it is back at its own pixels. Being at the target is what tells the
+/// two apart — which also covers a game that was launched straight into the target
+/// size, so the first toggle cancels rather than doing nothing visible.
 pub fn toggled_ratio(current: f32, target: f32) -> f32 {
     if (current - target).abs() < RATIO_EPSILON {
         1.0
@@ -157,55 +157,9 @@ impl ScaleAction {
         }
     }
 
-    /// Look an id up as it comes back from the portal.
+    /// Look an id up as it arrives over IPC (`scale.action` carries one).
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|action| action.id() == id)
-    }
-
-    /// The name of this action, as the desktop will show it in its shortcut
-    /// list — so it names the *effect*, never a key. The key is the user's to
-    /// choose, and gamescope's own chords are not even reachable (see
-    /// `crate::hotkeys`).
-    ///
-    /// The two sharpness steps name the effect, which is the opposite way round
-    /// from gamescope's own help text — see [`Self::for_sharpness_delta`].
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::ToggleScale => "按设定比例缩放／取消缩放（一键开关）",
-            Self::ScaleUp => "放大游戏窗口（提高缩放比例）",
-            Self::ScaleDown => "缩小游戏窗口（降低缩放比例）",
-            Self::ResetScale => "缩放比例回到 1:1（原始像素）",
-            Self::ToggleFullscreen => "切换游戏全屏",
-            Self::ToggleFsr => "开启/关闭 FSR 放大",
-            Self::ToggleNis => "开启/关闭 NIS 放大",
-            Self::ToggleNearest => "切换最近邻放大",
-            Self::ToggleLinear => "切回双线性过滤",
-            Self::Soften => "降低锐度 1 级",
-            Self::Sharpen => "提高锐度 1 级",
-        }
-    }
-
-    /// Trigger suggested to the portal, or `None` for "leave it unbound until
-    /// the user asks for it".
-    ///
-    /// Only the two that matter mid-game come with a default; everything else
-    /// is registered so that it *can* be bound, but bound by choice. Every one
-    /// of them is rebindable, from the desktop's shortcut settings today and
-    /// from kotori's own settings once it has a page for it.
-    ///
-    /// A hint is a convenience, never a promise: desktops may ignore it — KDE
-    /// does, the string is not even in its portal binary — so the truth is what
-    /// the portal reports back (see `crate::hotkeys::HotkeyStatus::unbound`).
-    pub fn preferred_trigger(self) -> Option<&'static str> {
-        match self {
-            // The two things a player reaches for without leaving the game: one
-            // key that turns the configured scaling on and off, one that decides
-            // whether the game owns the screen. The user asked for exactly these
-            // two chords (2026-09-12); everything else is bound by choice.
-            Self::ToggleScale => Some("<Shift><Alt>q"),
-            Self::ToggleFullscreen => Some("<Shift><Alt>a"),
-            _ => None,
-        }
     }
 
     /// Which way `delta` steps the sharpness.

@@ -1,9 +1,4 @@
-// 全局设置:后台服务(守护进程)+ Wine 目录(prefix) + 全局快捷键状态。
-//
-// ⚠ 快捷键这一组是**只读**的:daemon 现在只报「注册得怎么样」
-// (`daemon.status.hotkeys` 的 requested / ready / error / unbound / assign_hint),
-// 不报「11 个动作各绑了什么键」。绑键本身在桌面环境里做(KDE:系统设置 → 快捷键),
-// 要让这一页能改键,daemon 侧得再加一个 RPC —— 见 AGENTS.md 的 P1-8。
+// 全局设置:后台服务(守护进程)+ Wine 目录(prefix)。
 
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
@@ -11,7 +6,6 @@ import { Divider, RevealItem } from "../widgets/base.slint";
 import { PathField } from "../widgets/path-field.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
-import { HotkeyState } from "../types.slint";
 
 export component SettingsPage inherits ScrollView {
     in-out property <bool> revealed: false;
@@ -37,12 +31,6 @@ export component SettingsPage inherits ScrollView {
     // 「浏览…」:系统里有没有可用的文件对话框(没有就灰掉按钮),以及没有时的理由。
     in property <bool> browse-enabled: true;
     in property <string> path-hint: "";
-
-    // ── 快捷键 ────────────────────────────────────────────────────────────
-    in property <HotkeyState> hotkeys: {
-        requested: false, ready: false, error: "", unbound: "", hint: "",
-    };
-    in property <bool> hotkeys-loaded: false;
 
     callback service-start();
     callback service-stop();
@@ -218,72 +206,6 @@ export component SettingsPage inherits ScrollView {
                     }
                     for prefix in root.wine-detected : Text {
                         text: "· " + prefix;
-                        font-size: 11px;
-                        color: Tokens.text-3;
-                        wrap: word-wrap;
-                    }
-                }
-            }
-        }
-
-        // ── 快捷键 ────────────────────────────────────────────────────────
-        RevealItem {
-            revealed: root.revealed;
-            step: 5;
-            bottom: 8px;
-            SectionTitle { text: "全局快捷键"; }
-        }
-        RevealItem {
-            revealed: root.revealed;
-            step: 6;
-            bottom: 24px;
-            Group {
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 4px;
-                    HorizontalLayout {
-                        spacing: 8px;
-                        Text {
-                            text: !root.hotkeys-loaded
-                                ? "● 读取中…"
-                                : (root.hotkeys.error != "" ? "● 注册失败" : (root.hotkeys.ready ? "● 已注册" : "● 还没注册"));
-                            font-size: 13px;
-                            color: !root.hotkeys-loaded
-                                ? Tokens.text-3
-                                : (root.hotkeys.error != "" ? Tokens.danger : (root.hotkeys.ready ? Tokens.ok : Tokens.text-3));
-                        }
-                        Text {
-                            text: root.hotkeys.error != ""
-                                ? root.hotkeys.error
-                                : (root.hotkeys.ready
-                                    ? "缩放开关 / 全屏等动作已经交给桌面注册,按下时由守护进程分发。"
-                                    : "守护进程启动时才会向桌面申请一次;没有授权时游戏照常能玩,只是没有全局热键。");
-                            font-size: 11px;
-                            color: Tokens.text-3;
-                            wrap: word-wrap;
-                            horizontal-stretch: 1;
-                        }
-                    }
-                    if root.hotkeys.unbound != "" : Text {
-                        text: "⚠ 下面这些动作桌面授权了,但没绑按键 —— 按下去不会有反应:" + root.hotkeys.unbound;
-                        font-size: 11px;
-                        color: Tokens.warn;
-                        wrap: word-wrap;
-                    }
-                    if root.hotkeys.hint != "" : Text {
-                        text: "去哪绑:" + root.hotkeys.hint;
-                        font-size: 11px;
-                        color: Tokens.text-3;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: "只有「按设定比例缩放／取消缩放」(建议 Shift+Alt+Q)与「全屏」(建议 Shift+Alt+A)带默认建议键,其余动作留白,自己绑。";
-                        font-size: 11px;
-                        color: Tokens.text-3;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: "⚠ 这一页现在还改不了键:桌面只把「授权成没成」告诉 kotori,动作清单与各自当前按键需要守护进程再补一个 RPC(还没做);现在要改键请去系统设置的快捷键页找 kotori 的条目。";
                         font-size: 11px;
                         color: Tokens.text-3;
                         wrap: word-wrap;

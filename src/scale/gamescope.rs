@@ -181,7 +181,7 @@ impl GamescopeScaleEngine {
 
     /// Run one runtime scaling action against every live gamescope.
     ///
-    /// All of them, not just the focused one: the hotkey is global, and a user with
+    /// All of them, not just the focused one: the action is global, and a user with
     /// two games open is rare enough that "both changed" (which the answer says)
     /// beats "the wrong one changed". Watch-only sessions are skipped — kotori
     /// launched nothing there, so there is no gamescope of ours to talk to.
@@ -241,7 +241,7 @@ impl GamescopeScaleEngine {
 
     /// Window size and fullscreen: the compositor's business, KDE only.
     ///
-    /// A hotkey changes the *scale ratio*, which is what the user is looking at:
+    /// An action changes the *scale ratio*, which is what the user is looking at:
     /// the game keeps rendering at its own resolution, and gamescope's output — the
     /// window — grows, so the upscaling ratio grows with it. The ratio is the
     /// session's own record; the geometry itself belongs to KWin.

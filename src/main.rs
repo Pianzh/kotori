@@ -4,7 +4,6 @@ mod daemon;
 mod desktop;
 mod display;
 mod game;
-mod hotkeys;
 mod picker;
 mod process;
 mod rpc;
@@ -180,11 +179,9 @@ fn main() -> anyhow::Result<()> {
 
 /// `kotori scale …`: change a running game's scaling right now.
 ///
-/// The buttons the user actually presses are the portal's global shortcuts; this
-/// is the same action without the key, so it works from a script or a terminal
-/// (and needs no portal consent at all). It is also what makes "the hotkey did
-/// nothing" bisectable: one command separates "the trigger never fired" from
-/// "gamescope did not react".
+/// Rescaling a game that is already running has no GUI button, so this is where
+/// it happens. It needs no portal consent at all, which also makes it the way to
+/// bisect "the window did not change": one command shows whether gamescope reacts.
 fn scale_cli(rt: &tokio::runtime::Runtime, action: cli::ScaleCommand) -> anyhow::Result<()> {
     use cli::ScaleCommand;
 
@@ -196,7 +193,6 @@ fn scale_cli(rt: &tokio::runtime::Runtime, action: cli::ScaleCommand) -> anyhow:
             let status = call_daemon(rt, &socket, "daemon.status", None)?;
             print_scale_status(&status);
         }
-        ScaleCommand::Hotkeys { wait } => ask_for_hotkeys(rt, &socket, wait)?,
         ScaleCommand::Fsr { session_id } => {
             press(rt, &socket, "scale.toggle_fsr", session_id, None)?
         }
@@ -226,8 +222,8 @@ fn scale_cli(rt: &tokio::runtime::Runtime, action: cli::ScaleCommand) -> anyhow:
 
 /// `kotori scale up|down|reset|fullscreen`: one named action, by id.
 ///
-/// The same ids the portal hands back for a hotkey, so a key and this command
-/// cannot drift apart.
+/// One named action, by id — the same ids `ScaleAction` answers to, so the CLI
+/// and anything else that asks for an action cannot drift apart.
 fn scale_action(
     rt: &tokio::runtime::Runtime,
     socket: &std::path::Path,
@@ -288,20 +284,6 @@ fn resolve_session(status: &serde_json::Value, given: Option<String>) -> anyhow:
 }
 
 fn print_scale_status(status: &serde_json::Value) {
-    let hotkeys = &status["hotkeys"];
-    let state = match (
-        hotkeys["ready"].as_bool(),
-        hotkeys["error"].as_str(),
-        hotkeys["requested"].as_bool(),
-    ) {
-        (Some(true), ..) => "已就绪".to_string(),
-        (_, Some(err), _) => format!("不可用：{err}"),
-        (_, _, Some(true)) => "正在等你在弹窗里确认".to_string(),
-        _ => "还没申请（启动一次游戏，或跑 kotori scale hotkeys）".to_string(),
-    };
-    println!("运行时缩放热键：{state}");
-    print_unbound(hotkeys);
-
     let sessions = status["sessions"].as_array().cloned().unwrap_or_default();
     if sessions.is_empty() {
         println!("正在运行的游戏：无");
@@ -314,76 +296,6 @@ fn print_scale_status(status: &serde_json::Value) {
                 s["game_id"].as_str().unwrap_or("?"),
                 s["elapsed_secs"].as_u64().unwrap_or(0)
             );
-        }
-    }
-}
-
-/// A shortcut the desktop granted without a key behind it looks exactly like
-/// success and does nothing. Say which ones, and where to give them a key.
-fn print_unbound(hotkeys: &serde_json::Value) {
-    let unbound: Vec<&str> = hotkeys["unbound"]
-        .as_array()
-        .map(|list| list.iter().filter_map(|id| id.as_str()).collect())
-        .unwrap_or_default();
-    if unbound.is_empty() {
-        return;
-    }
-    println!(
-        "  ⚠ 这些动作还没有按键，按了不会有反应：{}",
-        unbound.join(", ")
-    );
-    if let Some(hint) = hotkeys["assign_hint"].as_str() {
-        println!("    {hint}");
-    }
-}
-
-/// Ask the portal for the hotkeys, and optionally wait for the user to approve
-/// the dialog.
-///
-/// Without `--wait` this returns while the dialog is still up: the request is
-/// asynchronous on the daemon side (it must never block a game launch), so the
-/// outcome can only be observed by polling `daemon.status`.
-fn ask_for_hotkeys(
-    rt: &tokio::runtime::Runtime,
-    socket: &std::path::Path,
-    wait: u64,
-) -> anyhow::Result<()> {
-    let value = call_daemon(rt, socket, "scale.hotkeys", None)?;
-    if value["ready"].as_bool() == Some(true) {
-        println!("运行时缩放热键已就绪");
-        print_unbound(&value);
-        return Ok(());
-    }
-    if let Some(err) = value["error"].as_str() {
-        println!("运行时缩放热键不可用：{err}");
-        return Ok(());
-    }
-    if value["requested"].as_bool() != Some(true) {
-        println!("没能申请运行时缩放热键（守护进程没有回应，看看 daemon 日志）");
-        return Ok(());
-    }
-    println!("已向桌面门户申请授权，请在弹窗里确认（弹窗会列出每个快捷键）");
-    if wait == 0 {
-        return Ok(());
-    }
-
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(wait);
-    loop {
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        let status = call_daemon(rt, socket, "daemon.status", None)?;
-        let hotkeys = &status["hotkeys"];
-        if hotkeys["ready"].as_bool() == Some(true) {
-            println!("运行时缩放热键已就绪");
-            print_unbound(hotkeys);
-            return Ok(());
-        }
-        if let Some(err) = hotkeys["error"].as_str() {
-            println!("申请失败：{err}");
-            return Ok(());
-        }
-        if std::time::Instant::now() >= deadline {
-            println!("等了 {wait}s 还没确认，先不等了（弹窗可能还开着）");
-            return Ok(());
         }
     }
 }

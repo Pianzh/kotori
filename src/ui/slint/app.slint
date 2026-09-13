@@ -9,7 +9,7 @@
 import { Tokens } from "theme.slint";
 import { Gap, NavItem } from "widgets/base.slint";
 import { StdButton } from "widgets/buttons.slint";
-import { GameItem, GameDetail, SaveItem, HotkeyState, PathPick } from "types.slint";
+import { GameItem, GameDetail, SaveItem, PathPick } from "types.slint";
 import { AppNav } from "app-nav.slint";
 import { GamesPage } from "pages/games.slint";
 import { GameSettingsPage } from "pages/game-settings.slint";
@@ -205,8 +205,6 @@ export component AppWindow inherits Window {
     in-out property <string> wine-default: "";
     in-out property <string> wine-environment: "";
     in-out property <[string]> wine-detected: [];
-    in-out property <HotkeyState> hotkeys;
-    in-out property <bool> hotkeys-loaded: false;
 
     callback service-start();
     callback service-stop();
@@ -432,8 +430,6 @@ export component AppWindow inherits Window {
                             wine-detected: root.wine-detected;
                             browse-enabled: root.browse-enabled;
                             path-hint: root.path-hint;
-                            hotkeys: root.hotkeys;
-                            hotkeys-loaded: root.hotkeys-loaded;
                             service-start => { root.service-start(); }
                             service-stop => { root.service-stop(); }
                             wine-prefix-changed(text) => { root.wine-prefix-changed(text); }

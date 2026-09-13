@@ -12,20 +12,6 @@ pub struct WineStatus {
     pub detected: Vec<String>,
 }
 
-/// 全局快捷键现在注册成什么样了,来自 `daemon.status.hotkeys`。
-///
-/// ⚠ 后端目前只报「注册得怎么样」,不报「11 个动作各绑了什么键」——
-/// `unbound` 是"桌面授权了但没给键"的那些动作,是"按了没反应"的唯一解释。
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct HotkeyStatus {
-    pub requested: bool,
-    pub ready: bool,
-    pub error: Option<String>,
-    pub unbound: Vec<String>,
-    /// 这个桌面去哪里绑键(KDE/GNOME 说法不同,由 `hotkeys::assign_hint` 定)。
-    pub assign_hint: String,
-}
-
 /// Maximum number of automatic reconnect attempts before giving up (a manual
 /// "重连" always works, and resets the counter).
 pub(super) const MAX_AUTO_RETRIES: u32 = 5;

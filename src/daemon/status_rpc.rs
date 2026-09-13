@@ -9,21 +9,9 @@ impl Daemon {
     pub(super) async fn rpc_status(&self) -> Result<Value, String> {
         let games = self.config.read().await.games.len();
         let sessions = self.engine.list_sessions().await;
-        let hotkeys = crate::hotkeys::status();
         Ok(json!({
             "running": true,
             "games": games,
-            // Not per session: the hotkeys are one registration for the whole
-            // daemon, and "why is there no hotkey" is answered here or nowhere.
-            "hotkeys": {
-                "requested": hotkeys.requested,
-                "ready": hotkeys.ready,
-                "error": hotkeys.error,
-                // Granted but keyless is the difference between "the hotkeys
-                // work" and "pressing them does nothing".
-                "unbound": hotkeys.unbound,
-                "assign_hint": hotkeys.assign_hint,
-            },
             "sessions": sessions
                 .iter()
                 .map(|s| json!({

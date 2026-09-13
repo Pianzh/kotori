@@ -23,7 +23,6 @@ impl App {
                             async { load_sync_status().await },
                             Message::SyncStatusLoaded,
                         ),
-                        Task::perform(async { load_hotkeys().await }, Message::HotkeysLoaded),
                     ]);
                 }
                 Task::none()
@@ -448,17 +447,6 @@ impl App {
                 // mark the daemon as gone and let the user see it.
                 self.daemon_connected = Some(false);
                 tracing::debug!("status poll failed: {e}");
-                Task::none()
-            }
-
-            Message::HotkeysLoaded(Ok(status)) => {
-                self.hotkeys = Some(status);
-                Task::none()
-            }
-            Message::HotkeysLoaded(Err(e)) => {
-                // Keep the last answer: "we could not ask" is not "there are no
-                // hotkeys", and the page says so on its own when nothing arrived.
-                tracing::debug!("hotkey status failed: {e}");
                 Task::none()
             }
 

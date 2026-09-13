@@ -77,7 +77,7 @@ pub async fn resize_window(pid: u32, width: u32, height: u32) -> Result<(), KdeE
     q.height = wantH / dpr;
     if (screen) {{
         // Never larger than the screen, never pushed off it: the two ways a
-        // scaling hotkey could otherwise make a game unreachable.
+        // rescale could otherwise make a game unreachable.
         q.width = Math.min(q.width, screen.width);
         q.height = Math.min(q.height, screen.height);
         q.x = Math.max(screen.x, Math.min(q.x, screen.x + screen.width - q.width));

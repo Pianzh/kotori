@@ -1,9 +1,8 @@
-# Two jobs: put kotori in the application menu, and give the portal an app id
-# (see APP_ID in src/hotkeys.rs — the basename here must match it).
+# Puts kotori in the application menu.
 #
 # Install it *after* kotori itself is on PATH: GIO drops the whole file when the
-# program named in Exec cannot be found, so the portal then reports
-# "App info not found" and the runtime-scaling hotkeys never register.
+# program named in Exec cannot be found — so a menu entry pointing at nothing is
+# what you get, silently.
 [Desktop Entry]
 Type=Application
 Name=kotori

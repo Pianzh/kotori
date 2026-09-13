@@ -284,20 +284,6 @@ fn every_page_renders_without_a_display() {
     render(&mut ui);
     ui.app.wine_msg = Some("保存失败: 这不是一个 wine prefix（缺少 drive_c）".into());
     render(&mut ui);
-    ui.app.hotkeys = Some(HotkeyStatus {
-        requested: true,
-        ready: true,
-        error: None,
-        unbound: vec!["toggle-scale".into(), "fullscreen".into()],
-        assign_hint: "系统设置 → 快捷键 → kotori".into(),
-    });
-    render(&mut ui);
-    ui.app.hotkeys = Some(HotkeyStatus {
-        requested: true,
-        error: Some("An app id is required".into()),
-        ..HotkeyStatus::default()
-    });
-    render(&mut ui);
 
     // 侧栏的连接状态:检测中 / 已连接 / 重试中 / 放弃,以及那条错误。
     for (connected, attempts) in [

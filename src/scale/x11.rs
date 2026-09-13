@@ -78,8 +78,8 @@ impl Settings {
     /// The settings a [`ScaleAlgorithm`] corresponds to.
     ///
     /// This must agree with [`super::build_gamescope_args`]: one is what we pass at
-    /// launch, the other what we push at runtime, and a user pressing the hotkey must
-    /// not land somewhere the launcher would never put them.
+    /// launch, the other what we push at runtime, and changing a filter at runtime
+    /// must not land somewhere the launcher would never put it.
     pub fn for_algorithm(algorithm: &ScaleAlgorithm) -> Self {
         match algorithm {
             ScaleAlgorithm::Fsr { sharpness } => Self {

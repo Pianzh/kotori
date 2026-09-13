@@ -59,17 +59,6 @@ export struct SyncGameItem {
     pending: bool,
 }
 
-// 全局快捷键的状态,直接来自 `daemon.status.hotkeys`。
-// ⚠ 后端目前只报「注册得怎么样」,不报「11 个动作各绑了什么键」——
-// 那份清单要 daemon 再加一个 RPC(见 AGENTS.md P1-8),所以这一页先只读。
-export struct HotkeyState {
-    requested: bool,
-    ready: bool,
-    error: string,
-    unbound: string,
-    hint: string,
-}
-
 // 「浏览…」刚挑回来的那个值:告诉单游戏设置页"往哪个框里填"。
 //
 // 为什么不是直接写属性:那一页的输入框由**页面自己**持有(见 game-settings.slint

@@ -274,16 +274,6 @@ impl Daemon {
             .await
             .map_err(|e| e.to_string())?;
 
-        // Runtime scaling is gamescope's own shortcuts, injected through the
-        // RemoteDesktop portal. A game is running now, which is exactly when
-        // those hotkeys become useful — so ask for them here, once per daemon
-        // run. Registration pops a consent dialog, hence the background task:
-        // launching a game must not wait for it, and a missing portal only
-        // means "no hotkeys".
-        if crate::hotkeys::request_once(self.hotkey_sink()) {
-            tracing::info!("已向 portal 申请运行时缩放热键（需要你授权一次）");
-        }
-
         Ok(json!({
             "session_id": session.session_id,
             "gamescope_pid": session.gamescope_pid,

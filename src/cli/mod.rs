@@ -42,7 +42,7 @@ pub enum Command {
         #[command(subcommand)]
         action: SyncCommand,
     },
-    /// Runtime scaling of a running game (a hotkey changes gamescope's scaler)
+    /// Runtime scaling of a running game (what the CLI and the GUI ask for)
     Scale {
         #[command(subcommand)]
         action: ScaleCommand,
@@ -51,14 +51,8 @@ pub enum Command {
 
 #[derive(Subcommand)]
 pub enum ScaleCommand {
-    /// Show running sessions and whether the scaling hotkeys are usable
+    /// Show running sessions and what gamescope is scaling them with right now
     Status,
-    /// Ask the portal for the scaling hotkeys (approve the dialog it opens)
-    Hotkeys {
-        /// Seconds to wait for approval; 0 asks and returns immediately
-        #[arg(long, default_value_t = 0)]
-        wait: u64,
-    },
     /// Toggle FSR upscaling
     Fsr {
         /// Session to act on; only needed with more than one game running
@@ -76,7 +70,7 @@ pub enum ScaleCommand {
         /// Session to act on; only needed with more than one game running
         session_id: Option<String>,
     },
-    /// Scale to the profile's ratio, or back to 1:1 (what the hotkey does)
+    /// Scale to the profile's ratio, or back to 1:1
     Toggle {
         /// Session to act on; only needed with more than one game running
         session_id: Option<String>,

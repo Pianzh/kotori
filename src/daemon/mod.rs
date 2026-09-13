@@ -77,28 +77,6 @@ impl Daemon {
         }
     }
 
-    /// Where hotkey activations go.
-    ///
-    /// A hotkey fires outside any RPC call, so it needs an owner that outlives the
-    /// call: the closure only *spawns* the work, so a slow or wedged Xwayland
-    /// cannot stall key delivery. A keypress that changed nothing is worth a line
-    /// in the log — it is the only trace the user would otherwise not get.
-    fn hotkey_sink(&self) -> crate::hotkeys::ActionSink {
-        let engine = Arc::clone(&self.engine);
-        std::sync::Arc::new(move |action| {
-            let engine = Arc::clone(&engine);
-            tokio::spawn(async move {
-                let outcome = engine.apply_action(action).await;
-                if outcome.applied.is_empty() && outcome.failed.is_empty() {
-                    tracing::warn!("热键 {} 触发了，但没有正在运行的游戏可缩放", action.id());
-                }
-                for (session, err) in outcome.failed {
-                    tracing::warn!("热键 {} 在会话 {session} 上没生效：{err}", action.id());
-                }
-            });
-        })
-    }
-
     /// Own an explicit config file instead of the machine-wide one. Tests use
     /// this so they never touch `~/.config/kotori/config.toml`.
     pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
@@ -381,7 +359,6 @@ impl Daemon {
                 }
                 Err(e) => rpc_err(id, -32602, e),
             },
-            "scale.hotkeys" => respond(id, Ok(self.rpc_scale_hotkeys())),
             "scale.action" => match (
                 param_str(&req.params, "session_id"),
                 param_str(&req.params, "action"),

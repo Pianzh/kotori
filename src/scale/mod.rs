@@ -3,8 +3,7 @@
 //!
 //! The pieces live apart on purpose — this file used to be all of them at once:
 //!
-//! * [`action`] — what a hotkey, the CLI and the GUI can ask for, and the ratios
-//!   involved.
+//! * [`action`] — what the CLI and the GUI can ask for, and the ratios involved.
 //! * [`args`] — gamescope's command line, whose parameter model is
 //!   version-sensitive enough to deserve its own tests.
 //! * [`gamescope`] — the engine: sessions, launching, and teardown.
@@ -133,7 +132,7 @@ pub struct ScaleSession {
     pub output_size: (u32, u32),
     /// The upscale ratio this session is running at *now*: output pixels ÷ the
     /// game's own resolution. It starts as whatever the profile asked for and is
-    /// stepped by the window-scale hotkeys.
+    /// stepped by `ScaleAction::ScaleUp` / `ScaleDown`.
     ///
     /// Tracked rather than read back: the window belongs to the compositor, and
     /// while its geometry can be queried, doing so needs a D-Bus service of our own
