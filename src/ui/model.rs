@@ -82,6 +82,9 @@ pub struct SyncStatus {
     pub store_kind: String,
     /// Only meaningful for `encrypted-file`.
     pub store_locked: bool,
+    /// `keyring.store.path` —— 明文/加密两种文件模式下就是那个文件的路径
+    /// (系统密钥环与内存那一级没有路径,是空串)。
+    pub store_path: String,
     /// 主密码凭据文件的路径。三种存储下 daemon 都会报它(`keyring.secrets_file`),
     /// 而 `store_path` 只在文件模式里才有 —— 所以"凭据会存到哪"一律用它。
     pub master_file: String,
@@ -116,7 +119,9 @@ pub(super) enum CredentialStore {
     /// 系统密钥环(Secret Service;Windows 上是将来要接的凭据管理器)。
     #[default]
     System,
-    /// 我们自己的方案:主密码加密文件(Argon2id + ChaCha20-Poly1305,见 `secrets/encrypted.rs`)。
+    /// **默认落点**:明文凭据文件(权限 0600),见 `secrets/plain.rs`。
+    Plain,
+    /// 可选:主密码加密文件(Argon2id + ChaCha20-Poly1305,见 `secrets/encrypted.rs`)。
     File,
     /// 仅本次会话:本机没有可持久化的后端,守护进程一重启就没了。
     Session,
@@ -127,18 +132,21 @@ impl CredentialStore {
     /// 当作系统密钥环,不吓唬用户。
     pub(super) fn from_wire(kind: &str) -> Self {
         match kind {
+            "plain-file" => Self::Plain,
             "encrypted-file" => Self::File,
             "session-only" => Self::Session,
             _ => Self::System,
         }
     }
 
-    /// 页面用它挑要画哪一块(0/1/2,见 `sync.slint` 的 `store-kind`)。
+    /// 页面用它挑要画哪一块(见 `sync.slint` 的 `store-kind`:
+    /// 0 密钥环 / 1 加密文件 / 2 内存 / 3 明文文件)。
     pub(super) fn index(self) -> i32 {
         match self {
             Self::System => 0,
             Self::File => 1,
             Self::Session => 2,
+            Self::Plain => 3,
         }
     }
 
@@ -146,6 +154,7 @@ impl CredentialStore {
     pub(super) fn name(self) -> &'static str {
         match self {
             Self::System => "系统密钥环",
+            Self::Plain => "明文凭据文件",
             Self::File => "主密码凭据文件",
             Self::Session => "本次会话的内存",
         }
@@ -158,6 +167,11 @@ impl CredentialStore {
     pub(super) fn saved_note(self, what: &str) -> String {
         match self {
             Self::System => format!("{what}已存入系统密钥环（磁盘上没有明文）"),
+            Self::Plain => {
+                format!(
+                    "{what}已保存到明文凭据文件（权限 0600，只有你能读；想更严可以设主密码加密）"
+                )
+            }
             Self::File => format!("{what}已加密写入主密码凭据文件（只有主密码能打开它）"),
             Self::Session => format!(
                 "{what}只在本次会话的内存里 —— 本机没有可用的密钥环，设一个主密码才能留住它"
@@ -171,8 +185,8 @@ impl CredentialStore {
     /// 没有密钥环的机器(含尚未接凭据管理器的 Windows)必须先把主密码设起来,
     /// 否则用户以为存好了,重启后凭据就没了。
     pub(super) fn needs_master_password() -> &'static str {
-        "本机没有可持久化的凭据后端（系统密钥环没在运行）。请先在下面「主密码凭据文件」里设一个主密码\
-         —— 在那之前凭据只会留在内存里，守护进程一重启就没了"
+        "本机既没有系统密钥环、凭据文件也写不下去（查一下配置目录的写权限）。\
+         在那之前凭据只会留在内存里，守护进程一重启就没了"
     }
 }
 

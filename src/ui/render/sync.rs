@@ -101,6 +101,9 @@ pub(super) fn push_sync(ui: &mut Ui) {
     push_str(w.get_sync_store_name(), status.store().name(), |v| {
         w.set_sync_store_name(v)
     });
+    push_str(w.get_sync_store_path(), &status.store_path, |v| {
+        w.set_sync_store_path(v)
+    });
     push_str(w.get_sync_master_file(), &status.master_file, |v| {
         w.set_sync_master_file(v)
     });
@@ -143,6 +146,17 @@ mod tests {
         assert_eq!(CredentialStore::System.index(), 0);
         assert_eq!(CredentialStore::File.index(), 1);
         assert_eq!(CredentialStore::Session.index(), 2);
+        assert_eq!(CredentialStore::Plain.index(), 3);
+        // 明文是默认落点:认不出来就会被当成密钥环,又变回"骗用户"。
+        assert_eq!(
+            CredentialStore::from_wire("plain-file"),
+            CredentialStore::Plain
+        );
+        assert_eq!(CredentialStore::default(), CredentialStore::System);
+        assert_eq!(CredentialStore::Plain.name(), "明文凭据文件");
+        let note = CredentialStore::Plain.saved_note("凭据");
+        assert!(note.contains("0600"), "{note}");
+        assert!(!note.contains("密钥环"), "{note}");
         assert_eq!(
             CredentialStore::from_wire("system"),
             CredentialStore::System

@@ -28,6 +28,7 @@ export component SyncPage inherits ScrollView {
     in property <string> master-hint: "";
     in property <int> store-kind: 0;          // 0 系统密钥环 / 1 主密码文件 / 2 仅本次会话
     in property <bool> store-locked: false;
+    in property <string> store-path: "";
     in property <string> master-file: "";
     // 三级存储里现在生效的那一级的名字(「系统密钥环」/「主密码凭据文件」/「本次会话的内存」)。
     in property <string> store-name: "";
@@ -158,13 +159,13 @@ export component SyncPage inherits ScrollView {
                         wrap: word-wrap;
                     }
                     Text {
-                        text: "密钥环:" + root.keyring;
+                        text: "凭据存放:" + root.keyring;
                         font-size: 11px;
                         color: root.ephemeral ? Tokens.warn : Tokens.text-3;
                         wrap: word-wrap;
                     }
                     if root.ephemeral : Text {
-                        text: "⚠ 本机没有运行中的系统密钥环,填进去的凭据只留在内存里,重启后要重新输入。";
+                        text: "⚠ 连凭据文件都写不下去,填进去的凭据只留在内存里,重启后要重新输入。";
                         font-size: 11px;
                         color: Tokens.warn;
                         wrap: word-wrap;
@@ -312,6 +313,7 @@ export component SyncPage inherits ScrollView {
                 SyncCredentialsGroup {
                     store-kind: root.store-kind;
                     store-locked: root.store-locked;
+                    store-path: root.store-path;
                     master-file: root.master-file;
                     store-name: root.store-name;
                     confirm-master-delete: root.confirm-master-delete;

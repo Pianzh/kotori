@@ -40,6 +40,18 @@ pub fn secrets_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("secrets.json"))
 }
 
+/// Path of the **plaintext** credential file (0600) — the default store.
+///
+/// 和 [`secrets_path`] 放一起、名字区分开,理由一样:它是"每台机器一份"的配置形状。
+/// `KOTORI_SECRETS_FILE` 一设,两者都落到同一个目录里(测试靠这个隔离,不会碰到真机的
+/// `~/.config/kotori/`)。
+pub fn plain_secrets_path() -> PathBuf {
+    secrets_path()
+        .parent()
+        .map(|dir| dir.join("credentials.json"))
+        .unwrap_or_else(|| PathBuf::from("credentials.json"))
+}
+
 /// Data directory (`~/.local/share/kotori`). `KOTORI_DATA_DIR` overrides it.
 pub fn data_dir() -> PathBuf {
     if let Some(p) = std::env::var_os("KOTORI_DATA_DIR") {

@@ -130,6 +130,7 @@ export component AppWindow inherits Window {
     in-out property <string> sync-master-hint: "";
     in-out property <int> sync-store-kind: 0;
     in-out property <bool> sync-store-locked: false;
+    in-out property <string> sync-store-path: "";
     in-out property <string> sync-master-file: "";
     in-out property <string> sync-store-name: "";
     in-out property <bool> sync-confirm-master-delete: false;
@@ -335,6 +336,7 @@ export component AppWindow inherits Window {
                             master-hint: root.sync-master-hint;
                             store-kind: root.sync-store-kind;
                             store-locked: root.sync-store-locked;
+                            store-path: root.sync-store-path;
                             master-file: root.sync-master-file;
                             store-name: root.sync-store-name;
                             confirm-master-delete: root.sync-confirm-master-delete;

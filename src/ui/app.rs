@@ -347,7 +347,11 @@ mod tests {
         assert!(!app.sync_form.busy, "不该发请求");
         assert_eq!(app.sync_form.key_id, "0046b5");
         let refused = app.sync_form.msg.clone().unwrap_or_default();
-        assert!(refused.contains("主密码"), "{refused}");
+        // 说法要落到"为什么存不住"上(现在是凭据文件写不下去,不再是"没有密钥环")。
+        assert!(
+            refused.contains("写权限") || refused.contains("内存"),
+            "{refused}"
+        );
 
         // 同步密码同理(加密密码丢了,连自己上传的存档都解不开)。
         let _ = app.update(Message::SyncField(
@@ -360,12 +364,10 @@ mod tests {
         ));
         let _ = app.update(Message::SyncSavePassword);
         assert!(!app.sync_form.busy, "不该发请求");
+        let refused = app.sync_form.msg.clone().unwrap_or_default();
         assert!(
-            app.sync_form
-                .msg
-                .as_deref()
-                .unwrap_or_default()
-                .contains("主密码")
+            refused.contains("写权限") || refused.contains("内存"),
+            "{refused}"
         );
 
         // 清空密码不受影响:那是"删掉",不是"存下来"。

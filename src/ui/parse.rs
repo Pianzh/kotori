@@ -147,6 +147,11 @@ pub(super) fn parse_sync_status(value: &Value) -> Result<SyncStatus, String> {
             .and_then(|store| store.get("locked"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        store_path: value
+            .get("keyring")
+            .and_then(|keyring| keyring.get("store"))
+            .map(|store| str_field(store, "path"))
+            .unwrap_or_default(),
         master_file: value
             .get("keyring")
             .map(|keyring| str_field(keyring, "secrets_file"))
@@ -732,6 +737,24 @@ mod tests {
         assert_eq!(status.store_kind, "system");
         assert!(!status.store_locked);
         assert_eq!(status.store(), CredentialStore::System);
+
+        // 明文文件那一级(现在的默认):路径要能取到,不然页面说不出"存在哪"。
+        let plain = parse_sync_status(&serde_json::json!({
+            "keyring": {
+                "backend": "明文凭据文件 /home/user/.config/kotori/credentials.json（权限 0600，只有你能读）",
+                "ephemeral": false,
+                "store": { "kind": "plain-file", "path": "/home/user/.config/kotori/credentials.json" },
+                "secrets_file": "/home/user/.config/kotori/secrets.json",
+                "min_master_password": 8,
+            },
+            "settings": {},
+        }))
+        .unwrap();
+        assert_eq!(plain.store(), CredentialStore::Plain);
+        assert_eq!(
+            plain.store_path,
+            "/home/user/.config/kotori/credentials.json"
+        );
         assert!(
             status.master_file.ends_with("secrets.json"),
             "凭据会存到哪要一直有答案:{}",

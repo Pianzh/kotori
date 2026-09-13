@@ -30,33 +30,53 @@ use crate::sync::{
 /// deleted, so the range is deliberately small and explicit.
 pub const MAX_KEEP_VERSIONS: u32 = 100;
 
+/// 由加密文件路径推出同目录的明文文件路径。`KOTORI_SECRETS_FILE` 的语义就是
+/// "两个凭据文件都放这个目录"(见 `config::paths`),测试里用它给临时目录配对。
+#[cfg(test)]
+fn plain_sibling(secrets_path: &std::path::Path) -> std::path::PathBuf {
+    secrets_path
+        .parent()
+        .map(|dir| dir.join("credentials.json"))
+        .unwrap_or_else(|| std::path::PathBuf::from("credentials.json"))
+}
+
 /// Keyring handle plus the last result per game, for the settings page.
 pub(super) struct SyncState {
     keyring: Mutex<Keyring>,
     /// Where the master-password file lives. Held here (instead of being
     /// re-resolved) so a test can point it at a throw-away directory.
     secrets_path: std::path::PathBuf,
-    /// Set when the store we fell back to is a session-only one because no
-    /// keyring was running. It is what makes the fallback *recoverable*: the
-    /// daemon outlives the condition, and a user who starts their keyring after
-    /// reading our own advice must not have to restart the daemon for it to
-    /// count.
+    /// Where the **plaintext** credential file lives (the default store).
+    plain_path: std::path::PathBuf,
+    /// Set when the store we fell back to is a session-only one. Since
+    /// 2026-09-13 the fallback is the plaintext file, so this is only ever set
+    /// by a caller that built a memory store on purpose (tests); it is kept
+    /// because the "no keyring yet, maybe later" case must stay recoverable
+    /// without restarting the daemon.
     retry_backend: AtomicBool,
     records: Mutex<HashMap<String, SyncRecord>>,
 }
 
 impl SyncState {
-    /// The system keyring, or a session-only store when there is none.
+    /// The best store this machine can offer (明文文件 → 密钥环 → 主密码文件,见
+    /// `Keyring::open_default` 的顺序说明)。
     pub(super) fn system() -> Self {
         let path = crate::config::secrets_path();
-        let (keyring, ephemeral) = Keyring::open_default(&path);
-        Self::new(keyring, path, ephemeral)
+        let plain = crate::config::plain_secrets_path();
+        let (keyring, retry) = Keyring::open_default(&path, &plain);
+        Self::new(keyring, path, plain, retry)
     }
 
-    fn new(keyring: Keyring, secrets_path: std::path::PathBuf, retry: bool) -> Self {
+    fn new(
+        keyring: Keyring,
+        secrets_path: std::path::PathBuf,
+        plain_path: std::path::PathBuf,
+        retry: bool,
+    ) -> Self {
         Self {
             keyring: Mutex::new(keyring),
             secrets_path,
+            plain_path,
             retry_backend: AtomicBool::new(retry),
             records: Mutex::new(HashMap::new()),
         }
@@ -66,24 +86,36 @@ impl SyncState {
         &self.secrets_path
     }
 
+    /// 明文凭据文件的路径(默认落点)。
+    pub(super) fn plain_path(&self) -> &std::path::Path {
+        &self.plain_path
+    }
+
     /// Use one specific store, and never second-guess it (tests do this).
     #[cfg(test)]
     pub(super) fn with_keyring(keyring: Keyring) -> Self {
-        Self::new(keyring, crate::config::secrets_path(), false)
+        Self::new(
+            keyring,
+            crate::config::secrets_path(),
+            crate::config::plain_secrets_path(),
+            false,
+        )
     }
 
-    /// A session store plus a chosen file path: the state a machine with no
-    /// keyring is in before the user sets a master password.
+    /// A store plus chosen file paths: a test points them at a throw-away
+    /// directory so the real `~/.config/kotori/` is never touched.
     #[cfg(test)]
     pub(super) fn with_keyring_at(keyring: Keyring, secrets_path: std::path::PathBuf) -> Self {
-        Self::new(keyring, secrets_path, false)
+        let plain = plain_sibling(&secrets_path);
+        Self::new(keyring, secrets_path, plain, false)
     }
 
     /// A daemon that finds an existing master-password file, as after a restart.
     #[cfg(test)]
     pub(super) fn from_master_file(secrets_path: std::path::PathBuf) -> Self {
         let keyring = Keyring::encrypted_file(&secrets_path);
-        Self::new(keyring, secrets_path, false)
+        let plain = plain_sibling(&secrets_path);
+        Self::new(keyring, secrets_path, plain, false)
     }
 
     /// Switch to a store we just created, and stop second-guessing the choice.
@@ -106,7 +138,7 @@ impl SyncState {
             return current.clone();
         }
 
-        let (fresh, still_missing) = Keyring::open_default(&self.secrets_path);
+        let (fresh, still_missing) = Keyring::open_default(&self.secrets_path, &self.plain_path);
         if still_missing {
             // Keep the session store; its contents are still the user's.
             return current.clone();
@@ -525,7 +557,7 @@ impl Daemon {
         }
         file.remove().map_err(|e| e.to_string())?;
 
-        let (fresh, _) = Keyring::open_default(&path);
+        let (fresh, _) = Keyring::open_default(&path, self.sync.plain_path());
         self.sync.adopt(fresh);
         tracing::warn!("主密码凭据文件已删除: {}", path.display());
         Ok(json!({ "removed": true }))
