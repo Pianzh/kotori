@@ -121,6 +121,22 @@ pub(super) async fn terminate_session(root: i32) {
     signal(root, &tree, libc::SIGKILL);
 }
 
+/// Bring a session down **now**: no grace, straight to SIGKILL — but still the whole
+/// tree, not just the group.
+///
+/// The only difference from [`terminate_session`] is the wait: there, SIGTERM is for
+/// processes that can still act on it, while this is called once gamescope is already
+/// parked in `wait4` and waiting longer changes nothing. The tree part is not
+/// optional: `kill(-pgid)` alone leaves `winedevice.exe` behind, because it puts
+/// itself in a process group of its own (measured 2026-09-12).
+pub(super) fn kill_session_now(root: i32) {
+    if root <= 0 {
+        return;
+    }
+    let tree = crate::process::descendants(root);
+    signal(root, &tree, libc::SIGKILL);
+}
+
 /// Signal the group *and* each pid in the tree.
 fn signal(root: i32, tree: &[i32], signal: i32) {
     unsafe {
@@ -160,6 +176,14 @@ mod tests {
         assert_eq!(read_wchan(4_242_424), None);
         assert!(!stuck_in_teardown(4_242_424));
         assert!(!stuck_in_teardown(0));
+    }
+
+    #[tokio::test]
+    async fn killing_nothing_is_also_harmless() {
+        // `kill(-0, …)` 是"朝我自己的进程组开枪",所以 pid 0 必须被挡在门外 ——
+        // 这条路径没有 SIGTERM 的缓冲,打错就是整个进程组立刻暴毙。
+        kill_session_now(0);
+        kill_session_now(4_242_424);
     }
 
     #[tokio::test]

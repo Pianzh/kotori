@@ -445,6 +445,48 @@ fn daemon_ipc_end_to_end() {
     );
 }
 
+/// 一个**还活着**的守护进程不能被第二个顶掉。
+///
+/// 这不是洁癖:两个守护进程会同时写同一份 `config.toml`,而"daemon 是唯一配置写者"
+/// 是这套架构的基石(ADR-002)。这条路以前会在 bind 前无条件删掉 socket 文件,于是
+/// 第二个把第一个的 socket 抢走 —— 第一个**还在跑**(游戏还在它手里、还会写配置),
+/// 但界面与 CLI 再也找不到它。现在由 `<socket>.lock` 上的 `flock` 挡住。
+#[test]
+fn a_second_daemon_refuses_to_steal_a_live_socket() {
+    let mut fixture = Fixture::new("socket-owned");
+    fixture.start();
+    assert_eq!(
+        fixture.rpc("daemon.status", json!({}))["result"]["running"],
+        true
+    );
+
+    // 第二次启动:同一份配置、同一个 socket。
+    let output = Command::new(env!("CARGO_BIN_EXE_kotori"))
+        .arg("daemon")
+        .env("KOTORI_CONFIG", &fixture.config)
+        .env("KOTORI_SOCKET", &fixture.socket)
+        .stdin(Stdio::null())
+        .output()
+        .expect("第二个守护进程应当启动后拒绝");
+
+    assert!(
+        !output.status.success(),
+        "第二个守护进程必须失败退出,而不是抢走 socket"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("已经有一个守护进程"),
+        "拒绝的理由要说清楚(现在这样没法排查):{stderr}"
+    );
+
+    // 第一个必须毫发无损、还连着。
+    assert_eq!(
+        fixture.rpc("daemon.status", json!({}))["result"]["running"],
+        true,
+        "第一个守护进程被顶掉了"
+    );
+}
+
 #[test]
 fn second_daemon_replaces_a_stale_socket_file() {
     let dir = std::env::temp_dir().join(format!("kotori-e2e-stale-{}", std::process::id()));

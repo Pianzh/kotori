@@ -13,7 +13,6 @@
 
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -48,12 +47,6 @@ pub(super) struct SyncState {
     secrets_path: std::path::PathBuf,
     /// Where the **plaintext** credential file lives (the default store).
     plain_path: std::path::PathBuf,
-    /// Set when the store we fell back to is a session-only one. Since
-    /// 2026-09-13 the fallback is the plaintext file, so this is only ever set
-    /// by a caller that built a memory store on purpose (tests); it is kept
-    /// because the "no keyring yet, maybe later" case must stay recoverable
-    /// without restarting the daemon.
-    retry_backend: AtomicBool,
     records: Mutex<HashMap<String, SyncRecord>>,
 }
 
@@ -63,21 +56,19 @@ impl SyncState {
     pub(super) fn system() -> Self {
         let path = crate::config::secrets_path();
         let plain = crate::config::plain_secrets_path();
-        let (keyring, retry) = Keyring::open_default(&path, &plain);
-        Self::new(keyring, path, plain, retry)
+        let keyring = Keyring::open_default(&path, &plain);
+        Self::new(keyring, path, plain)
     }
 
     fn new(
         keyring: Keyring,
         secrets_path: std::path::PathBuf,
         plain_path: std::path::PathBuf,
-        retry: bool,
     ) -> Self {
         Self {
             keyring: Mutex::new(keyring),
             secrets_path,
             plain_path,
-            retry_backend: AtomicBool::new(retry),
             records: Mutex::new(HashMap::new()),
         }
     }
@@ -98,7 +89,6 @@ impl SyncState {
             keyring,
             crate::config::secrets_path(),
             crate::config::plain_secrets_path(),
-            false,
         )
     }
 
@@ -107,7 +97,7 @@ impl SyncState {
     #[cfg(test)]
     pub(super) fn with_keyring_at(keyring: Keyring, secrets_path: std::path::PathBuf) -> Self {
         let plain = plain_sibling(&secrets_path);
-        Self::new(keyring, secrets_path, plain, false)
+        Self::new(keyring, secrets_path, plain)
     }
 
     /// A daemon that finds an existing master-password file, as after a restart.
@@ -115,7 +105,7 @@ impl SyncState {
     pub(super) fn from_master_file(secrets_path: std::path::PathBuf) -> Self {
         let keyring = Keyring::encrypted_file(&secrets_path);
         let plain = plain_sibling(&secrets_path);
-        Self::new(keyring, secrets_path, plain, false)
+        Self::new(keyring, secrets_path, plain)
     }
 
     /// Switch to a store we just created, and stop second-guessing the choice.
@@ -123,47 +113,20 @@ impl SyncState {
         if let Ok(mut current) = self.keyring.lock() {
             *current = keyring;
         }
-        self.retry_backend.store(false, Ordering::Relaxed);
     }
 
-    /// The best store available right now.
+    /// The store in use.
     ///
-    /// Re-checks the platform keyring while we are on the session-only
-    /// fallback, and hands over anything the user stored meanwhile.
+    /// ⚠ 这里从前还有一段"落到内存后端了就重新探一遍密钥环、起来了就把凭据接管过去"的
+    /// 逻辑 —— 那段路**到不了**:明文凭据文件永远能当兜底,所以生产路径上不存在
+    /// session-only 这一级(ADR-014 写的四级里只有三级可达)。2026-09-13 删掉,连同
+    /// 它那个恒为 `false` 的 `retry_backend` 开关;密钥环晚一步起来的情况,重启
+    /// daemon 就会在启动时走"把明文搬进密钥环"那一条。
     pub(super) fn keyring(&self) -> Keyring {
-        let Ok(mut current) = self.keyring.lock() else {
+        let Ok(current) = self.keyring.lock() else {
             return Keyring::memory();
         };
-        if !self.retry_backend.load(Ordering::Relaxed) {
-            return current.clone();
-        }
-
-        let (fresh, still_missing) = Keyring::open_default(&self.secrets_path, &self.plain_path);
-        if still_missing {
-            // Keep the session store; its contents are still the user's.
-            return current.clone();
-        }
-
-        // Hand the session's secrets over, unless the new store needs a
-        // password first — a locked file cannot accept them yet, and dropping
-        // them on the floor would be worse than leaving them in memory.
-        let carried = current.snapshot();
-        let locked = matches!(
-            fresh.kind(),
-            crate::secrets::StoreKind::EncryptedFile { locked: true, .. }
-        );
-        if !carried.is_empty() && !locked {
-            tracing::info!("有可持久化的凭据后端了，迁移 {} 条临时凭据", carried.len());
-            for (key, value) in carried {
-                if let Err(error) = fresh.set(key, &value) {
-                    tracing::warn!("迁移 {} 失败: {error}", key.account());
-                }
-            }
-        }
-        tracing::info!("凭据后端现在可用：{}", fresh.describe());
-        *current = fresh.clone();
-        self.retry_backend.store(false, Ordering::Relaxed);
-        fresh
+        current.clone()
     }
 
     fn remember(&self, game_id: &str, action: &str, outcome: &GameOutcome) {
@@ -557,7 +520,7 @@ impl Daemon {
         }
         file.remove().map_err(|e| e.to_string())?;
 
-        let (fresh, _) = Keyring::open_default(&path, self.sync.plain_path());
+        let fresh = Keyring::open_default(&path, self.sync.plain_path());
         self.sync.adopt(fresh);
         tracing::warn!("主密码凭据文件已删除: {}", path.display());
         Ok(json!({ "removed": true }))
@@ -1249,7 +1212,6 @@ mod tests {
         keyring.set(SecretKey::B2KeyId, "seeded").unwrap();
         let state = SyncState::with_keyring(keyring);
 
-        assert!(!state.retry_backend.load(Ordering::Relaxed));
         for _ in 0..3 {
             let current = state.keyring();
             assert_eq!(
@@ -1261,28 +1223,21 @@ mod tests {
     }
 
     #[test]
-    fn a_session_store_can_hand_its_secrets_over() {
-        // What makes the fallback survivable: credentials typed while no
-        // keyring was running are carried into the real one once it appears.
-        let keyring = Keyring::memory();
-        assert!(keyring.snapshot().is_empty());
-
-        keyring.set(SecretKey::B2KeyId, "id").unwrap();
-        keyring.set(SecretKey::B2AppKey, "key").unwrap();
-        let mut carried = keyring.snapshot();
-        carried.sort_by_key(|(key, _)| key.account());
-
-        assert_eq!(carried.len(), 2);
-        assert_eq!(carried[0].0, SecretKey::B2AppKey);
-        assert_eq!(carried[0].1, "key");
-        assert_eq!(carried[1].0, SecretKey::B2KeyId);
-
-        // A real keyring has nothing to hand over.
-        assert!(
-            Keyring::with_tool("/usr/bin/secret-tool")
-                .snapshot()
-                .is_empty()
+    fn the_store_never_changes_under_a_running_daemon() {
+        // 这里从前断言的是"内存后端能把凭据交给后来起来的密钥环" —— 那条路已删
+        // (明文文件永远是兜底 ⇒ 生产路径上没有 session-only 这一级)。现在要钉住的是
+        // 剩下那件事实:`keyring()` 每次给的都是**同一个**存储,不会背着调用方换。
+        let state = SyncState::with_keyring(Keyring::memory());
+        state.keyring().set(SecretKey::B2KeyId, "id").unwrap();
+        assert_eq!(
+            state.keyring().get(SecretKey::B2KeyId).unwrap().as_deref(),
+            Some("id")
         );
+        // 换成别的存储是显式动作(`adopt`),不是"下次问就自己变了"。
+        state.adopt(Keyring::plain_file(std::path::Path::new(
+            "/nonexistent/creds.json",
+        )));
+        assert!(state.keyring().get(SecretKey::B2KeyId).unwrap().is_none());
     }
 
     #[tokio::test]

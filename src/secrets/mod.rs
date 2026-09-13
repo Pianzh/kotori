@@ -313,9 +313,12 @@ impl Keyring {
     /// 3. **明文凭据文件**(默认)—— 零输入、跨重启,权限 0600;
     /// 4. **内存** —— 只有"连文件都写不下去"时才轮到这里(正常路径到不了)。
     ///
-    /// 第二个返回值现在恒为 `false`:`open_default` 不会再落到"什么都存不住"的状态,
-    /// 参数保留是为了兼容调用方与将来可能出现的只读配置目录。
-    pub fn open_default(encrypted_path: &Path, plain_path: &Path) -> (Self, bool) {
+    /// ⚠ 从前这里还返回一个 `retry` 标志(意思是"落到了内存,过一会儿可以再探一次密钥环"),
+    /// 但它**恒为 `false`**:明文凭据文件这条兜底永远成立,所以"什么都存不住"在生产路径上
+    /// 到不了,那段"密钥环后起来了就接管"的代码是死的(2026-09-13 核对后删掉)。真遇到
+    /// 密钥环晚一步起来(比如 niri 下后来手动起了 `ksecretd`),**重启 daemon** 就会走到
+    /// ② 并把明文里的凭据搬进密钥环。
+    pub fn open_default(encrypted_path: &Path, plain_path: &Path) -> Self {
         Self::open_default_with(Self::system(), encrypted_path, plain_path)
     }
 
@@ -330,22 +333,22 @@ impl Keyring {
         keyring: Result<Self, SecretError>,
         encrypted_path: &Path,
         plain_path: &Path,
-    ) -> (Self, bool) {
+    ) -> Self {
         let encrypted = EncryptedFile::new(encrypted_path);
         if encrypted.exists() {
-            return (Self::from_encrypted(encrypted), false);
+            return Self::from_encrypted(encrypted);
         }
 
         if let Ok(keyring) = keyring {
             adopt_plain_entries(&keyring, plain_path);
-            return (keyring, false);
+            return keyring;
         }
 
         tracing::info!(
             "没有运行中的系统密钥环，凭据存到明文文件 {}（权限 0600）",
             plain_path.display()
         );
-        (Self::plain_file(plain_path), false)
+        Self::plain_file(plain_path)
     }
 
     /// The encrypted-file backend, if that is what this handle is.
@@ -666,33 +669,6 @@ impl Keyring {
             ));
         }
         Ok(())
-    }
-
-    /// Everything currently held in the session store.
-    ///
-    /// Used to move credentials into the real keyring if one becomes available
-    /// later, so a user who answered the prompt while no keyring was running
-    /// does not have to type them again.
-    pub fn snapshot(&self) -> Vec<(SecretKey, String)> {
-        if let Backend::PlainFile(file) = &self.backend {
-            // 明文文件里的东西要能被搬到别处(例如用户改成主密码加密)。
-            return file.load().unwrap_or_default();
-        }
-        if let Backend::EncryptedFile(file) = &self.backend {
-            // Locked or unreadable: nothing to hand over, and an unlocked file
-            // is already persistent so it never needs migrating.
-            return file.load().unwrap_or_default();
-        }
-        let Backend::Memory(store) = &self.backend else {
-            return Vec::new();
-        };
-        let Ok(store) = store.lock() else {
-            return Vec::new();
-        };
-        SecretKey::ALL
-            .into_iter()
-            .filter_map(|key| store.get(&key).map(|value| (key, value.clone())))
-            .collect()
     }
 
     /// Which of our secrets exist. Used by the settings page.
@@ -1028,10 +1004,9 @@ mod tests {
         let encrypted = dir.join("secrets.json");
         let plain = dir.join("credentials.json");
 
-        let (store, ephemeral) =
+        let store =
             Keyring::open_default_with(Err(SecretError::BackendMissing), &encrypted, &plain);
-        assert!(!ephemeral, "明文文件是能持久化的,不该报成临时的");
-        assert!(!store.is_ephemeral());
+        assert!(!store.is_ephemeral(), "明文文件是能持久化的,不该报成临时的");
         assert_eq!(
             store.kind(),
             StoreKind::PlainFile {
@@ -1046,7 +1021,7 @@ mod tests {
             Some("005keyid")
         );
         // 换一个句柄重开(等价于守护进程重启),凭据要还在。
-        let (reopened, _) =
+        let reopened =
             Keyring::open_default_with(Err(SecretError::BackendMissing), &encrypted, &plain);
         assert_eq!(
             reopened.get(SecretKey::B2KeyId).unwrap().as_deref(),
@@ -1108,9 +1083,8 @@ mod tests {
             .store(&[(SecretKey::B2KeyId, "005keyid".to_string())])
             .unwrap();
 
-        let (store, ephemeral) = Keyring::open_default_with(Ok(fake.keyring()), &encrypted, &plain);
+        let store = Keyring::open_default_with(Ok(fake.keyring()), &encrypted, &plain);
 
-        assert!(!ephemeral);
         assert!(
             matches!(store.kind(), StoreKind::System { .. }),
             "{:?}",
@@ -1145,7 +1119,7 @@ mod tests {
             )
             .unwrap();
 
-        let (store, _) = Keyring::open_default_with(Ok(fake.keyring()), &encrypted, &plain);
+        let store = Keyring::open_default_with(Ok(fake.keyring()), &encrypted, &plain);
 
         assert!(
             matches!(store.kind(), StoreKind::EncryptedFile { .. }),

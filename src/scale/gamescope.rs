@@ -12,8 +12,8 @@ use crate::process;
 use crate::util::executor::find_binary;
 
 use super::teardown::{
-    GAME_GONE_GRACE, GAME_POLL, TEARDOWN_GRACE, TEARDOWN_POLL, pid_alive, stuck_in_teardown,
-    terminate_session,
+    GAME_GONE_GRACE, GAME_POLL, TEARDOWN_GRACE, TEARDOWN_POLL, kill_session_now, pid_alive,
+    stuck_in_teardown, terminate_session,
 };
 
 use super::x11::{GamescopeDisplay, Settings};
@@ -27,6 +27,17 @@ use super::{
 /// Only the daemon subscribes, and it handles each event in a spawned task, so
 /// this never has to be deep.
 const EVENT_BUFFER: usize = 64;
+
+/// Should one runtime action touch this session?
+///
+/// Split out from [`GamescopeScaleEngine::apply_action`] for one reason: the rule is
+/// worth a test, and an id is cheaper to build in a test than a whole session.
+/// Naming a session means *that* one; naming none means all of them (a caller with no
+/// session in hand). A name that matches nothing touches nothing — it must never fall
+/// back to "then everything".
+fn wants(session_id: &str, only: Option<&str>) -> bool {
+    only.is_none_or(|wanted| wanted == session_id)
+}
 
 /// The gamescope backend: runs a game inside a nested gamescope.
 ///
@@ -179,17 +190,25 @@ impl GamescopeScaleEngine {
             .or_else(|| Some(Settings::for_algorithm(&session.profile.algorithm)))
     }
 
-    /// Run one runtime scaling action against every live gamescope.
+    /// Run one runtime scaling action against the live gamescopes.
     ///
-    /// All of them, not just the focused one: the action is global, and a user with
-    /// two games open is rare enough that "both changed" (which the answer says)
-    /// beats "the wrong one changed". Watch-only sessions are skipped — kotori
-    /// launched nothing there, so there is no gamescope of ours to talk to.
+    /// `only` narrows it to one session, and every caller that hands over a
+    /// `session_id` means exactly that: two games open must not both get rescaled
+    /// because the request happened to mention one. `None` = every live session, for
+    /// a caller with no session in hand. Watch-only sessions are skipped either way —
+    /// kotori launched nothing there, so there is no gamescope of ours to talk to.
     ///
     /// Filter actions and window actions live in different places: the filter is a
     /// property on gamescope's own Xwayland, the window belongs to the compositor.
-    pub async fn apply_action(&self, action: ScaleAction) -> ActionOutcome {
-        let sessions: Vec<ScaleSession> = self.sessions.read().await.values().cloned().collect();
+    pub async fn apply_action(&self, action: ScaleAction, only: Option<&str>) -> ActionOutcome {
+        let sessions: Vec<ScaleSession> = self
+            .sessions
+            .read()
+            .await
+            .values()
+            .filter(|session| wants(&session.session_id, only))
+            .cloned()
+            .collect();
         let mut outcome = ActionOutcome::default();
         for session in sessions {
             let Some(pid) = session.gamescope_pid else {
@@ -306,9 +325,12 @@ impl GamescopeScaleEngine {
 ///
 /// The window is placed by the compositor, not by us, so this is the *primary*
 /// output rather than the one the game will land on — good enough for the initial
-/// size, and the only thing available this early. A profile with no explicit size
-/// can still be corrected afterwards against whichever output the window actually
-/// turned up on (that is what `desktop::kde` is for).
+/// size, and the only thing available this early.
+///
+/// ⚠ 窗口落到**另一块**屏时,启动之后**还没有**按那块屏再修一次:`desktop::kde` 的
+/// `resize_window` 只在运行时动作里被调用,启动路径没接线(2026-09-13 核对过)。
+/// 所以这句话从前写着"之后可以按实际输出修正"是不准确的 —— 要修得先让 KWin 脚本
+/// 把结果回传(见 AGENTS §5 里 `resize_window` 那条)。
 fn screen_size() -> (u32, u32) {
     crate::display::primary_resolution_or((FALLBACK_OUTPUT_WIDTH, FALLBACK_OUTPUT_HEIGHT))
 }
@@ -590,15 +612,14 @@ impl ScaleEngine for GamescopeScaleEngine {
 
                 tracing::warn!(
                     "session {watchdog_sid}: gamescope 卡在等子进程（wine 的 winedevice.exe \
-                     不理会 SIGTERM），kotori 直接收尾整组进程"
+                     不理会 SIGTERM），kotori 直接收尾整组进程与它的子进程树"
                 );
-                unsafe {
-                    libc::kill(-watchdog, libc::SIGKILL);
-                }
-                // The wedge this watchdog exists for is `winedevice.exe` refusing
-                // to die, and killing the group does not remove it — leaving now
-                // without closing wine's server would orphan exactly the process
-                // that makes a shutdown hang.
+                // 没有任何宽限:走到这里时 gamescope 已经卡在 `wait4`,再等它也不会自己动。
+                // 但**必须连子进程树一起杀** —— `winedevice.exe` 住在自己的进程组里,
+                // 只 `kill(-pgid)` 会把它留下,而那正是让整机卡 90 秒的东西。
+                kill_session_now(watchdog);
+                // 还留着的那一份就用 wine 自己的服务器收:`wineserver -k` 之后
+                // `winedevice.exe` 才会真的消失(实测)。
                 close_wine(watchdog_prefix.as_deref()).await;
                 return;
             }
@@ -722,5 +743,20 @@ impl ScaleEngine for GamescopeScaleEngine {
             ),
             current_resolution: session.output_size,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wants;
+
+    #[test]
+    fn an_action_named_for_one_session_ignores_the_others() {
+        assert!(wants("a", Some("a")));
+        assert!(!wants("b", Some("a")), "两个游戏同时跑时不能一起改");
+        // 没有指名 = 全部(留给手上没有会话的调用方)。
+        assert!(wants("a", None) && wants("b", None));
+        // 名字对不上就什么都不做,而不是退化成"那就全都改"。
+        assert!(!wants("a", Some("ghost")));
     }
 }

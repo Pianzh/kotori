@@ -42,15 +42,16 @@ impl Daemon {
     /// so this works from the CLI and the GUI. What it does need is a live session:
     /// without one there is nothing to rescale, and the answer says so.
     pub(super) async fn rpc_scale_toggle_fsr(&self, session_id: &str) -> Result<Value, String> {
-        self.lookup_session(session_id).await?;
-        self.run_action(crate::scale::ScaleAction::ToggleFsr).await
+        let session = self.lookup_session(session_id).await?;
+        self.run_action(&session, crate::scale::ScaleAction::ToggleFsr)
+            .await
     }
 
     /// Nearest-neighbour is the runtime counterpart of integer scaling: both stop
     /// the filter from inventing pixels.
     pub(super) async fn rpc_scale_toggle_integer(&self, session_id: &str) -> Result<Value, String> {
-        self.lookup_session(session_id).await?;
-        self.run_action(crate::scale::ScaleAction::ToggleNearest)
+        let session = self.lookup_session(session_id).await?;
+        self.run_action(&session, crate::scale::ScaleAction::ToggleNearest)
             .await
     }
 
@@ -65,12 +66,12 @@ impl Daemon {
         session_id: &str,
         delta: i32,
     ) -> Result<Value, String> {
-        self.lookup_session(session_id).await?;
+        let session = self.lookup_session(session_id).await?;
         let action = crate::scale::ScaleAction::for_sharpness_delta(delta)
             .ok_or_else(|| "锐度步长不能为 0".to_string())?;
         let steps = delta.unsigned_abs().min(20);
         for _ in 0..steps {
-            self.run_action(action).await?;
+            self.run_action(&session, action).await?;
         }
         Ok(json!({ "success": true, "steps": steps }))
     }
@@ -84,8 +85,8 @@ impl Daemon {
         session_id: &str,
         action: crate::scale::ScaleAction,
     ) -> Result<Value, String> {
-        self.lookup_session(session_id).await?;
-        self.run_action(action).await
+        let session = self.lookup_session(session_id).await?;
+        self.run_action(&session, action).await
     }
 
     /// Run one action against the live sessions and describe what happened.
@@ -95,12 +96,25 @@ impl Daemon {
     /// did *not* change is how a user ends up running the command twice.
     pub(super) async fn run_action(
         &self,
+        session: &ScaleSession,
         action: crate::scale::ScaleAction,
     ) -> Result<Value, String> {
-        let outcome = self.engine.apply_action(action).await;
+        // 只作用在这一局上:调用方给了 session_id 就是想改它,两个游戏同时跑时
+        // 不能因为"形状像全局"就把另一个也改了。
+        let outcome = self
+            .engine
+            .apply_action(action, Some(&session.session_id))
+            .await;
         if outcome.applied.is_empty() {
             let detail = if outcome.failed.is_empty() {
-                "没有正在运行的游戏".to_string()
+                if session.gamescope_pid.is_none() {
+                    format!(
+                        "会话 {} 只是观测（watch_only），kotori 没有它的 gamescope 可调",
+                        session.session_id
+                    )
+                } else {
+                    "没有正在运行的游戏".to_string()
+                }
             } else {
                 outcome
                     .failed

@@ -27,6 +27,8 @@ pub enum Command {
     Status,
     /// Ask the running daemon to shut down
     Shutdown,
+    /// Re-read config.toml (for when you edited it by hand)
+    Reload,
     /// Scan a directory for games and print what's found
     Scan {
         /// Directory to scan (e.g. /run/media/.../BTL)
@@ -51,15 +53,25 @@ pub enum Command {
 
 #[derive(Subcommand)]
 pub enum ScaleCommand {
-    /// Show running sessions (ids, games, how long they have been up)
+    /// Show running sessions, and what gamescope is scaling them with right now
     Status,
     /// Toggle FSR upscaling
     Fsr {
         /// Session to act on; only needed with more than one game running
         session_id: Option<String>,
     },
+    /// Toggle NIS upscaling
+    Nis {
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
     /// Toggle nearest-neighbour (integer) upscaling
     Integer {
+        /// Session to act on; only needed with more than one game running
+        session_id: Option<String>,
+    },
+    /// Switch back to plain bilinear filtering
+    Linear {
         /// Session to act on; only needed with more than one game running
         session_id: Option<String>,
     },

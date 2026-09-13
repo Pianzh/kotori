@@ -94,7 +94,16 @@ impl Daemon {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        // Clean up any stale socket file.
+        // One daemon per socket, enforced by a lock rather than by "the path
+        // exists". Removing the file first — which is what this used to do — means
+        // a second daemon **silently steals the socket from a live one**: the first
+        // keeps running, keeps writing the config and keeps owning its games, but
+        // nothing can reach it any more. Two writers on one `config.toml` is exactly
+        // what "the daemon is the only writer" (ADR-002) rules out.
+        let lock_path = socket_path.with_extension("lock");
+        let _lock = claim_socket(&lock_path)?;
+
+        // Now a stale socket file is all that can be left over: bind over it.
         let _ = std::fs::remove_file(&socket_path);
 
         let listener = UnixListener::bind(&socket_path)
@@ -458,6 +467,33 @@ impl Daemon {
         *guard = candidate;
         Ok(value)
     }
+}
+
+/// Take the one-daemon-per-socket lock, or say who has it.
+///
+/// `flock` rather than "does the socket file exist": a leftover *file* is exactly
+/// what the remove-then-bind below is for, while a **live** daemon holding this
+/// lock must not be replaced. The kernel drops the lock when the holder goes away —
+/// SIGKILL included — so a crashed daemon never blocks its successor and the lock
+/// file itself can stay behind (it is empty, and it lives in the runtime dir).
+fn claim_socket(lock_path: &Path) -> anyhow::Result<std::fs::File> {
+    use std::os::unix::io::AsRawFd;
+
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(lock_path)
+        .map_err(|e| anyhow::anyhow!("无法创建锁文件 {}: {e}", lock_path.display()))?;
+    let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    if !taken {
+        anyhow::bail!(
+            "已经有一个守护进程在跑（它占着 {}）。两个守护进程会同时写同一份配置，\
+             所以这里不去抢它的 socket；要换掉它先跑 `kotori shutdown`。",
+            lock_path.display()
+        );
+    }
+    Ok(file)
 }
 
 pub async fn run() -> anyhow::Result<()> {

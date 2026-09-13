@@ -96,11 +96,21 @@ fn main() -> anyhow::Result<()> {
         })
         .init();
 
-    let cli = cli::Cli::parse();
-
     let rt = tokio::runtime::Runtime::new()?;
 
     match cli.command {
+        cli::Command::Reload => {
+            // 配置是 daemon 在内存里持有的,而它也是唯一的写者。手改了
+            // `config.toml` 之后不重读,下一次写就会把手改的内容盖掉。
+            let socket = config::socket_path();
+            match rt.block_on(async { rpc::call(&socket, "config.reload", None).await }) {
+                Ok(value) => println!("已重读配置:{} 款游戏", value["games"].as_u64().unwrap_or(0)),
+                Err(e) => {
+                    println!("守护进程未响应（{}）: {e}", socket.display());
+                    std::process::exit(1);
+                }
+            }
+        }
         cli::Command::Daemon => {
             tracing::info!("Starting daemon mode");
             rt.block_on(async { daemon::run().await })?;
@@ -192,13 +202,17 @@ fn scale_cli(rt: &tokio::runtime::Runtime, action: cli::ScaleCommand) -> anyhow:
     match action {
         ScaleCommand::Status => {
             let status = call_daemon(rt, &socket, "daemon.status", None)?;
-            print_scale_status(&status);
+            print_scale_status(rt, &socket, &status)?;
         }
         ScaleCommand::Fsr { session_id } => {
             press(rt, &socket, "scale.toggle_fsr", session_id, None)?
         }
+        ScaleCommand::Nis { session_id } => scale_action(rt, &socket, "toggle-nis", session_id)?,
         ScaleCommand::Integer { session_id } => {
             press(rt, &socket, "scale.toggle_integer", session_id, None)?
+        }
+        ScaleCommand::Linear { session_id } => {
+            scale_action(rt, &socket, "toggle-linear", session_id)?
         }
         ScaleCommand::Sharpness { delta, session_id } => press(
             rt,
@@ -284,21 +298,48 @@ fn resolve_session(status: &serde_json::Value, given: Option<String>) -> anyhow:
     }
 }
 
-fn print_scale_status(status: &serde_json::Value) {
+/// `kotori scale status`:有哪些会话在跑,以及 gamescope **此刻**在用什么缩放。
+///
+/// 会话列表来自 `daemon.status`;每一局的实时设置来自 `scale.get_status` —— 那是
+/// gamescope 自己 Xwayland 根窗口上的属性,也就是 kotori 最后写下去的那一份。两个都
+/// 列出来是因为它们会不一致(手动改过,或者 gamescope 自己的热键动过)。
+fn print_scale_status(
+    rt: &tokio::runtime::Runtime,
+    socket: &std::path::Path,
+    status: &serde_json::Value,
+) -> anyhow::Result<()> {
     let sessions = status["sessions"].as_array().cloned().unwrap_or_default();
     if sessions.is_empty() {
         println!("正在运行的游戏：无");
-    } else {
-        println!("正在运行的游戏：");
-        for s in &sessions {
-            println!(
-                "  {} — {}（已运行 {}s）",
-                s["session_id"].as_str().unwrap_or("?"),
-                s["game_id"].as_str().unwrap_or("?"),
-                s["elapsed_secs"].as_u64().unwrap_or(0)
-            );
+        return Ok(());
+    }
+    println!("正在运行的游戏：");
+    for session in &sessions {
+        let id = session["session_id"].as_str().unwrap_or("?");
+        println!(
+            "  {id} — {}（已运行 {}s）",
+            session["game_id"].as_str().unwrap_or("?"),
+            session["elapsed_secs"].as_u64().unwrap_or(0)
+        );
+
+        // 观测会话没有 gamescope 可问 —— 如实说,别拿档案里的值冒充"现在"。
+        if session["gamescope_pid"].is_null() {
+            println!("      仅观测（watch_only）：kotori 没有它的 gamescope 可调");
+            continue;
+        }
+        let params = Some(rpc::params([("session_id", serde_json::json!(id))]));
+        let live = call_daemon(rt, socket, "scale.get_status", params)?;
+        match live["live"].as_object() {
+            Some(live) => println!(
+                "      现在：滤镜 {} / 缩放器 {} / 锐度 {}",
+                live["filter"].as_str().unwrap_or("?"),
+                live["scaler"].as_str().unwrap_or("?"),
+                live["sharpness"].as_u64().unwrap_or(0)
+            ),
+            None => println!("      现在：读不到（Xwayland 还没就绪,或者已经退出）"),
         }
     }
+    Ok(())
 }
 
 fn press(

@@ -125,7 +125,10 @@ pub fn toggled_ratio(current: f32, target: f32) -> f32 {
 }
 
 impl ScaleAction {
-    /// Every action kotori registers, in the order the portal lists them.
+    /// Every action kotori knows, in the order the GUI would show them.
+    ///
+    /// `ALL` 现在只服务于"按 id 找回动作"(`from_id`);从前它还兼着 portal 注册表,
+    /// 那套注册已经删了(2026-09-13)。
     pub const ALL: [Self; 11] = [
         Self::ToggleScale,
         Self::ToggleFullscreen,
@@ -140,7 +143,7 @@ impl ScaleAction {
         Self::ResetScale,
     ];
 
-    /// Stable id: the portal shortcut id, and what the RPC/CLI layer sends.
+    /// Stable id: what `scale.action` carries and what the CLI subcommands name.
     pub fn id(self) -> &'static str {
         match self {
             Self::ToggleScale => "toggle-scale",
