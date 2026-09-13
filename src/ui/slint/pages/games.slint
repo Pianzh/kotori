@@ -22,6 +22,14 @@ component GameRow inherits Rectangle {
     background: ta.has-hover ? Tokens.card-hover : Tokens.card;
     animate background { duration: 120ms; }
 
+    // ⚠ 「点整行进入设置」的 TouchArea 必须**声明在内容之前**(＝垫在最底下)。
+    //    Slint 的命中测试从最上层往下走、后声明的兄弟先拿到事件,把它写在布局后面就会
+    //    **盖住右边那个「启动」按钮** —— 真机症状正是"点启动没反应,反而进了详细设置"。
+    //    垫在底下则相反:点在按钮上由按钮接住,点在别处才轮到它。
+    //    代价:悬停在按钮上时整行背景不再高亮(按钮自己有悬停效果),这个可以接受。
+    //    `src/ui/render/hit_test.rs` 用真的指针事件把这两条都钉住了。
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.open(); } }
+
     HorizontalLayout {
         padding-left: 16px;
         padding-right: 12px;
@@ -90,8 +98,6 @@ component GameRow inherits Rectangle {
 
         Ico { glyph: "\u{E76C}"; icon-size: 12px; tint: Tokens.text-3; width: 12px; }
     }
-
-    ta := TouchArea { mouse-cursor: pointer; clicked => { root.open(); } }
 }
 
 export component GamesPage inherits ScrollView {
