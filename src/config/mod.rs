@@ -335,6 +335,9 @@ mod tests {
                 scale_profile: ScaleProfile {
                     algorithm: ScaleAlgorithm::Nis { sharpness: 4 },
                     framerate_limit: Some(60),
+                    // Explicitly *not* the default, so the round trip below proves
+                    // a non-default value survives being written and read back.
+                    force_fullscreen: true,
                     ..ScaleProfile::default_for((2560, 1440))
                 },
                 wine_prefix: None,

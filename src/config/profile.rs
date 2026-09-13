@@ -50,6 +50,15 @@ pub struct ScaleProfile {
     pub follow_window: bool,
     #[serde(default)]
     pub framerate_limit: Option<u32>,
+    /// `-f`: pin the nested window to the whole output.
+    ///
+    /// **Off by default** (user's call, 2026-09-13). `-f` makes `g_nOutput` the
+    /// screen geometry, so it throws away both the configured ratio *and* the
+    /// user's own resizing: KWin cannot shrink a window gamescope has pinned, and
+    /// that is what "the window can only get smaller in one direction" turned out
+    /// to be. What someone asking for "maximised" actually wants is an ordinary
+    /// resizable window that happens to open at the screen's size — which is what
+    /// `-W/-H` already give, with `-f` nowhere in sight.
     #[serde(default)]
     pub force_fullscreen: bool,
 }
@@ -129,7 +138,7 @@ impl ScaleProfile {
             scale_ratio: None,
             follow_window: true,
             framerate_limit: None,
-            force_fullscreen: true,
+            force_fullscreen: false,
         }
     }
 

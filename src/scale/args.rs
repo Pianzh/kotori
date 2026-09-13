@@ -235,6 +235,20 @@ mod tests {
         assert!(full.iter().any(|a| a == "-f"));
     }
 
+    /// 新人默认拿到的必须是一个**能被拖小的普通窗口**,不是全屏(用户 2026-09-13 拍板)。
+    ///
+    /// `-f` 把 `g_nOutput` 钉成屏幕几何:配置的比例白设,用户自己拖窗口也没用 ——
+    /// 那正是"只能缩不能放"的一半原因。默认开在屏幕大小、但不带 `-f`,就已经是
+    /// 用户要的"最大化"了,而且还能自己缩小。
+    #[test]
+    fn a_brand_new_profile_launches_as_a_resizable_window() {
+        let args = build_gamescope_args(&ScaleProfile::default_for((2560, 1440)), &game_cmd());
+        assert!(
+            !args.iter().any(|a| a == "-f"),
+            "默认不该带 -f,否则窗口在合成器眼里就不可缩放了：{args:?}"
+        );
+    }
+
     #[test]
     fn game_command_follows_the_separator_last() {
         let args = build_gamescope_args(&profile(ScaleAlgorithm::Integer), &game_cmd());
