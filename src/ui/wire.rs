@@ -179,4 +179,6 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_browse_wine_prefix(|| dispatch(Message::PickPath(PathTarget::WinePrefix)));
     window.on_save_wine_prefix(|| dispatch(Message::SaveWinePrefix));
     window.on_clear_wine_prefix(|| dispatch(Message::ClearWinePrefix));
+    // 「重新检查」只是让 daemon 再探一遍;探测本身在 `crate::platform`。
+    window.on_env_reload(|| dispatch(Message::EnvironmentReload));
 }

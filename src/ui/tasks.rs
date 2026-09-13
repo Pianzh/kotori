@@ -83,6 +83,15 @@ pub(super) async fn load_wine_status() -> Result<WineStatus, String> {
     Ok(parse_wine_status(&value))
 }
 
+/// 设置页「环境检查」:让 daemon 去探一遍依赖(`env.report`)。
+///
+/// 只在设置页被打开和用户点「重新检查」时问 —— 那一步会真去跑几个 `--version`、
+/// 建一次 portal 代理、问一次密钥环,不能跟着每 3 秒的状态轮询一起跑。
+pub(super) async fn load_environment() -> Result<Environment, String> {
+    let value = crate::rpc::call(&crate::config::socket_path(), "env.report", None).await?;
+    Ok(parse_environment(&value))
+}
+
 /// 设置页的「启动服务」:把守护进程拉起来。`ensure_running` 是阻塞的(它会等
 /// socket 就绪),所以丢进 blocking 线程池,别把界面卡住。
 pub(super) async fn start_daemon() -> Result<String, String> {

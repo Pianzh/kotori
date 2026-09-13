@@ -1,8 +1,9 @@
-// 全局设置:后台服务(守护进程)+ Wine 目录(prefix)。
+// 全局设置:后台服务(守护进程)+ Wine 目录(prefix)+ 环境检查。
 
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
 import { Divider, RevealItem } from "../widgets/base.slint";
+import { EnvCheckRow } from "../types.slint";
 import { PathField } from "../widgets/path-field.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
@@ -32,12 +33,22 @@ export component SettingsPage inherits ScrollView {
     in property <bool> browse-enabled: true;
     in property <string> path-hint: "";
 
+    // ── 环境检查 ──────────────────────────────────────────────────────────
+    // 结果由 daemon 探(`env.report` → `crate::platform`);这一页只显示,
+    // 措辞与颜色码都在 Rust 那边算好(见 `render/settings.rs`)。
+    in property <[EnvCheckRow]> env-checks: [];
+    in property <string> env-summary: "";
+    in property <string> env-distro: "";
+    in property <bool> env-loaded: false;
+    in property <bool> env-ok: true;
+
     callback service-start();
     callback service-stop();
     callback wine-prefix-changed(string);
     callback browse-wine-prefix();
     callback save-wine-prefix();
     callback clear-wine-prefix();
+    callback env-reload();
 
     Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
 
@@ -57,7 +68,7 @@ export component SettingsPage inherits ScrollView {
                 spacing: 4px;
                 Text { text: "设置"; font-size: 28px; font-weight: 600; color: Tokens.text; }
                 Text {
-                    text: "这台机器上的后台服务、启动与快捷键设置。云存档在「云同步」那一页,单个游戏的缩放/存档在游戏库里点进去。";
+                    text: "这台机器上的后台服务、启动与环境。云存档在「云同步」那一页,单个游戏的缩放/存档在游戏库里点进去。";
                     font-size: 14px;
                     color: Tokens.text-3;
                 }
@@ -209,6 +220,108 @@ export component SettingsPage inherits ScrollView {
                         font-size: 11px;
                         color: Tokens.text-3;
                         wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+        // ── 环境检查 ──────────────────────────────────────────────────────
+        // ⚠ 这一组**只报告、不修改**:探测跑的是 `--version` 这类只读动作,
+        // 不会替你装东西、也不会搬你的凭据(见 `src/platform/mod.rs` 的文件头)。
+        RevealItem {
+            revealed: root.revealed;
+            step: 5;
+            bottom: 8px;
+            SectionTitle { text: "环境检查"; }
+        }
+        RevealItem {
+            revealed: root.revealed;
+            step: 6;
+            bottom: 24px;
+            Group {
+                CardRow {
+                    interactive: false;
+                    title: "依赖";
+                    description: root.env-loaded
+                        ? root.env-summary
+                        : "启动游戏、缩放与云同步要用到的外部程序。缺了必需项就没法启动,可选的那种会退化成写在下面的样子。";
+                    description-color: !root.env-loaded
+                        ? Tokens.text-3
+                        : (root.env-ok ? Tokens.ok : Tokens.danger);
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+                        StdButton {
+                            label: "重新检查";
+                            button-width: 82px;
+                            button-enabled: root.env-loaded;
+                            clicked => { root.env-reload(); }
+                        }
+                    }
+                }
+                if root.env-distro != "" : VerticalLayout {
+                    Divider { }
+                    VerticalLayout {
+                        padding: 12px;
+                        Text { text: root.env-distro; font-size: 11px; color: Tokens.text-3; }
+                    }
+                }
+                if root.env-checks.length == 0 : VerticalLayout {
+                    Divider { }
+                    VerticalLayout {
+                        padding: 16px;
+                        Text {
+                            text: "还没有检查结果。守护进程连上之后打开这一页,或者点「重新检查」。";
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                for check in root.env-checks : VerticalLayout {
+                    Divider { }
+                    VerticalLayout {
+                        padding-left: 16px;
+                        padding-right: 16px;
+                        padding-top: 12px;
+                        padding-bottom: 12px;
+                        spacing: 3px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text {
+                                text: check.title;
+                                font-size: 13px;
+                                color: Tokens.text;
+                                min-width: 120px;
+                            }
+                            Text {
+                                text: check.state-label;
+                                font-size: 12px;
+                                color: check.state == 0
+                                    ? Tokens.ok
+                                    : (check.state == 1 ? Tokens.warn : Tokens.danger);
+                                min-width: 44px;
+                            }
+                            Text {
+                                text: check.detail;
+                                font-size: 11px;
+                                color: Tokens.text-3;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        if check.impact != "" : Text {
+                            text: check.impact;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
+                        if check.install != "" : Text {
+                            text: "装它:" + check.install;
+                            font-size: 11px;
+                            color: Tokens.accent;
+                            wrap: word-wrap;
+                        }
                     }
                 }
             }

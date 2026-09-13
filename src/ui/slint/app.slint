@@ -9,7 +9,7 @@
 import { Tokens } from "theme.slint";
 import { Gap, NavItem } from "widgets/base.slint";
 import { StdButton } from "widgets/buttons.slint";
-import { GameItem, GameDetail, SaveItem, PathPick } from "types.slint";
+import { GameItem, GameDetail, SaveItem, EnvCheckRow, PathPick } from "types.slint";
 import { AppNav } from "app-nav.slint";
 import { GamesPage } from "pages/games.slint";
 import { GameSettingsPage } from "pages/game-settings.slint";
@@ -205,10 +205,18 @@ export component AppWindow inherits Window {
     in-out property <string> wine-default: "";
     in-out property <string> wine-environment: "";
     in-out property <[string]> wine-detected: [];
+    // 设置页「环境检查」:一行一个依赖,措辞与状态码都由 Rust 算好。
+    in-out property <[EnvCheckRow]> env-checks: [];
+    in-out property <string> env-summary: "";
+    in-out property <string> env-distro: "";
+    in-out property <bool> env-loaded: false;
+    // 必需项齐了没有 —— 顶上那句话是绿是红由 Rust 算好(`Environment::ok`)。
+    in-out property <bool> env-ok: true;
 
     callback service-start();
     callback service-stop();
     callback wine-prefix-changed(string);
+    callback env-reload();
     callback save-wine-prefix();
     callback clear-wine-prefix();
 
@@ -430,6 +438,12 @@ export component AppWindow inherits Window {
                             wine-detected: root.wine-detected;
                             browse-enabled: root.browse-enabled;
                             path-hint: root.path-hint;
+                            env-checks: root.env-checks;
+                            env-summary: root.env-summary;
+                            env-distro: root.env-distro;
+                            env-loaded: root.env-loaded;
+                            env-ok: root.env-ok;
+                            env-reload => { root.env-reload(); }
                             service-start => { root.service-start(); }
                             service-stop => { root.service-stop(); }
                             wine-prefix-changed(text) => { root.wine-prefix-changed(text); }

@@ -106,6 +106,9 @@ pub enum Message {
     ServiceStop,
     ServiceStopped(Result<String, String>),
     StatusLoaded(Result<std::collections::BTreeMap<String, SessionInfo>, String>),
+    /// 设置页「环境检查」的结果(`env.report`),以及用户按下的「重新检查」。
+    EnvironmentLoaded(Result<Environment, String>),
+    EnvironmentReload,
     Stop(String),
     StopDone(Result<(), String>),
     Tick,

@@ -5,6 +5,7 @@ mod desktop;
 mod display;
 mod game;
 mod picker;
+mod platform;
 mod process;
 mod rpc;
 mod scale;

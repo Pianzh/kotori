@@ -283,6 +283,7 @@ impl Daemon {
             },
             "config.reload" => respond(id, self.rpc_reload_config().await),
             "wine.status" => respond(id, self.rpc_wine_status().await),
+            "env.report" => respond(id, self.rpc_env_report().await),
             "wine.set_prefix" => {
                 let value = match req.params.as_ref().and_then(|p| p.get("prefix")) {
                     Some(v) => v.clone(),

@@ -10,6 +10,8 @@ import { Tokens } from "../theme.slint";
 export component CardRow inherits Rectangle {
     in property <string> title;
     in property <string> description;
+    // 说明文字的颜色:默认是灰的,设置页的「环境检查」要拿它当状态行(绿/红)。
+    in property <color> description-color: Tokens.text-3;
     in property <bool> interactive: true;
 
     background: interactive && ta.has-hover ? #ffffff08 : #00000000;
@@ -28,7 +30,7 @@ export component CardRow inherits Rectangle {
             Text {
                 text: root.description;
                 font-size: 12px;
-                color: Tokens.text-3;
+                color: root.description-color;
                 wrap: word-wrap;
                 visible: root.description != "";
             }

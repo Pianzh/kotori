@@ -59,6 +59,19 @@ export struct SyncGameItem {
     pending: bool,
 }
 
+// 设置页「环境检查」的一行(对应 Rust 侧 `model::EnvCheck`)。
+// `state`:0 可用 / 1 有条件 / 2 缺少;状态字由 Rust 给(`state-label`),
+// 页面只按它挑颜色 —— 措辞不在 `.slint` 里拼。
+export struct EnvCheckRow {
+    title: string,
+    state: int,
+    state-label: string,
+    detail: string,
+    impact: string,
+    // 按发行版给的安装命令;空 = 这一行没什么可装的。
+    install: string,
+}
+
 // 「浏览…」刚挑回来的那个值:告诉单游戏设置页"往哪个框里填"。
 //
 // 为什么不是直接写属性:那一页的输入框由**页面自己**持有(见 game-settings.slint

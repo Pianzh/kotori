@@ -14,7 +14,7 @@ impl App {
                 if tab == Tab::Settings || tab == Tab::Sync {
                     // Re-read them all, they may have changed on disk (or in the
                     // daemon, which is the only writer).
-                    return Task::batch([
+                    let mut tasks = vec![
                         Task::perform(
                             async { load_wine_status().await },
                             Message::WineStatusLoaded,
@@ -23,7 +23,15 @@ impl App {
                             async { load_sync_status().await },
                             Message::SyncStatusLoaded,
                         ),
-                    ]);
+                    ];
+                    // 环境检查只在设置页问:它会真去跑几个外部程序(见 `platform`)。
+                    if tab == Tab::Settings {
+                        tasks.push(Task::perform(
+                            async { load_environment().await },
+                            Message::EnvironmentLoaded,
+                        ));
+                    }
+                    return Task::batch(tasks);
                 }
                 Task::none()
             }
@@ -447,6 +455,21 @@ impl App {
                 // mark the daemon as gone and let the user see it.
                 self.daemon_connected = Some(false);
                 tracing::debug!("status poll failed: {e}");
+                Task::none()
+            }
+
+            Message::EnvironmentReload => Task::perform(
+                async { load_environment().await },
+                Message::EnvironmentLoaded,
+            ),
+            Message::EnvironmentLoaded(Ok(environment)) => {
+                self.environment = Some(environment);
+                Task::none()
+            }
+            Message::EnvironmentLoaded(Err(e)) => {
+                // 和别处同一条规矩:「问不到」不等于「一切正常」,也不等于「有毛病」——
+                // 保留上一次的结果,只记日志。
+                tracing::debug!("environment report failed: {e}");
                 Task::none()
             }
 

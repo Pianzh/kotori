@@ -71,6 +71,47 @@ pub(super) fn push_settings(ui: &mut Ui) {
     push_eq(w.get_wine_detected(), strings(detected), |v| {
         w.set_wine_detected(v)
     });
+
+    // ── 环境检查 ──────────────────────────────────────────────────────────
+    let environment = app.environment.clone().unwrap_or_default();
+    push_bool(w.get_env_loaded(), app.environment.is_some(), |v| {
+        w.set_env_loaded(v)
+    });
+    push_str(w.get_env_summary(), &environment.summary(), |v| {
+        w.set_env_summary(v)
+    });
+    push_str(w.get_env_distro(), &environment.distro_line(), |v| {
+        w.set_env_distro(v)
+    });
+    push_checks(w, &environment.checks);
+}
+
+/// 环境检查那一组:只读、行数少,所以整表重建不会踩到"输入焦点"那个坑
+/// (见 `detail::push_saves` 的注释)。即便如此也只在真的不一样时才写 ——
+/// 每次 render 都换一个新模型,滚动位置与悬停状态都会抖一下。
+fn push_checks(w: &AppWindow, checks: &[EnvCheck]) {
+    let wanted: Vec<EnvCheckRow> = checks.iter().map(check_row).collect();
+    let model = w.get_env_checks();
+    let same = model.row_count() == wanted.len()
+        && wanted
+            .iter()
+            .enumerate()
+            .all(|(index, row)| model.row_data(index).as_ref() == Some(row));
+    if !same {
+        w.set_env_checks(ModelRc::new(VecModel::from(wanted)));
+    }
+}
+
+/// `model::EnvCheck` → 窗口里那一行(视图类型在 `slint/types.slint`)。
+fn check_row(check: &EnvCheck) -> EnvCheckRow {
+    EnvCheckRow {
+        title: check.title.clone().into(),
+        state: check.state,
+        state_label: check.state_label.clone().into(),
+        detail: check.detail.clone().into(),
+        impact: check.impact.clone().into(),
+        install: check.install.clone().into(),
+    }
 }
 
 /// 「守护进程」那一行的状态字与颜色码(0 检测中 / 1 运行中 / 2 未运行)。

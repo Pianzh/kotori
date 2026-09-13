@@ -27,6 +27,15 @@ impl Daemon {
     }
 
     /// Which wine prefix would be used, and what was found on this machine.
+    /// `env.report`:设置页那一组「环境检查」(用户 2026-09-13:检查只在 GUI 里)。
+    ///
+    /// 用户点开设置页时问一次 —— 探测会真去跑外部程序(`--version`、portal 代理、
+    /// 密钥环问一次),不适合跟 `daemon.status` 一起每 3 秒轮询。
+    pub(super) async fn rpc_env_report(&self) -> Result<Value, String> {
+        let report = crate::platform::report().await;
+        serde_json::to_value(&report).map_err(|e| e.to_string())
+    }
+
     pub(super) async fn rpc_wine_status(&self) -> Result<Value, String> {
         let config = self.config.read().await;
         let detected = crate::wine::detect_prefixes(Path::new(""));

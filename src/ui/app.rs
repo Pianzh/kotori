@@ -62,6 +62,8 @@ pub struct App {
     pub(super) picked_path: Option<(PathTarget, String)>,
     /// 推给页面的"第几次选择"令牌:值一样也要能触发一次(见 `types.slint` 的 `PathPick`)。
     pub(super) pick_token: i32,
+    /// 设置页「环境检查」的结果;`None` = 还没问过。
+    pub(super) environment: Option<Environment>,
     /// Automatic reconnect bookkeeping.
     pub(super) retry_attempts: u32,
     /// Live sessions by game id (refreshed periodically).
@@ -111,6 +113,7 @@ impl App {
                 picking: false,
                 picked_path: None,
                 pick_token: 0,
+                environment: None,
                 retry_attempts: 0,
                 running: std::collections::BTreeMap::new(),
                 sync_status: None,

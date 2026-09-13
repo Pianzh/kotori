@@ -284,6 +284,44 @@ fn every_page_renders_without_a_display() {
     render(&mut ui);
     ui.app.wine_msg = Some("保存失败: 这不是一个 wine prefix（缺少 drive_c）".into());
     render(&mut ui);
+    // 环境检查:三种状态各来一行,免得"缺少"那一行的红字没人看过。
+    ui.app.environment = Some(Environment {
+        distro: "Arch Linux".into(),
+        ok: true,
+        checks: vec![
+            EnvCheck {
+                title: "gamescope".into(),
+                state: 0,
+                state_label: "可用".into(),
+                detail: "gamescope version 3.16.28 (gcc 16.2.1)".into(),
+                impact: "启动游戏与缩放增强".into(),
+                install: String::new(),
+                required: true,
+            },
+            EnvCheck {
+                title: "窗口尺寸控制".into(),
+                state: 1,
+                state_label: "有条件".into(),
+                detail: "只在 KDE Plasma 上实现(平铺桌面里窗口尺寸是布局的事)".into(),
+                impact: "改窗口尺寸会如实回「做不到」;滤镜与锐度仍然可用".into(),
+                install: String::new(),
+                required: false,
+            },
+            EnvCheck {
+                title: "rclone".into(),
+                state: 2,
+                state_label: "缺少".into(),
+                detail: "没找到".into(),
+                impact: "没有它就没有云存档同步".into(),
+                install: "sudo pacman -S rclone".into(),
+                required: true,
+            },
+        ],
+    });
+    render(&mut ui);
+    // 结果还没到的时候那一组也要能画(这时表是空的)。
+    ui.app.environment = None;
+    render(&mut ui);
 
     // 侧栏的连接状态:检测中 / 已连接 / 重试中 / 放弃,以及那条错误。
     for (connected, attempts) in [
