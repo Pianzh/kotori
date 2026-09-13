@@ -51,7 +51,7 @@ pub enum Command {
 
 #[derive(Subcommand)]
 pub enum ScaleCommand {
-    /// Show running sessions and what gamescope is scaling them with right now
+    /// Show running sessions (ids, games, how long they have been up)
     Status,
     /// Toggle FSR upscaling
     Fsr {
