@@ -145,7 +145,7 @@ mod test_support {
             profile_name: "默认".into(),
             algo: "Fsr".into(),
             sharpness: 2,
-            internal: (1280, 720),
+            internal: (Some(1280), Some(720)),
             output: (Some(2560), Some(1440)),
             scale_ratio: None,
             follow_window: true,

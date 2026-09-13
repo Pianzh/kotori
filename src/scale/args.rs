@@ -19,6 +19,14 @@ pub fn sharpness_to_gamescope(sharpness: u32) -> u32 {
 ///   -F    :: filter (linear, nearest, fsr, nis, pixel)
 ///   --sharpness :: 0 (max) .. 20 (min)
 ///
+/// `-w/-h` are emitted **only when the profile names a game resolution**
+/// (user's call, 2026-09-13: that field defaults to empty, because nobody ever
+/// probed it and a stored 1280x720 was just gamescope's own default written
+/// down). Omitting them is not "unknown": gamescope substitutes the very same
+/// 1280x720, so a launch with no `-w/-h` draws exactly what one with
+/// `-w 1280 -h 720` drew — which is why leaving it empty changes nothing on
+/// screen and everything in the config.
+///
 /// `-s` is `--mouse-sensitivity` since 3.16 and must never be emitted here
 /// (it swallows the following argument), and `--fsr-sharpness` is only an
 /// alias of `--sharpness` that older code passed with the wrong polarity.
@@ -39,17 +47,24 @@ pub fn build_gamescope_args(
     screen: (u32, u32),
     game_cmd: &[String],
 ) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+
+    if let Some((width, height)) = profile.explicit_internal_size() {
+        args.extend([
+            "-w".into(),
+            width.to_string(),
+            "-h".into(),
+            height.to_string(),
+        ]);
+    }
+
     let (output_width, output_height) = profile.output_size_for(screen);
-    let mut args = vec![
-        "-w".into(),
-        profile.internal_width.to_string(),
-        "-h".into(),
-        profile.internal_height.to_string(),
+    args.extend([
         "-W".into(),
         output_width.to_string(),
         "-H".into(),
         output_height.to_string(),
-    ];
+    ]);
 
     // Scale algorithm -> scaler/filter/sharpness.
     match &profile.algorithm {
@@ -130,21 +145,46 @@ mod tests {
             .unwrap_or_else(|| panic!("{flag} missing from {args:?}"))
     }
 
-    /// 两样都留空时,窗口就开在屏幕上 —— `-W/-H` 等于屏幕分辨率(＝启动即最大化)。
+    /// 两样都留空时,窗口就开在屏幕上 —— `-W/-H` 等于屏幕分辨率(＝启动即最大化),
+    /// 而游戏分辨率根本不发(用户 2026-09-13:那一项默认就是空的)。
     #[test]
     fn an_empty_profile_opens_at_the_screen_size() {
         let p = profile(ScaleAlgorithm::Integer);
         assert_eq!(p.explicit_output_size(), None);
         let args = build_gamescope_args(&p, SCREEN, &game_cmd());
+        assert_eq!(&args[..4], ["-W", "2560", "-H", "1440"]);
+        assert!(
+            !args.iter().any(|a| a == "-w" || a == "-h"),
+            "游戏分辨率留空时不该发 -w/-h（gamescope 自己的默认值就是它）:{args:?}"
+        );
+    }
+
+    /// 填了游戏分辨率才发 `-w/-h` —— 这是它们唯一的存在理由。
+    #[test]
+    fn only_an_explicit_game_resolution_emits_w_and_h() {
+        let mut p = profile(ScaleAlgorithm::Integer);
+        p.internal_width = Some(640);
+        // 半截数字不算数:宁可一对都不发,也不要发出一个瞎猜的另一半。
+        assert_eq!(p.explicit_internal_size(), None);
+        assert!(
+            !build_gamescope_args(&p, SCREEN, &game_cmd())
+                .iter()
+                .any(|a| a == "-w")
+        );
+
+        p.internal_height = Some(480);
+        let args = build_gamescope_args(&p, SCREEN, &game_cmd());
         assert_eq!(
             &args[..8],
-            ["-w", "1280", "-h", "720", "-W", "2560", "-H", "1440"]
+            ["-w", "640", "-h", "480", "-W", "2560", "-H", "1440"]
         );
     }
 
     #[test]
     fn a_scaling_ratio_wins_over_an_explicit_size() {
         let mut p = profile(ScaleAlgorithm::Fsr { sharpness: 2 });
+        p.internal_width = Some(1280);
+        p.internal_height = Some(720);
         p.output_width = Some(2560);
         p.output_height = Some(1440);
         p.scale_ratio = Some(1.5);
@@ -164,10 +204,7 @@ mod tests {
         p.output_height = Some(900);
         assert_eq!(p.scale_ratio, None);
         let args = build_gamescope_args(&p, SCREEN, &game_cmd());
-        assert_eq!(
-            &args[..8],
-            ["-w", "1280", "-h", "720", "-W", "1600", "-H", "900"]
-        );
+        assert_eq!(&args[..4], ["-W", "1600", "-H", "900"]);
     }
 
     #[test]

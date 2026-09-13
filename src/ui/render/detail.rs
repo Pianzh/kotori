@@ -72,8 +72,20 @@ fn game_detail(game: &UiGame) -> GameDetail {
             .unwrap_or(0) as i32,
         // 滑块只有 0–5 档,存量配置里若有更大的值,先夹到能显示的范围内。
         sharpness: game.sharpness.min(5) as i32,
-        internal_w: game.internal.0.to_string().into(),
-        internal_h: game.internal.1.to_string().into(),
+        // 游戏分辨率也留空＝自动(不传 -w/-h,由 gamescope 按自己的默认值画),
+        // 所以空字符串是正常值。
+        internal_w: game
+            .internal
+            .0
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+            .into(),
+        internal_h: game
+            .internal
+            .1
+            .map(|v| v.to_string())
+            .unwrap_or_default()
+            .into(),
         // 留空的输出尺寸＝自动(启动时按屏幕算),所以空字符串是正常值,不是漏填。
         output_w: game
             .output
@@ -198,6 +210,15 @@ mod tests {
         assert_eq!(detail.output_h, "1440");
         assert_eq!(detail.sharpness, 2);
         assert!(detail.fullscreen);
+
+        // 空着的那两项在页面上就是空字符串(占位符写的是「自动」)。
+        game.internal = (None, None);
+        game.output = (None, None);
+        let blank = game_detail(&game);
+        assert_eq!(blank.internal_w, "");
+        assert_eq!(blank.internal_h, "");
+        assert_eq!(blank.output_w, "");
+        assert_eq!(blank.output_h, "");
 
         // 存量里若有滑块放不下的锐度,只夹显示值,不改存的值。
         game.sharpness = 9;

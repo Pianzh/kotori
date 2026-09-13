@@ -318,8 +318,8 @@ pub(super) fn profile_from_draft(draft: &Draft) -> Result<ScaleProfile, String> 
     Ok(ScaleProfile {
         name: draft.profile_name.clone(),
         algorithm,
-        internal_width: parse_u32(&draft.internal_w, "游戏分辨率宽")?,
-        internal_height: parse_u32(&draft.internal_h, "游戏分辨率高")?,
+        internal_width: parse_optional_u32(&draft.internal_w, "游戏分辨率宽")?,
+        internal_height: parse_optional_u32(&draft.internal_h, "游戏分辨率高")?,
         output_width: parse_optional_u32(&draft.output_w, "输出分辨率宽")?,
         output_height: parse_optional_u32(&draft.output_h, "输出分辨率高")?,
         scale_ratio,
@@ -401,9 +401,11 @@ pub(super) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     .and_then(algo_label)
                     .unwrap_or_else(|| "Fsr".to_string()),
                 sharpness: algorithm.and_then(algo_sharpness).unwrap_or(2),
+                // 留空＝由 gamescope 定(见 `ScaleProfile::internal_width`),
+                // 所以缺字段是正常的,不是"0"。
                 internal: (
-                    u32_field(scale, "internal_width").unwrap_or(0),
-                    u32_field(scale, "internal_height").unwrap_or(0),
+                    u32_field(scale, "internal_width"),
+                    u32_field(scale, "internal_height"),
                 ),
                 output: (
                     u32_field(scale, "output_width"),
@@ -511,7 +513,7 @@ mod tests {
         assert_eq!(game.profile_name, "自定义");
         assert_eq!(game.algo, "Nis");
         assert_eq!(game.sharpness, 4);
-        assert_eq!(game.internal, (1920, 1080));
+        assert_eq!(game.internal, (Some(1920), Some(1080)));
         assert_eq!(game.output, (Some(2560), Some(1440)));
         assert_eq!(game.framerate, Some(60));
         assert!(!game.fullscreen);
@@ -557,7 +559,7 @@ mod tests {
         assert_eq!(draft.algo, "Integer");
         let profile = profile_from_draft(&draft).unwrap();
         assert_eq!(profile.algorithm, ScaleAlgorithm::Integer);
-        assert_eq!(profile.internal_width, 640);
+        assert_eq!(profile.internal_width, Some(640));
         assert_eq!(profile.output_width, Some(1280));
     }
 
@@ -580,7 +582,7 @@ mod tests {
         let games = parse_games(&value).unwrap();
         assert_eq!(games[0].algo, "Integer");
         assert_eq!(games[0].sharpness, 2);
-        assert_eq!(games[0].internal, (0, 0));
+        assert_eq!(games[0].internal, (None, None));
         assert!(!games[0].fullscreen);
     }
 

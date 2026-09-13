@@ -947,14 +947,16 @@ fn launch_builds_the_expected_gamescope_command() {
     assert_eq!(field("WINEPREFIX:"), prefix.to_string_lossy());
 
     // gamescope gets the scaled profile, then `--`, then wine + exe + args.
+    // 新建的档案没写游戏分辨率 ⇒ 不发 `-w/-h`(gamescope 自己的默认值是 1280x720,
+    // 用户 2026-09-13 决定不再让这一项预填)。
     let argv = field("argv:");
-    for expected in [
-        "-w 1280 -h 720 -W 2560 -H 1440",
-        "-S fit -F fsr --sharpness 12",
-        "-- ",
-    ] {
+    for expected in ["-W 2560 -H 1440", "-S fit -F fsr --sharpness 12", "-- "] {
         assert!(argv.contains(expected), "missing {expected:?} in {argv:?}");
     }
+    assert!(
+        !argv.contains(" -w "),
+        "游戏分辨率留空时不该发 -w/-h: {argv:?}"
+    );
     let (_, game_cmd) = argv.split_once(" -- ").expect("separator");
     let parts: Vec<&str> = game_cmd.split_whitespace().collect();
     assert!(parts[0].ends_with("bin/wine"), "wine first: {parts:?}");

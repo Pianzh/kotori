@@ -278,7 +278,11 @@ pub struct UiGame {
     pub profile_name: String,
     pub algo: String,
     pub sharpness: u32,
-    pub internal: (u32, u32),
+    /// The game's own render resolution, or `None` on either half for "let
+    /// gamescope decide" — which is what an empty field means now (nobody ever
+    /// probed it, and the 1280x720 that used to live here was gamescope's own
+    /// default written down).
+    pub internal: (Option<u32>, Option<u32>),
     /// Explicit window size, or `None` on either half for "work it out at launch" —
     /// which is what an empty field in the advanced section means.
     pub output: (Option<u32>, Option<u32>),
@@ -344,8 +348,8 @@ impl Draft {
                 .to_string()
             },
             sharpness: game.sharpness,
-            internal_w: game.internal.0.to_string(),
-            internal_h: game.internal.1.to_string(),
+            internal_w: game.internal.0.map(|v| v.to_string()).unwrap_or_default(),
+            internal_h: game.internal.1.map(|v| v.to_string()).unwrap_or_default(),
             output_w: game.output.0.map(|v| v.to_string()).unwrap_or_default(),
             output_h: game.output.1.map(|v| v.to_string()).unwrap_or_default(),
             scale_ratio: game.scale_ratio.map(|r| r.to_string()).unwrap_or_default(),

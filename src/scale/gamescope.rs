@@ -279,8 +279,11 @@ impl GamescopeScaleEngine {
                 _ => 0, // ResetScale, and anything else that reaches here
             }]
         };
-        let width = (session.profile.internal_width as f32 * ratio).round() as u32;
-        let height = (session.profile.internal_height as f32 * ratio).round() as u32;
+        // 游戏自己渲染的尺寸就是窗口尺寸的基准;档案里没写时用 gamescope 的默认值 ——
+        // 那一局启动时没发 -w/-h,它画的就是这个尺寸。
+        let (internal_width, internal_height) = session.profile.internal_size();
+        let width = (internal_width as f32 * ratio).round() as u32;
+        let height = (internal_height as f32 * ratio).round() as u32;
         crate::desktop::kde::resize_window(pid, width, height).await?;
 
         // Remember where we are, so the next press steps from here. The window is

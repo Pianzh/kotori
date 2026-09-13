@@ -6,9 +6,14 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Default *internal* (game render) resolution used for new games.
-pub const DEFAULT_INTERNAL_WIDTH: u32 = 1280;
-pub const DEFAULT_INTERNAL_HEIGHT: u32 = 720;
+/// The size gamescope renders at when nobody passes `-w/-h`.
+///
+/// Only an *arithmetic* fallback now: a profile that names no game resolution
+/// launches without those flags and gamescope picks these numbers itself, so any
+/// ratio has to be measured against them. Not a value kotori writes into a
+/// game's config — see [`ScaleProfile::internal_width`].
+pub const GAMESCOPE_DEFAULT_WIDTH: u32 = 1280;
+pub const GAMESCOPE_DEFAULT_HEIGHT: u32 = 720;
 
 /// Last-resort output resolution when no display can be queried.
 pub const FALLBACK_OUTPUT_WIDTH: u32 = 1920;
@@ -32,8 +37,18 @@ pub const MAX_SHARPNESS: u32 = 5;
 pub struct ScaleProfile {
     pub name: String,
     pub algorithm: ScaleAlgorithm,
-    pub internal_width: u32,
-    pub internal_height: u32,
+    /// The resolution the game itself renders at, passed as gamescope's `-w/-h`.
+    ///
+    /// **Empty by default** (user's call, 2026-09-13): nothing ever probed this
+    /// value, so the 1280x720 that used to sit here was a guess written into 42
+    /// profiles and never once true. Empty means kotori passes no `-w/-h` at all
+    /// and gamescope uses its own default — the same 1280x720, minus the pretence
+    /// that someone chose it. Both halves must be present to count, exactly like
+    /// [`ScaleProfile::explicit_output_size`].
+    #[serde(default)]
+    pub internal_width: Option<u32>,
+    #[serde(default)]
+    pub internal_height: Option<u32>,
     /// An explicit window size, in physical pixels — the override for the automatic
     /// "open at the screen's size".
     ///
@@ -146,8 +161,8 @@ impl ScaleProfile {
         Self {
             name: "默认".to_string(),
             algorithm: ScaleAlgorithm::Fsr { sharpness: 2 },
-            internal_width: DEFAULT_INTERNAL_WIDTH,
-            internal_height: DEFAULT_INTERNAL_HEIGHT,
+            internal_width: None,
+            internal_height: None,
             output_width: None,
             output_height: None,
             scale_ratio: None,
@@ -155,6 +170,27 @@ impl ScaleProfile {
             framerate_limit: None,
             force_fullscreen: false,
         }
+    }
+
+    /// The game resolution to *launch* with, when the profile names one.
+    ///
+    /// Both halves or nothing — half a resolution is not a resolution (the same
+    /// rule [`ScaleProfile::explicit_output_size`] follows). `None` means kotori
+    /// emits no `-w/-h` and gamescope keeps its own default.
+    pub fn explicit_internal_size(&self) -> Option<(u32, u32)> {
+        match (self.internal_width, self.internal_height) {
+            (Some(width), Some(height)) if width > 0 && height > 0 => Some((width, height)),
+            _ => None,
+        }
+    }
+
+    /// The game's render size for arithmetic: what the profile says, otherwise
+    /// gamescope's own default (which is what a launch without `-w/-h` gets).
+    ///
+    /// Never zero, so callers can divide by it without a guard.
+    pub fn internal_size(&self) -> (u32, u32) {
+        self.explicit_internal_size()
+            .unwrap_or((GAMESCOPE_DEFAULT_WIDTH, GAMESCOPE_DEFAULT_HEIGHT))
     }
 
     /// The window size this profile *asks for*, if the user filled either field in.
@@ -170,10 +206,11 @@ impl ScaleProfile {
     /// desktop-scale maths belongs here.
     pub fn explicit_output_size(&self) -> Option<(u32, u32)> {
         if let Some(ratio) = self.scale_ratio.filter(|r| r.is_finite() && *r > 0.0) {
+            let (internal_width, internal_height) = self.internal_size();
             let upscale = |value: u32| -> u32 {
                 ((value as f32 * ratio).round() as i64).clamp(1, MAX_RESOLUTION as i64) as u32
             };
-            return Some((upscale(self.internal_width), upscale(self.internal_height)));
+            return Some((upscale(internal_width), upscale(internal_height)));
         }
 
         match (self.output_width, self.output_height) {
@@ -211,19 +248,11 @@ impl ScaleProfile {
     /// Validate a profile that arrived from a client before it is persisted.
     /// Returns a message that is safe to show to the user.
     pub fn validate(&self) -> Result<(), String> {
+        // 留空＝交给 gamescope 自己定,是正常状态;填了才要求合法。两种分辨率
+        // (游戏自己的 / 输出的)规则一样,只是名字不同。
         for (label, value) in [
             ("游戏分辨率宽", self.internal_width),
             ("游戏分辨率高", self.internal_height),
-        ] {
-            if value == 0 || value > MAX_RESOLUTION {
-                return Err(format!(
-                    "{label} 必须在 1..={MAX_RESOLUTION} 之间（当前 {value}）"
-                ));
-            }
-        }
-
-        // 留空是正常状态(＝自动),不是错误;填了才要求合法。
-        for (label, value) in [
             ("输出分辨率宽", self.output_width),
             ("输出分辨率高", self.output_height),
         ] {
@@ -252,8 +281,9 @@ impl ScaleProfile {
             }
             // Checked before `output_size()` clamps, so a ratio that only looks
             // fine because of the clamp is still rejected here.
-            let wide = self.internal_width as f64 * ratio as f64;
-            let high = self.internal_height as f64 * ratio as f64;
+            let (internal_width, internal_height) = self.internal_size();
+            let wide = internal_width as f64 * ratio as f64;
+            let high = internal_height as f64 * ratio as f64;
             if wide > MAX_RESOLUTION as f64 || high > MAX_RESOLUTION as f64 {
                 return Err(format!(
                     "缩放比例 {ratio} 会把输出分辨率变成 {:.0}x{:.0}，超过上限 {MAX_RESOLUTION}",
@@ -318,8 +348,8 @@ mod tests {
         assert_eq!(profile.explicit_output_size(), Some((1920, 1080)));
 
         // 小倍数会取整,但绝不塌成 0 尺寸窗口。
-        profile.internal_width = 1000;
-        profile.internal_height = 999;
+        profile.internal_width = Some(1000);
+        profile.internal_height = Some(999);
         profile.scale_ratio = Some(0.25);
         assert_eq!(profile.explicit_output_size(), Some((250, 250)));
 
@@ -351,10 +381,48 @@ mod tests {
 
         // In range, but the product blows past the resolution ceiling: rejected
         // here rather than silently clamped by `output_size()`.
-        profile.internal_width = MAX_RESOLUTION;
+        profile.internal_width = Some(MAX_RESOLUTION);
+        profile.internal_height = Some(MAX_RESOLUTION);
         profile.scale_ratio = Some(2.0);
         let err = profile.validate().unwrap_err();
         assert!(err.contains("输出分辨率"), "{err}");
+    }
+
+    /// 游戏分辨率留空是**正常状态**(用户 2026-09-13:不再让用户填也默认不填)。
+    ///
+    /// 空的时候按 gamescope 自己的默认算数(`-w/-h` 根本不发),而落在配置里的
+    /// 那一对数字必须仍然是 `None` —— 不能偷偷把默认值写回档案。
+    #[test]
+    fn an_empty_game_resolution_leaves_the_size_to_gamescope() {
+        let mut profile = ScaleProfile::default_for();
+        assert_eq!(profile.explicit_internal_size(), None);
+        assert_eq!(
+            profile.internal_size(),
+            (GAMESCOPE_DEFAULT_WIDTH, GAMESCOPE_DEFAULT_HEIGHT)
+        );
+        assert!(profile.validate().is_ok());
+
+        // 只填一半不算数:半个分辨率不是分辨率。
+        profile.internal_width = Some(640);
+        assert_eq!(profile.explicit_internal_size(), None);
+        assert_eq!(
+            profile.internal_size(),
+            (GAMESCOPE_DEFAULT_WIDTH, GAMESCOPE_DEFAULT_HEIGHT)
+        );
+        // 0 也不算数,而且要被拒(它就是"填错了")。
+        profile.internal_width = Some(0);
+        assert_eq!(profile.explicit_internal_size(), None);
+        assert!(profile.validate().unwrap_err().contains("游戏分辨率宽"));
+
+        profile.internal_width = Some(640);
+        profile.internal_height = Some(480);
+        assert_eq!(profile.explicit_internal_size(), Some((640, 480)));
+        assert_eq!(profile.internal_size(), (640, 480));
+
+        // 空着＋填了倍数:倍数按 gamescope 的默认分辨率算,而不是算不出来。
+        let mut ratio = ScaleProfile::default_for();
+        ratio.scale_ratio = Some(1.5);
+        assert_eq!(ratio.explicit_output_size(), Some((1920, 1080)));
     }
 
     #[test]
@@ -363,7 +431,7 @@ mod tests {
         assert!(ok.validate().is_ok());
 
         let mut zero = ok.clone();
-        zero.internal_width = 0;
+        zero.internal_width = Some(0);
         assert!(zero.validate().unwrap_err().contains("游戏分辨率宽"));
 
         let mut huge = ok.clone();

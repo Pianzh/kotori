@@ -71,21 +71,21 @@ pub fn ladder_step(index: usize, up: bool) -> usize {
 /// The upscale ratio a profile launches with: output pixels ÷ the game's own
 /// resolution.
 ///
-/// The width decides when the two disagree (only rounding can make that happen),
-/// and a profile without an internal size falls back to 1.0 — the game at its own
-/// size, which is exactly what the ladder's first step means. This is where a
-/// session's ratio starts, so the first hotkey press steps from what the user is
-/// looking at rather than from a default.
+/// The width decides when the two disagree (only rounding can make that happen).
+/// A profile that names no game resolution falls back to gamescope's own default
+/// (that is what the launch gets, since no `-w/-h` is passed), so the ratio is
+/// measured against the size actually being drawn rather than a number nobody
+/// chose. The ladder's first step means the same thing: the game at its own size.
+/// This is where a session's ratio starts, so the first hotkey press steps from
+/// what the user is looking at rather than from a default.
 ///
 /// `screen` is needed because a profile that names neither a ratio nor a size opens
 /// at the screen's size (see [`ScaleProfile::output_size_for`]): what the user is
 /// looking at depends on the display, not on the config alone.
 pub fn profile_ratio(profile: &ScaleProfile, screen: (u32, u32)) -> f32 {
-    if profile.internal_width == 0 {
-        return 1.0;
-    }
+    let (internal_width, _) = profile.internal_size();
     let (width, _) = profile.output_size_for(screen);
-    let ratio = width as f32 / profile.internal_width as f32;
+    let ratio = width as f32 / internal_width as f32;
     if ratio.is_finite() && ratio > 0.0 {
         ratio
     } else {
@@ -289,7 +289,9 @@ mod tests {
     fn profile_ratio_is_the_one_the_launch_arguments_encode() {
         let screen = (2560, 1440);
         let profile = profile(ScaleAlgorithm::Fsr { sharpness: 2 });
-        // `profile()` 是 1280x720 开在这块屏上;比例就是输出尺寸说出来的那个。
+        // `profile()` 没写游戏分辨率,所以分母是 gamescope 自己的默认值(1280)——
+        // 那一局画的就是这个尺寸,启动时根本没发 -w/-h。
+        assert_eq!(profile.explicit_internal_size(), None);
         let (width, _) = profile.output_size_for(screen);
         assert_eq!(profile_ratio(&profile, screen), width as f32 / 1280.0);
 
@@ -298,16 +300,18 @@ mod tests {
         assert_eq!(profile_ratio(&unscaled, screen), 1.25);
         assert_eq!(ladder_index_for(profile_ratio(&unscaled, screen)), 1);
 
-        let mut broken = unscaled;
-        broken.internal_width = 0;
-        assert_eq!(profile_ratio(&broken, screen), 1.0);
+        // 填了游戏分辨率就拿它当分母(输出 = 1.25 × 游戏分辨率)。
+        let mut explicit = unscaled;
+        explicit.internal_width = Some(1920);
+        explicit.internal_height = Some(1080);
+        assert_eq!(profile_ratio(&explicit, screen), 1.25);
     }
 
     #[test]
     fn one_key_flips_between_the_configured_ratio_and_one_to_one() {
         let mut configured = profile(ScaleAlgorithm::Fsr { sharpness: 2 });
-        configured.internal_width = 1280;
-        configured.internal_height = 720;
+        configured.internal_width = Some(1280);
+        configured.internal_height = Some(720);
         configured.scale_ratio = Some(1.25);
 
         // The target is what the profile configures, not the ladder's next step.
