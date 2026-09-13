@@ -1,0 +1,73 @@
+// 「云存档」那一组(单游戏设置页用):只有这一款游戏的同步状况与两个动作。
+//
+// 措辞(`sync-line`)是 Rust 拼好的 —— 条件与文案不放 .slint 里,那样才测得到。
+
+import { Tokens } from "../theme.slint";
+import { Divider } from "../widgets/base.slint";
+import { StdButton } from "../widgets/buttons.slint";
+import { CardRow, Group } from "../widgets/card.slint";
+
+export component GameSyncGroup inherits Rectangle {
+    in property <string> sync-line: "";
+    // 名字跟页面一致,组里那堆 `root.sync-…` 就不用改写了。
+    in property <bool> sync-can-act: false;
+    in property <bool> sync-pending: false;
+    in property <bool> sync-busy: false;
+
+    callback sync-now();
+    callback sync-restore();
+    callback sync-restore-confirmed();
+    callback sync-restore-cancelled();
+
+    height: group.height;
+    group := Group {
+                    CardRow {
+                        title: "这一款的同步";
+                        description: root.sync-line;
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: center;
+                            if root.sync-can-act && root.sync-pending : HorizontalLayout {
+                                spacing: 8px;
+                                StdButton {
+                                    label: "确认恢复(会覆盖本地存档)";
+                                    button-width: 196px;
+                                    button-enabled: !root.sync-busy;
+                                    clicked => { root.sync-restore-confirmed(); }
+                                }
+                                StdButton {
+                                    label: "取消";
+                                    button-width: 68px;
+                                    clicked => { root.sync-restore-cancelled(); }
+                                }
+                            }
+                            if root.sync-can-act && !root.sync-pending : HorizontalLayout {
+                                spacing: 8px;
+                                StdButton {
+                                    label: "立即同步";
+                                    button-width: 92px;
+                                    button-enabled: !root.sync-busy;
+                                    clicked => { root.sync-now(); }
+                                }
+                                StdButton {
+                                    label: "恢复";
+                                    button-width: 76px;
+                                    button-enabled: !root.sync-busy;
+                                    clicked => { root.sync-restore(); }
+                                }
+                            }
+                        }
+                    }
+                    Divider { }
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 4px;
+                        Text {
+                            text: "「立即同步」= 把这款游戏的存档立刻传上去(游戏退出后本来就会自动传);「恢复」= 用云端最新的那份覆盖本地 —— 覆盖前 kotori 会先替本地拍一份快照,所以这一步是可撤销的。";
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
+                    }
+    }
+}

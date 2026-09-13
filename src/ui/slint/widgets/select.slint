@@ -1,0 +1,118 @@
+// 下拉框(自绘,为的是能控制展开动效)
+//
+// 这里只放「长得像 Win11、动效也对」的原语,不放业务。
+// std-widgets 只借它的 ScrollView;其余全部自绘 —— Win11 的辨识度一半在
+// 悬停/按下/展开的过渡上,内置样式改不动这些。
+
+import { Tokens } from "../theme.slint";
+import { Ico } from "base.slint";
+
+// Win11 下拉框(自己实现,因为要控制展开动效)。浮层由页面负责画:DropdownList 必须
+// 放在 ScrollView 之外,否则会被视口裁掉;定位用锚定元素的 absolute-position 差值。
+export component Select inherits Rectangle {
+    in property <[string]> options;
+    in-out property <int> selected: 0;
+    in property <bool> open: false;
+    in property <length> select-width: 200px;
+    callback toggled();
+
+    width: select-width;
+    height: 32px;
+    border-radius: Tokens.radius;
+    background: open ? #00000033 : Tokens.control;
+    border-width: 1px;
+    border-color: open ? #ffffff00 : #ffffff17;
+    animate background { duration: 120ms; }
+
+    Rectangle {
+        x: 1px;
+        y: parent.height - 2px;
+        width: parent.width - 2px;
+        height: 2px;
+        border-radius: 1px;
+        background: Tokens.accent;
+        opacity: open ? 1 : 0;
+        animate opacity { duration: 120ms; }
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 10px;
+        spacing: 8px;
+        Text {
+            text: root.options[root.selected];
+            font-size: 14px;
+            color: Tokens.text;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        Ico {
+            glyph: "\u{E70D}";
+            icon-size: 11px;
+            tint: Tokens.text-2;
+            transform-rotation: root.open ? 180deg : 0deg;
+            animate transform-rotation { duration: 220ms; easing: ease-out; }
+        }
+    }
+
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.toggled(); } }
+}
+// 下拉浮层:Windows 的 flyout 是「淡入 + 从顶部纵向展开」。
+// 锚点(private origin)必须先用属性接住:transform-origin 里不能直接写三元表达式。
+export component DropdownList inherits Rectangle {
+    in property <[string]> options;
+    in property <int> selected: 0;
+    in property <bool> up: false;
+    callback picked(int);
+
+    in-out property <bool> shown: false;
+    Timer { interval: 20ms; running: true; triggered => { root.shown = true; } }
+
+    height: options.length * 34px + 8px;
+    border-radius: Tokens.radius-card;
+    background: Tokens.flyout;
+    border-width: 1px;
+    border-color: Tokens.flyout-stroke;
+
+    opacity: shown ? 1 : 0;
+    transform-scale-y: shown ? 100% : 84%;
+    private property <Point> origin: { x: self.width / 2, y: self.up ? self.height : 0px };
+    transform-origin: root.origin;
+    animate opacity { duration: 160ms; easing: ease-out; }
+    animate transform-scale-y { duration: 220ms; easing: ease-out; }
+
+    VerticalLayout {
+        padding: 4px;
+        spacing: 0px;
+        for option[index] in root.options : Rectangle {
+            height: 34px;
+            border-radius: 4px;
+            background: row-ta.has-hover ? #ffffff0f : (index == root.selected ? #ffffff12 : #00000000);
+            animate background { duration: 90ms; }
+
+            if index == root.selected : Rectangle {
+                x: 3px;
+                y: (parent.height - self.height) / 2;
+                width: 3px;
+                height: 16px;
+                border-radius: 1.5px;
+                background: Tokens.accent;
+            }
+            Text {
+                x: 14px;
+                width: parent.width - 24px;
+                height: parent.height;
+                text: option;
+                font-size: 14px;
+                color: Tokens.text;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            row-ta := TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.picked(index); }
+            }
+        }
+    }
+}

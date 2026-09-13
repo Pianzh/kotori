@@ -1,0 +1,135 @@
+// 零件:间隔、分隔线、入场包装、图标、图标按钮、导航项
+//
+// 这里只放「长得像 Win11、动效也对」的原语,不放业务。
+// std-widgets 只借它的 ScrollView;其余全部自绘 —— Win11 的辨识度一半在
+// 悬停/按下/展开的过渡上,内置样式改不动这些。
+
+import { Tokens } from "../theme.slint";
+
+export component Gap inherits Rectangle {
+    in property <length> size: 8px;
+    height: size;
+    vertical-stretch: 0;
+    background: #00000000;
+}
+export component Divider inherits Rectangle {
+    height: 1px;
+    background: Tokens.divider;
+}
+// 入场:淡入 + 从下方 18px 滑上来,step 越大开始得越晚(逐个出现)。
+// Slint 没有"位移"原语、布局子元素也不能设 y,所以"上滑"用动画 padding-top 做。
+export component RevealItem inherits Rectangle {
+    in property <bool> revealed: false;
+    in property <int> step: 0;
+    in property <length> bottom: 0px;
+
+    vertical-stretch: 0;
+    background: #00000000;
+    opacity: revealed ? 1 : 0;
+    height: layout.preferred-height;
+
+    animate opacity { duration: 420ms; delay: step * 60ms; easing: ease-out; }
+
+    layout := VerticalLayout {
+        padding-top: revealed ? 0px : 18px;
+        padding-bottom: root.bottom;
+        animate padding-top { duration: 420ms; delay: step * 60ms; easing: ease-out; }
+        @children
+    }
+}
+// Win11 图标 = Segoe Fluent Icons 字形。
+// 图标字形的视觉重心比 em 盒中心略高,所以默认往下挪 1px 才和旁边文字对得上。
+export component Ico inherits Rectangle {
+    in property <string> glyph;
+    in property <length> icon-size: 16px;
+    in property <color> tint: Tokens.text-2;
+    in property <length> nudge: 1px;
+
+    // 宽度按图标尺寸,高度撑满所在行 —— 固定高度在布局里会变成顶对齐。
+    width: icon-size;
+    height: 100%;
+    background: #00000000;
+
+    Text {
+        text: root.glyph;
+        font-family: "Segoe Fluent Icons";
+        font-size: root.icon-size;
+        color: root.tint;
+        x: 0px;
+        y: root.nudge;
+        width: 100%;
+        height: 100%;
+        vertical-alignment: center;
+        horizontal-alignment: center;
+    }
+}
+export component IconButton inherits Rectangle {
+    in property <string> glyph;
+    in property <length> button-size: 32px;
+    in property <length> icon-size: 14px;
+    in property <color> hover-bg: #ffffff14;
+    in property <color> tint: Tokens.text-2;
+    callback clicked();
+
+    width: button-size;
+    height: button-size;
+    border-radius: button-size / 2;
+    background: ta.has-hover ? hover-bg : #00000000;
+    animate background { duration: 100ms; }
+
+    Ico {
+        glyph: root.glyph;
+        icon-size: root.icon-size;
+        tint: ta.has-hover ? Tokens.text : root.tint;
+        width: 100%;
+        height: 100%;
+        animate tint { duration: 100ms; }
+    }
+
+    ta := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+}
+export component NavItem inherits Rectangle {
+    in property <string> label;
+    in property <string> glyph;
+    in property <bool> selected: false;
+    callback clicked();
+
+    height: 40px;
+    border-radius: Tokens.radius;
+    background: selected ? #ffffff0f : (ta.pressed ? #ffffff0a : (ta.has-hover ? #ffffff0a : #00000000));
+    animate background { duration: 120ms; easing: ease-out; }
+
+    Rectangle {
+        x: 0px;
+        y: (parent.height - self.height) / 2;
+        width: 3px;
+        height: 16px;
+        border-radius: 1.5px;
+        background: Tokens.accent;
+        opacity: selected ? 1 : 0;
+        animate opacity { duration: 120ms; easing: ease-out; }
+    }
+
+    HorizontalLayout {
+        padding-left: 13px;
+        padding-right: 12px;
+        spacing: 12px;
+        Ico {
+            glyph: root.glyph;
+            icon-size: 16px;
+            tint: root.selected ? Tokens.text : Tokens.text-2;
+        }
+        Text {
+            text: root.label;
+            font-size: 14px;
+            font-weight: root.selected ? 600 : 400;
+            color: root.selected ? Tokens.text : Tokens.text-2;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}

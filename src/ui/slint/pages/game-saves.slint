@@ -1,0 +1,66 @@
+// 「存档位置」那一组(单游戏设置页用)。
+//
+// 单独一个文件,是因为它自带一份状态:`open-save` / `open-save-kind` 是"哪一行的类型下拉
+// 正开着"。浮层仍旧由页面画(必须放在 ScrollView 之外),所以这里只上报**锚点**。
+
+import { Tokens } from "../theme.slint";
+import { Divider, RevealItem } from "../widgets/base.slint";
+import { StdButton } from "../widgets/buttons.slint";
+import { Group } from "../widgets/card.slint";
+import { SaveRow } from "../widgets/save-row.slint";
+import { SaveItem } from "../types.slint";
+
+export component GameSavesGroup inherits Rectangle {
+    in property <[SaveItem]> saves;
+    in property <[string]> save-kinds;
+    // 与页面双向:行里点开下拉要写上去,浮层选完要写回来。
+    in-out property <int> open-save: -1;
+    in-out property <int> open-save-kind: 0;
+
+    callback add-save();
+    callback remove-save(int);
+    callback kind-clicked(int, Point);
+    callback path-changed(int, string);
+    callback exclude-changed(int, string);
+
+    height: group.height;
+    group := Group {
+                    VerticalLayout {
+                        padding: 16px;
+                        spacing: 4px;
+                        Text {
+                            text: "windows = prefix 里的 Windows 路径,推荐用 %APPDATA% / %DOCUMENTS% 这类令牌(别写用户名,各 prefix 不一样);relative = 相对游戏根目录;absolute = 只在这台机器上有效,不跨平台同步。";
+                            font-size: 12px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
+                    }
+                    Divider { }
+                    for entry[index] in root.saves : SaveRow {
+                        kind: entry.kind;
+                        path: entry.path;
+                        exclude: entry.exclude;
+                        placeholder: entry.placeholder;
+                        kinds: root.save-kinds;
+                        open: root.open-save == index;
+                        kind-clicked(anchor) => {
+                            root.open-save = index;
+                            root.open-save-kind = entry.kind;
+                            root.kind-clicked(index, anchor);
+                        }
+                        path-changed(text) => { root.path-changed(index, text); }
+                        exclude-changed(text) => { root.exclude-changed(index, text); }
+                        remove-clicked => { root.remove-save(index); }
+                    }
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        StdButton {
+                            label: "添加存档位置";
+                            button-width: 130px;
+                            clicked => { root.add-save(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: #00000000; }
+                    }
+    }
+}

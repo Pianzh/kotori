@@ -4,9 +4,10 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
-import {
-    AccentButton, CardRow, Divider, Group, RevealItem, SectionTitle, TextField,
-} from "../widgets.slint";
+import { Divider, RevealItem } from "../widgets/base.slint";
+import { TextField } from "../widgets/controls.slint";
+import { AccentButton } from "../widgets/buttons.slint";
+import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 
 export component AddPage inherits ScrollView {
     in-out property <bool> revealed: false;

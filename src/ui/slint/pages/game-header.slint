@@ -1,0 +1,67 @@
+// 单游戏设置页的头部:返回、游戏名 + exe、运行状态、启动/停止。
+//
+// 它读的是**实时**状态(会话在跑 / 正在启动),所以 `game` 每次刷新都由 Rust 推。
+
+import { Tokens } from "../theme.slint";
+import { IconButton } from "../widgets/base.slint";
+import { AccentButton } from "../widgets/buttons.slint";
+import { GameItem } from "../types.slint";
+
+export component GameHeader inherits Rectangle {
+    in property <GameItem> game;
+    callback back();
+    callback launch();
+
+    height: layout.preferred-height;
+    layout := HorizontalLayout {
+                    spacing: 12px;
+
+                    VerticalLayout {
+                        alignment: center;
+                        IconButton {
+                            glyph: "\u{E72B}";
+                            icon-size: 14px;
+                            clicked => { root.back(); }
+                        }
+                    }
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: 2px;
+                        Text {
+                            text: root.game.name + "  ·  " + root.game.exe;
+                            font-size: 18px;
+                            font-weight: 600;
+                            color: Tokens.text;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: "每次修改保存后,重新启动游戏即生效。";
+                            font-size: 12px;
+                            color: Tokens.text-3;
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        Text {
+                            text: root.game.state == 1 ? "● 运行中" : (root.game.state == 2 ? "● 仅观测" : "未运行");
+                            font-size: 12px;
+                            color: root.game.state == 1 ? Tokens.ok : (root.game.state == 2 ? Tokens.warn : Tokens.text-3);
+                        }
+                    }
+
+                    VerticalLayout {
+                        alignment: center;
+                        AccentButton {
+                            label: root.game.state != 0
+                                ? "停止"
+                                : (root.game.launching ? "启动中…" : (root.game.watch-only ? "监视" : "启动"));
+                            button-width: 96px;
+                            button-enabled: !root.game.launching;
+                            clicked => { root.launch(); }
+                        }
+                    }
+                }
+}

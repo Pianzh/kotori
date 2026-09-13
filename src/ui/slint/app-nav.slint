@@ -1,0 +1,88 @@
+// 左侧 NavigationView:标题、四个页签、底部的守护进程状态。
+//
+// 单独一个文件,是因为它把两件事分得很清:页签是**窗口自己的状态**(组件只上报"点了第几个",
+// 由 app.slint 改属性并补发消息给 Rust —— 见那边 `tab-changed` 的接线),连接状态是 Rust 推的。
+
+import { Tokens } from "theme.slint";
+import { Gap, NavItem } from "widgets/base.slint";
+import { StdButton } from "widgets/buttons.slint";
+
+export component AppNav inherits Rectangle {
+    in property <int> tab: 0;
+    in property <int> connection-state: 0;
+    in property <string> connection-label: "";
+    in property <bool> can-reconnect: false;
+
+    callback tab-changed(int);
+    callback refresh();
+
+                width: 252px;
+                background: #00000000;
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 2px;
+                    HorizontalLayout {
+                        padding-left: 13px;
+                        padding-top: 6px;
+                        Text {
+                            text: "Kotori";
+                            font-size: 20px;
+                            font-weight: 600;
+                            color: Tokens.text;
+                        }
+                    }
+                    Gap { size: 10px; }
+                    NavItem {
+                        label: "游戏库"; glyph: "\u{E8F1}";
+                        selected: tab == 0;
+                        clicked => { tab-changed(0); }
+                    }
+                    NavItem {
+                        label: "添加游戏"; glyph: "\u{E710}";
+                        selected: tab == 1;
+                        clicked => { tab-changed(1); }
+                    }
+                    NavItem {
+                        label: "云同步"; glyph: "\u{E753}";
+                        selected: tab == 2;
+                        clicked => { tab-changed(2); }
+                    }
+                    NavItem {
+                        label: "设置"; glyph: "\u{E713}";
+                        selected: tab == 3;
+                        clicked => { tab-changed(3); }
+                    }
+
+                    Rectangle { vertical-stretch: 1; background: #00000000; }
+
+                    // 守护进程的连接状态。它比页面标题更重要 —— 没有守护进程时,
+                    // 列表是空的,而"空"和"连不上"从界面上看是一样的。
+                    HorizontalLayout {
+                        padding-left: 13px;
+                        padding-right: 8px;
+                        padding-bottom: 6px;
+                        spacing: 6px;
+                        Text {
+                            text: "●";
+                            font-size: 11px;
+                            color: connection-state == 1
+                                ? Tokens.ok
+                                : (connection-state == 2 ? Tokens.danger : Tokens.text-3);
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: connection-label;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        if can-reconnect : StdButton {
+                            label: "重连";
+                            button-width: 62px;
+                            clicked => { root.refresh(); }
+                        }
+                    }
+                }
+}

@@ -7,9 +7,10 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
-import {
-    AccentButton, CardRow, Divider, Group, RevealItem, SectionTitle, StdButton, TextField,
-} from "../widgets.slint";
+import { Divider, RevealItem } from "../widgets/base.slint";
+import { TextField } from "../widgets/controls.slint";
+import { AccentButton, StdButton } from "../widgets/buttons.slint";
+import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { HotkeyState } from "../types.slint";
 
 export component SettingsPage inherits ScrollView {

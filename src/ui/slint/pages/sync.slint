@@ -7,10 +7,11 @@
 
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
-import {
-    AccentButton, CardRow, Divider, Group, RevealItem, SectionTitle, StdButton,
-    Switch, TextField,
-} from "../widgets.slint";
+import { Divider, RevealItem } from "../widgets/base.slint";
+import { Switch, TextField } from "../widgets/controls.slint";
+import { AccentButton, StdButton } from "../widgets/buttons.slint";
+import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
+import { SyncCredentialsGroup } from "sync-credentials.slint";
 
 export component SyncPage inherits ScrollView {
     // ── 只读状态(daemon 报什么就显示什么) ────────────────────────────────
@@ -301,192 +302,29 @@ export component SyncPage inherits ScrollView {
             revealed: root.revealed;
             step: 6;
             bottom: 24px;
-            Group {
-                VerticalLayout {
-                    padding: 16px;
-                    spacing: 4px;
-                    Text {
-                        text: "凭据三级存储:系统密钥环 → 主密码加密文件 → 仅本次会话。B2 凭据只保存一套,再次保存即覆盖。";
-                        font-size: 12px;
-                        color: Tokens.text-3;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: root.credentials-label;
-                        font-size: 11px;
-                        color: root.can-delete-credentials ? Tokens.ok : Tokens.warn;
-                        wrap: word-wrap;
-                    }
-                    // 凭据文件锁着的时候,先解锁才谈得上用。
-                    if root.store-kind == 1 && root.store-locked : Text {
-                        text: "凭据文件已锁定:输入主密码解锁(解锁后本次守护进程内一直有效)。";
-                        font-size: 11px;
-                        color: Tokens.warn;
-                        wrap: word-wrap;
-                    }
-                    if root.store-kind == 1 && !root.store-locked : Text {
-                        text: "✓ 已解锁";
-                        font-size: 11px;
-                        color: Tokens.ok;
-                    }
-                    if root.store-kind == 2 : Text {
-                        text: "也可以在这里设一个主密码:凭据会用 Argon2id + ChaCha20-Poly1305 加密存到 " + root.store-path + ",之后每次开机只要输一次主密码。密码由你自己保管,我们不会存它。";
-                        font-size: 11px;
-                        color: Tokens.text-3;
-                        wrap: word-wrap;
-                    }
+                SyncCredentialsGroup {
+                    store-kind: root.store-kind;
+                    store-locked: root.store-locked;
+                    store-path: root.store-path;
+                    credentials-label: root.credentials-label;
+                    password-hint: root.password-hint;
+                    master-hint: root.master-hint;
+                    has-password: root.has-password;
+                    can-delete-credentials: root.can-delete-credentials;
+                    busy: root.busy;
+                    key-id <=> root.key-id;
+                    app-key <=> root.app-key;
+                    password <=> root.password;
+                    password-again <=> root.password-again;
+                    master-password <=> root.master-password;
+                    field(id, text) => { root.field(id, text); }
+                    save-credentials => { root.save-credentials(); }
+                    clear-credentials => { root.clear-credentials(); }
+                    save-password => { root.save-password(); }
+                    clear-password => { root.clear-password(); }
+                    unlock => { root.unlock(); }
+                    set-master-password => { root.set-master-password(); }
                 }
-                // 主密码:锁定就解锁,session-only 就设一个。
-                if root.store-kind == 1 && root.store-locked : VerticalLayout {
-                    Divider { }
-                    CardRow {
-                        title: "主密码";
-                        description: "解锁凭据文件。";
-                        HorizontalLayout {
-                            spacing: 8px;
-                            alignment: center;
-                            TextField {
-                                field-width: 220px;
-                                password: true;
-                                text <=> root.master-password;
-                                edited(text) => { root.field(8, text); }
-                                placeholder: "凭据文件的主密码";
-                            }
-                            StdButton {
-                                label: "解锁";
-                                button-width: 76px;
-                                button-enabled: !root.busy;
-                                clicked => { root.unlock(); }
-                            }
-                        }
-                    }
-                }
-                if root.store-kind == 2 : VerticalLayout {
-                    Divider { }
-                    CardRow {
-                        title: "主密码";
-                        description: root.master-hint;
-                        HorizontalLayout {
-                            spacing: 8px;
-                            alignment: center;
-                            TextField {
-                                field-width: 220px;
-                                password: true;
-                                text <=> root.master-password;
-                                edited(text) => { root.field(8, text); }
-                                placeholder: "自己记得住就行";
-                            }
-                            StdButton {
-                                label: "加密保存凭据";
-                                button-width: 116px;
-                                button-enabled: !root.busy;
-                                clicked => { root.set-master-password(); }
-                            }
-                        }
-                    }
-                }
-                Divider { }
-                CardRow {
-                    title: "keyID";
-                    description: "B2 的 Application Key ID(形如 005a…)。";
-                    TextField {
-                        field-width: 240px;
-                        text <=> root.key-id;
-                        edited(text) => { root.field(4, text); }
-                        placeholder: "Application Key ID";
-                    }
-                }
-                Divider { }
-                CardRow {
-                    title: "applicationKey";
-                    description: "只在创建时显示一次,丢了就再建一个。";
-                    TextField {
-                        field-width: 240px;
-                        password: true;
-                        text <=> root.app-key;
-                        edited(text) => { root.field(5, text); }
-                        placeholder: "只在创建时显示一次";
-                    }
-                }
-                Divider { }
-                HorizontalLayout {
-                    padding: 12px;
-                    spacing: 10px;
-                    StdButton {
-                        label: "保存凭据";
-                        button-width: 96px;
-                        button-enabled: !root.busy;
-                        clicked => { root.save-credentials(); }
-                    }
-                    StdButton {
-                        label: "删除凭据";
-                        button-width: 96px;
-                        button-enabled: !root.busy && root.can-delete-credentials;
-                        clicked => { root.clear-credentials(); }
-                    }
-                    Text {
-                        text: "两个框填的都是同一个 B2 账号,下次保存会覆盖上一套";
-                        font-size: 11px;
-                        color: Tokens.text-3;
-                        vertical-alignment: center;
-                        wrap: word-wrap;
-                        horizontal-stretch: 1;
-                    }
-                }
-                Divider { }
-                CardRow {
-                    title: "同步密码";
-                    description: "仅在开启加密时使用。密码由你自己设定,我们不会替你生成 —— 你从没见过的密码就等于把备份锁在别人手里。";
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: center;
-                        TextField {
-                            field-width: 140px;
-                            password: true;
-                            text <=> root.password;
-                            edited(text) => { root.field(6, text); }
-                            placeholder: "留空 = 清除密码";
-                        }
-                        TextField {
-                            field-width: 140px;
-                            password: true;
-                            text <=> root.password-again;
-                            edited(text) => { root.field(7, text); }
-                            placeholder: "再输一次";
-                        }
-                        StdButton {
-                            label: "保存密码";
-                            button-width: 84px;
-                            button-enabled: !root.busy;
-                            clicked => { root.save-password(); }
-                        }
-                        StdButton {
-                            label: "删除密码";
-                            button-width: 84px;
-                            button-enabled: !root.busy && root.has-password;
-                            clicked => { root.clear-password(); }
-                        }
-                    }
-                }
-                VerticalLayout {
-                    padding-left: 16px;
-                    padding-right: 16px;
-                    padding-bottom: 14px;
-                    spacing: 4px;
-                    Text {
-                        text: "密码状态:" + (root.has-password ? "已保存在密钥环(改密码会让已加密上传的存档无法解密,会再确认一次)" : "未设置(没开加密就不需要它)");
-                        font-size: 11px;
-                        color: Tokens.text-3;
-                        wrap: word-wrap;
-                    }
-                    Text {
-                        text: "忘了也能自己取回来:" + root.password-hint;
-                        font-size: 11px;
-                        color: Tokens.text-3;
-                        wrap: word-wrap;
-                    }
-                }
-            }
         }
 
         Rectangle { vertical-stretch: 1; background: #00000000; }

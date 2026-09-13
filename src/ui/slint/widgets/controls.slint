@@ -1,0 +1,182 @@
+// 输入控件:开关、文本框、滑块
+//
+// 这里只放「长得像 Win11、动效也对」的原语,不放业务。
+// std-widgets 只借它的 ScrollView;其余全部自绘 —— Win11 的辨识度一半在
+// 悬停/按下/展开的过渡上,内置样式改不动这些。
+
+import { Tokens } from "../theme.slint";
+
+// Win11 开关:关 = 描边胶囊 + 白点;开 = accent 填充 + 黑点。
+export component Switch inherits Rectangle {
+    in-out property <bool> checked: false;
+    callback toggled();
+
+    width: 40px;
+    height: 20px;
+    border-radius: 10px;
+    background: checked ? Tokens.accent : #ffffff00;
+    border-width: checked ? 0px : 1px;
+    border-color: #ffffff6b;
+    animate background { duration: 150ms; easing: ease-in-out; }
+    animate border-width { duration: 150ms; }
+
+    Rectangle {
+        width: 12px;
+        height: 12px;
+        y: 4px;
+        x: checked ? 24px : 4px;
+        border-radius: 6px;
+        background: checked ? #000000 : #ffffff;
+        animate x { duration: 150ms; easing: ease-in-out; }
+        animate background { duration: 150ms; }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { root.checked = !root.checked; root.toggled(); }
+    }
+}
+// Win11 文本框:自己画底,内层用内置 TextInput(输入法走它)。
+// ⚠ 不写 width:布局里的宽度由 min-width/preferred-width + horizontal-stretch 决定;
+//   写死 width 会让它在横向布局里没法撑开(见 UI_GUIDE.md 的 Slint 铁律)。
+export component TextField inherits Rectangle {
+    in-out property <string> text;
+    in property <string> placeholder;
+    in property <length> field-width: 240px;
+    // 密码框:B2 的 applicationKey、同步密码、主密码都要遮住 —— 这三样东西
+    // 泄了就等于把备份交出去,而它们经常出现在投屏 / 截图里。
+    in property <bool> password: false;
+    callback edited(string);
+
+    // ⚠ min-width 必须比 preferred 小:布局挤不下的时候,Slint 只能压那些
+    //    min < preferred 的元素。两者写成一样时,窗口一窄整页就横向溢出
+    //    —— 卡片被切掉、描述文字被挤成一列竖字(真机量到过:900 逻辑像素宽时)。
+    min-width: Math.min(field-width, 96px);
+    preferred-width: field-width;
+    height: 32px;
+    border-radius: Tokens.radius;
+    background: input.has-focus ? #00000033 : Tokens.control;
+    border-width: 1px;
+    border-color: input.has-focus ? #ffffff00 : #ffffff17;
+    animate background { duration: 120ms; }
+
+    // 聚焦时的 accent 下划线
+    Rectangle {
+        x: 1px;
+        y: parent.height - 2px;
+        width: parent.width - 2px;
+        height: 2px;
+        border-radius: 1px;
+        background: Tokens.accent;
+        opacity: input.has-focus ? 1 : 0;
+        animate opacity { duration: 120ms; }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { input.focus(); }
+    }
+
+    input := TextInput {
+        x: 10px;
+        y: 0px;
+        width: root.width - 20px;
+        height: root.height;
+        text <=> root.text;
+        input-type: root.password ? InputType.password : InputType.text;
+        edited => { root.edited(root.text); }
+        font-size: 14px;
+        color: Tokens.text;
+        single-line: true;
+        wrap: no-wrap;
+        vertical-alignment: center;
+    }
+
+    Text {
+        x: 10px;
+        y: 0px;
+        width: root.width - 20px;
+        height: root.height;
+        text: root.placeholder;
+        font-size: 14px;
+        color: Tokens.text-3;
+        vertical-alignment: center;
+        visible: root.text == "" && !input.has-focus;
+    }
+}
+// Win11 滑块。用 TouchArea 的 moved + pressed-x 做拖动(和 Slint 自带 slider 同一套
+// 手法:指针按下后即使移出控件也继续收 move),整数步进。
+export component Slider inherits Rectangle {
+    in-out property <int> value: 0;
+    in property <int> max: 5;
+    in property <length> track-width: 200px;
+
+    width: track-width;
+    height: 32px;
+    background: #00000000;
+
+    private property <length> knob-size: 20px;
+    private property <length> travel: Math.max(1px, self.width - self.knob-size);
+    private property <length> knob-x: (self.value * self.travel) / Math.max(1, self.max);
+
+    // 轨道
+    Rectangle {
+        x: root.knob-size / 2;
+        y: (root.height - 4px) / 2;
+        width: Math.max(0px, root.width - root.knob-size);
+        height: 4px;
+        border-radius: 2px;
+        background: #ffffff14;
+    }
+    // 已选部分
+    Rectangle {
+        x: root.knob-size / 2;
+        y: (root.height - 4px) / 2;
+        width: Math.max(0px, root.knob-x);
+        height: 4px;
+        border-radius: 2px;
+        background: Tokens.accent;
+        animate width { duration: 120ms; easing: ease-out; }
+    }
+    // 手柄:外圈 + 内点(悬停/拖动时内点变大)
+    Rectangle {
+        x: root.knob-x;
+        y: (root.height - root.knob-size) / 2;
+        width: root.knob-size;
+        height: root.knob-size;
+        border-radius: root.knob-size / 2;
+        background: Tokens.base;
+        border-width: 2px;
+        border-color: Tokens.accent;
+    }
+    Rectangle {
+        x: root.knob-x + (root.knob-size - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        width: ta.pressed ? 12px : (ta.has-hover ? 11px : 8px);
+        height: self.width;
+        border-radius: self.width / 2;
+        background: Tokens.accent;
+        animate width { duration: 120ms; easing: ease-out; }
+        animate height { duration: 120ms; easing: ease-out; }
+    }
+
+    ta := TouchArea {
+        property <int> pressed-value: 0;
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.button != PointerEventButton.left) { return; }
+            if (event.kind == PointerEventKind.up) { return; }
+            root.set-from-x(ta.mouse-x);
+            self.pressed-value = root.value;
+        }
+        moved => {
+            root.value = Math.min(root.max, Math.max(0,
+                self.pressed-value + Math.round((ta.mouse-x - ta.pressed-x) / root.travel * root.max)));
+        }
+    }
+
+    function set-from-x(x: length) {
+        root.value = Math.min(root.max, Math.max(0,
+            Math.round((x - root.knob-size / 2) / root.travel * root.max)));
+    }
+}

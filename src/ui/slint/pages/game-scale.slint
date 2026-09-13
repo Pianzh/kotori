@@ -1,0 +1,144 @@
+// 「缩放」那一组(单游戏设置页用):倍数、算法、锐度、全屏、两个分辨率、帧率。
+//
+// 它自己不管浮层:算法下拉打开时把**锚点**报给页面,由页面在 ScrollView 之外画浮层
+// (Slint 的 PopupWindow 既不能定位也不能逐帧动画,见 UI_GUIDE §7)。
+
+import { Tokens } from "../theme.slint";
+import { Divider } from "../widgets/base.slint";
+import { Slider, Switch, TextField } from "../widgets/controls.slint";
+import { Select } from "../widgets/select.slint";
+import { CardRow, Group } from "../widgets/card.slint";
+
+export component GameScaleGroup inherits Rectangle {
+    in property <[string]> algo-options;
+    in property <int> algo-index: 0;
+    in property <bool> algo-open: false;
+    in property <bool> show-sharpness: true;
+
+    in-out property <string> ratio: "";
+    in-out property <int> sharpness: 0;
+    in-out property <string> internal-w: "";
+    in-out property <string> internal-h: "";
+    in-out property <string> output-w: "";
+    in-out property <string> output-h: "";
+    in-out property <bool> fullscreen: false;
+    in-out property <string> framerate: "";
+
+    callback algo-toggled(Point);
+    callback ratio-changed(string);
+    callback sharpness-changed(int);
+    callback internal-w-changed(string);
+    callback internal-h-changed(string);
+    callback output-w-changed(string);
+    callback output-h-changed(string);
+    callback fullscreen-toggled(bool);
+    callback framerate-changed(string);
+
+    height: group.height;
+    group := Group {
+                    CardRow {
+                        title: "缩放倍数";
+                        description: "输出像素 ÷ 游戏分辨率。留空则沿用输出分辨率。";
+                        TextField {
+                            field-width: 120px;
+                            text <=> root.ratio;
+                            edited(text) => { root.ratio-changed(text); }
+                            placeholder: "例如 1.75";
+                        }
+                    }
+                    Divider { }
+                    CardRow {
+                        title: "缩放算法";
+                        description: "决定画面放大的方式。";
+                        algo := Select {
+                            options: root.algo-options;
+                            selected: root.algo-index;
+                            open: root.algo-open;
+                            toggled => { root.algo-toggled(algo.absolute-position); }
+                        }
+                    }
+                    if root.show-sharpness : VerticalLayout {
+                        Divider { }
+                        CardRow {
+                            title: "锐度";
+                            description: "只有 FSR / NIS 有效,越大越锐(0–5)。";
+                            HorizontalLayout {
+                                spacing: 12px;
+                                alignment: center;
+                                Slider {
+                                    track-width: 200px;
+                                    max: 5;
+                                    value <=> root.sharpness;
+                                }
+                                Text {
+                                    text: root.sharpness + " / 5";
+                                    font-size: 13px;
+                                    color: Tokens.text-2;
+                                    vertical-alignment: center;
+                                    min-width: 34px;
+                                }
+                            }
+                        }
+                    }
+                    Divider { }
+                    CardRow {
+                        title: "全屏启动";
+                        description: "铺满整块显示器。会盖掉上面的缩放倍数(-f 让 g_nOutput 变成屏幕尺寸)。";
+                        Switch {
+                            checked <=> root.fullscreen;
+                            toggled => { root.fullscreen-toggled(root.fullscreen); }
+                        }
+                    }
+                    Divider { }
+                    CardRow {
+                        title: "游戏分辨率";
+                        description: "游戏自己渲染的尺寸,由 gamescope 的 -w/-h 传入。";
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: center;
+                            TextField {
+                                field-width: 88px;
+                                text <=> root.internal-w;
+                                edited(text) => { root.internal-w-changed(text); }
+                            }
+                            Text { text: "×"; font-size: 13px; color: Tokens.text-3; vertical-alignment: center; }
+                            TextField {
+                                field-width: 88px;
+                                text <=> root.internal-h;
+                                edited(text) => { root.internal-h-changed(text); }
+                            }
+                        }
+                    }
+                    Divider { }
+                    CardRow {
+                        title: "输出分辨率";
+                        description: "窗口实际开多大。填了缩放倍数时它只作参考。";
+                        HorizontalLayout {
+                            spacing: 6px;
+                            alignment: center;
+                            TextField {
+                                field-width: 88px;
+                                text <=> root.output-w;
+                                edited(text) => { root.output-w-changed(text); }
+                            }
+                            Text { text: "×"; font-size: 13px; color: Tokens.text-3; vertical-alignment: center; }
+                            TextField {
+                                field-width: 88px;
+                                text <=> root.output-h;
+                                edited(text) => { root.output-h-changed(text); }
+                            }
+                        }
+                    }
+                    Divider { }
+                    CardRow {
+                        title: "帧率限制";
+                        description: "留空表示不限。";
+                        TextField {
+                            field-width: 100px;
+                            text <=> root.framerate;
+                            edited(text) => { root.framerate-changed(text); }
+                            placeholder: "60";
+                        }
+                    }
+    }
+}

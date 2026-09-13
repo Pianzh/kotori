@@ -7,8 +7,10 @@
 // 意图转成回调)。所有值都来自 Rust(`src/ui/render.rs` 推属性,`src/ui/wire.rs` 收回调)。
 
 import { Tokens } from "theme.slint";
-import { Gap, NavItem, StdButton } from "widgets.slint";
+import { Gap, NavItem } from "widgets/base.slint";
+import { StdButton } from "widgets/buttons.slint";
 import { GameItem, GameDetail, SaveItem, HotkeyState } from "types.slint";
+import { AppNav } from "app-nav.slint";
 import { GamesPage } from "pages/games.slint";
 import { GameSettingsPage } from "pages/game-settings.slint";
 import { AddPage } from "pages/add.slint";
@@ -187,76 +189,13 @@ export component AppWindow inherits Window {
             spacing: 0px;
 
             // ── 左侧导航栏(NavigationView) ──
-            Rectangle {
-                width: 252px;
-                background: #00000000;
-                VerticalLayout {
-                    padding: 8px;
-                    spacing: 2px;
-                    HorizontalLayout {
-                        padding-left: 13px;
-                        padding-top: 6px;
-                        Text {
-                            text: "Kotori";
-                            font-size: 20px;
-                            font-weight: 600;
-                            color: Tokens.text;
-                        }
-                    }
-                    Gap { size: 10px; }
-                    NavItem {
-                        label: "游戏库"; glyph: "\u{E8F1}";
-                        selected: root.tab == 0;
-                        clicked => { root.tab = 0; root.game-open = false; root.tab-changed(0); }
-                    }
-                    NavItem {
-                        label: "添加游戏"; glyph: "\u{E710}";
-                        selected: root.tab == 1;
-                        clicked => { root.tab = 1; root.game-open = false; root.tab-changed(1); }
-                    }
-                    NavItem {
-                        label: "云同步"; glyph: "\u{E753}";
-                        selected: root.tab == 2;
-                        clicked => { root.tab = 2; root.game-open = false; root.tab-changed(2); }
-                    }
-                    NavItem {
-                        label: "设置"; glyph: "\u{E713}";
-                        selected: root.tab == 3;
-                        clicked => { root.tab = 3; root.game-open = false; root.tab-changed(3); }
-                    }
-
-                    Rectangle { vertical-stretch: 1; background: #00000000; }
-
-                    // 守护进程的连接状态。它比页面标题更重要 —— 没有守护进程时,
-                    // 列表是空的,而"空"和"连不上"从界面上看是一样的。
-                    HorizontalLayout {
-                        padding-left: 13px;
-                        padding-right: 8px;
-                        padding-bottom: 6px;
-                        spacing: 6px;
-                        Text {
-                            text: "●";
-                            font-size: 11px;
-                            color: root.connection-state == 1
-                                ? Tokens.ok
-                                : (root.connection-state == 2 ? Tokens.danger : Tokens.text-3);
-                            vertical-alignment: center;
-                        }
-                        Text {
-                            text: root.connection-label;
-                            font-size: 11px;
-                            color: Tokens.text-3;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                            overflow: elide;
-                        }
-                        if root.can-reconnect : StdButton {
-                            label: "重连";
-                            button-width: 62px;
-                            clicked => { root.refresh(); }
-                        }
-                    }
-                }
+            AppNav {
+                tab: root.tab;
+                connection-state: root.connection-state;
+                connection-label: root.connection-label;
+                can-reconnect: root.can-reconnect;
+                tab-changed(index) => { root.tab = index; root.game-open = false; root.tab-changed(index); }
+                refresh => { root.refresh(); }
             }
 
             // ── 内容区 ──

@@ -1,0 +1,202 @@
+//! 单个游戏的设置页:已存值、存档位置列表、这一款自己的云存档状况。
+
+use super::games::{game_item, ratio_label};
+use super::*;
+
+pub(super) fn push_detail(ui: &mut Ui) {
+    let app = &ui.app;
+    let w = &ui.window;
+
+    push_eq(w.get_algo_options(), options(ScaleAlgorithm::ALL), |v| {
+        w.set_algo_options(v)
+    });
+    push_eq(w.get_save_kinds(), options(SAVE_PATH_KINDS), |v| {
+        w.set_save_kinds(v)
+    });
+    push_bool(w.get_confirm_delete(), app.confirm_delete, |v| {
+        w.set_confirm_delete(v)
+    });
+    let (saved, saved_ok) = match &app.saved_msg {
+        Some(message) => (message.clone(), !message.starts_with("保存失败")),
+        None => (String::new(), true),
+    };
+    push_str(w.get_saved_message(), &saved, |v| w.set_saved_message(v));
+    push_bool(w.get_saved_ok(), saved_ok, |v| w.set_saved_ok(v));
+    push_bool(
+        w.get_show_sharpness(),
+        app.draft
+            .as_ref()
+            .is_some_and(|draft| matches!(draft.algo.as_str(), "Fsr" | "Nis")),
+        |v| w.set_show_sharpness(v),
+    );
+
+    if let Some(game) = app.selected_game() {
+        push_eq(w.get_game(), game_item(game, app), |v| w.set_game(v));
+        // ⚠ 这份「已存值」只能来自库里的游戏,不能来自草稿:页面的可编辑副本是
+        //    照它抄的,拿草稿去填等于每敲一个字就把输入框重置一次。
+        push_eq(w.get_detail(), game_detail(game), |v| w.set_detail(v));
+    }
+
+    // 这个游戏的云存档状况:`sync.status` 里按 id 找那一行。
+    let sync = app.selected_sync_game();
+    push_str(w.get_detail_sync_line(), &sync_line(app, sync), |v| {
+        w.set_detail_sync_line(v)
+    });
+    let can_act = app.sync_status.is_some()
+        && sync.is_some_and(|row| row.locations > 0 && row.problem.is_none());
+    let pending = app
+        .sync_restore_pending
+        .as_ref()
+        .is_some_and(|(id, _)| app.selected.as_deref() == Some(id.as_str()));
+    push_bool(w.get_detail_sync_can_act(), can_act, |v| {
+        w.set_detail_sync_can_act(v)
+    });
+    push_bool(w.get_detail_sync_pending(), pending, |v| {
+        w.set_detail_sync_pending(v)
+    });
+    push_bool(w.get_detail_sync_busy(), app.sync_form.busy, |v| {
+        w.set_detail_sync_busy(v)
+    });
+
+    push_saves(ui);
+}
+/// The stored profile, as the per-game page's "reset" basis.
+fn game_detail(game: &UiGame) -> GameDetail {
+    GameDetail {
+        game_dir: game.game_dir.clone().into(),
+        exe: game.exe.clone().into(),
+        ratio: ratio_label(game.scale_ratio).into(),
+        algo: ScaleAlgorithm::ALL
+            .iter()
+            .position(|label| *label == game.algo)
+            .unwrap_or(0) as i32,
+        // 滑块只有 0–5 档,存量配置里若有更大的值,先夹到能显示的范围内。
+        sharpness: game.sharpness.min(5) as i32,
+        internal_w: game.internal.0.to_string().into(),
+        internal_h: game.internal.1.to_string().into(),
+        output_w: game.output.0.to_string().into(),
+        output_h: game.output.1.to_string().into(),
+        fullscreen: game.fullscreen,
+        framerate: game
+            .framerate
+            .map(|f| f.to_string())
+            .unwrap_or_default()
+            .into(),
+    }
+}
+impl App {
+    /// `sync.status` 里属于当前这个游戏的那一行。
+    pub(super) fn selected_sync_game(&self) -> Option<&SyncGameRow> {
+        let id = self.selected.as_deref()?;
+        self.sync_status
+            .as_ref()?
+            .games
+            .iter()
+            .find(|row| row.id == id)
+    }
+}
+/// 单游戏设置页里「云存档」那行要说的话。
+///
+/// 措辞放在 Rust 里(而不是 .slint 里的三元表达式):它可以被测,而页面只管显示。
+fn sync_line(app: &App, row: Option<&SyncGameRow>) -> String {
+    if app.sync_status.is_none() {
+        return "读取中…".to_string();
+    }
+    match row {
+        None => "守护进程还没报这个游戏的存档位置".to_string(),
+        Some(row) if row.problem.is_some() => {
+            format!("⚠ {}", row.problem.as_deref().unwrap_or_default())
+        }
+        Some(row) if row.locations == 0 => {
+            "还没有配置存档位置 —— 上面先加一条,同步才有东西可传。".to_string()
+        }
+        Some(row) => format!("{} 个存档位置 · {}", row.locations, row.last_label()),
+    }
+}
+/// Keep the save-location model in step with the draft, without rebuilding it
+/// while someone is typing in it.
+///
+/// The page owns the text of each row (a Slint input that is bound from outside
+/// loses that binding the moment the user types); this model is only the
+/// *initial* value of each row. So:
+///
+/// - entering a game, and adding or removing a location, change the shape of the
+///   list ⇒ rebuild it from the draft (which has the latest text);
+/// - changing a kind is one row's business ⇒ `set_row_data` on that row alone;
+/// - text edits are **not** pushed back at all, or the row being typed in would
+///   be recreated and lose the caret.
+fn push_saves(ui: &mut Ui) {
+    let app = &ui.app;
+    let want: Vec<SaveItem> = app
+        .draft
+        .as_ref()
+        .map(|draft| save_items(&draft.save_paths))
+        .unwrap_or_default();
+
+    if ui.saves_seed != ui.detail_seed || ui.saves_built.len() != want.len() {
+        ui.saves.set_vec(want.clone());
+        ui.saves_built = want;
+        ui.saves_seed = ui.detail_seed;
+        return;
+    }
+
+    for (index, item) in want.iter().enumerate() {
+        if let Some(current) = ui.saves.row_data(index)
+            && current.kind != item.kind
+        {
+            ui.saves.set_row_data(
+                index,
+                SaveItem {
+                    kind: item.kind,
+                    path: current.path,
+                    exclude: current.exclude,
+                    placeholder: item.placeholder.clone(),
+                },
+            );
+            ui.saves_built[index].kind = item.kind;
+        }
+    }
+}
+/// 一份存档位置列表 → 视图结构。
+fn save_items(entries: &[SavePathDraft]) -> Vec<SaveItem> {
+    entries.iter().map(save_item).collect()
+}
+fn save_item(entry: &SavePathDraft) -> SaveItem {
+    SaveItem {
+        kind: SAVE_PATH_KINDS
+            .iter()
+            .position(|kind| *kind == entry.kind)
+            .unwrap_or(0) as i32,
+        path: entry.path.clone().into(),
+        exclude: entry.exclude.clone().into(),
+        placeholder: kind_placeholder(&entry.kind).into(),
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::test_support::ui_game;
+    #[test]
+    fn the_stored_profile_is_what_the_page_resets_to() {
+        let mut game = ui_game();
+        game.scale_ratio = Some(1.25);
+        let detail = game_detail(&game);
+        assert_eq!(detail.algo, 0);
+        assert_eq!(detail.ratio, "1.25");
+        assert_eq!(detail.internal_w, "1280");
+        assert_eq!(detail.output_h, "1440");
+        assert_eq!(detail.sharpness, 2);
+        assert!(detail.fullscreen);
+
+        // 存量里若有滑块放不下的锐度,只夹显示值,不改存的值。
+        game.sharpness = 9;
+        assert_eq!(game_detail(&game).sharpness, 5);
+        assert_eq!(game.sharpness, 9);
+    }
+    #[test]
+    fn an_unknown_algorithm_falls_back_to_the_first_option() {
+        let mut game = ui_game();
+        game.algo = "Lanczos".into();
+        assert_eq!(game_detail(&game).algo, 0);
+    }
+}

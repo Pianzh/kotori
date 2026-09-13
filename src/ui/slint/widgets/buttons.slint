@@ -1,0 +1,81 @@
+// 按钮:强调按钮与普通按钮
+//
+// 这里只放「长得像 Win11、动效也对」的原语,不放业务。
+// std-widgets 只借它的 ScrollView;其余全部自绘 —— Win11 的辨识度一半在
+// 悬停/按下/展开的过渡上,内置样式改不动这些。
+
+import { Tokens } from "../theme.slint";
+
+// Win11 按钮:悬停变亮,按下变深 + 轻微缩小(按下反馈)。
+export component AccentButton inherits Rectangle {
+    in property <string> label;
+    in property <length> button-width: 100px;
+    // 有请求在飞的时候把按钮按住 —— 旧 UI 用 on_press_maybe(!busy) 达成的效果。
+    // ⚠ 别把这个属性叫 `enabled`:`std-widgets` 的 ScrollView 自带一个同名属性,
+    //    在继承它的页面里就会撞上"不能覆盖已有属性"。
+    in property <bool> button-enabled: true;
+    callback clicked();
+
+    height: 32px;
+    width: button-width;
+    border-radius: Tokens.radius;
+    opacity: button-enabled ? 1 : 0.45;
+    background: ta.pressed ? Tokens.accent-press : (ta.has-hover ? Tokens.accent-hi : Tokens.accent);
+    transform-scale-x: ta.pressed ? 97% : 100%;
+    transform-scale-y: ta.pressed ? 97% : 100%;
+    animate background { duration: 100ms; }
+    animate transform-scale-x { duration: 90ms; easing: ease-out; }
+    animate transform-scale-y { duration: 90ms; easing: ease-out; }
+
+    HorizontalLayout {
+        alignment: center;
+        Text {
+            text: root.label;
+            font-size: 14px;
+            font-weight: 600;
+            color: #000000;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if (root.button-enabled) { root.clicked(); } }
+    }
+}
+export component StdButton inherits Rectangle {
+    in property <string> label;
+    in property <length> button-width: 100px;
+    // 见上面 AccentButton 的说明:这个属性不能叫 `enabled`。
+    in property <bool> button-enabled: true;
+    callback clicked();
+
+    height: 32px;
+    width: button-width;
+    border-radius: Tokens.radius;
+    opacity: button-enabled ? 1 : 0.45;
+    background: ta.pressed ? #ffffff08 : (ta.has-hover ? Tokens.control-hi : Tokens.control);
+    border-width: 1px;
+    border-color: ta.pressed ? #ffffff0f : #ffffff17;
+    transform-scale-x: ta.pressed ? 97% : 100%;
+    transform-scale-y: ta.pressed ? 97% : 100%;
+    animate background { duration: 100ms; }
+    animate border-color { duration: 100ms; }
+    animate transform-scale-x { duration: 90ms; easing: ease-out; }
+    animate transform-scale-y { duration: 90ms; easing: ease-out; }
+
+    HorizontalLayout {
+        alignment: center;
+        Text {
+            text: root.label;
+            font-size: 14px;
+            color: Tokens.text;
+            vertical-alignment: center;
+        }
+    }
+
+    ta := TouchArea {
+        mouse-cursor: pointer;
+        clicked => { if (root.button-enabled) { root.clicked(); } }
+    }
+}

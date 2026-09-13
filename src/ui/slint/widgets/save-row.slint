@@ -1,0 +1,65 @@
+// 一行存档位置:类型(三种形态)+ 路径 + 排除规则 + 删除。
+//
+// ⚠ 这里**不画下拉浮层**:浮层必须放在 ScrollView 之外,否则会被视口裁掉(见 UI_GUIDE §7),
+//    所以本组件只上报"哪一行被点了 + 锚点在哪",由页面去画。
+
+import { Tokens } from "../theme.slint";
+import { IconButton } from "base.slint";
+import { TextField } from "controls.slint";
+import { Select } from "select.slint";
+import { SaveItem } from "../types.slint";
+
+// 一行存档位置:类型(三种形态)+ 路径 + 排除规则 + 删除。
+// 类型是拽不动的下拉 —— 浮层统一由页面画(见文件末尾),所以这里只上报锚点。
+export component SaveRow inherits Rectangle {
+    in property <int> kind;
+    in property <string> path;
+    in property <string> exclude;
+    in property <string> placeholder: "存放路径";
+    in property <bool> open: false;
+    in property <[string]> kinds;
+    callback kind-clicked(Point);
+    callback path-changed(string);
+    callback exclude-changed(string);
+    callback remove-clicked();
+
+    height: layout.preferred-height;
+    background: #00000000;
+
+    layout := HorizontalLayout {
+        padding: 10px;
+        spacing: 8px;
+
+        sel := Select {
+            select-width: 118px;
+            options: root.kinds;
+            selected: root.kind;
+            open: root.open;
+            toggled => { root.kind-clicked(sel.absolute-position); }
+        }
+
+        TextField {
+            horizontal-stretch: 1;
+            field-width: 220px;
+            text: root.path;
+            placeholder: root.placeholder;
+            edited(text) => { root.path-changed(text); }
+        }
+
+        TextField {
+            field-width: 170px;
+            text: root.exclude;
+            placeholder: "排除:*.log, cache/";
+            edited(text) => { root.exclude-changed(text); }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            IconButton {
+                glyph: "\u{E74D}";
+                icon-size: 13px;
+                clicked => { root.remove-clicked(); }
+            }
+        }
+    }
+}

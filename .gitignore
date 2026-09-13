@@ -1,6 +1,4 @@
 /target
-# 设计稿 crate(ui-shell)自己的构建产物:上面那条是锚定到根目录的,管不到它
-/ui-shell/target/
 **/*.rs.bk
 Cargo.lock
 *.swp
