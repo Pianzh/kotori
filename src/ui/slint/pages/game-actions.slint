@@ -48,12 +48,16 @@ export component GameActions inherits Rectangle {
                 }
             }
 
+            // 删除是破坏性动作,所以它自己占一行、并且靠**右下角**:
+            // 离「保存配置」远一点,手滑的代价小一点(用户 2026-09-13 要求)。
             RevealItem {
                 revealed: root.revealed;
                 step: 9;
                 bottom: 0px;
                 HorizontalLayout {
                     spacing: 10px;
+                    // 这一根弹簧在前:整组(说明 + 按钮)贴右边。
+                    Rectangle { horizontal-stretch: 1; background: #00000000; }
                     Text {
                         text: "删除这个条目?(不会删除游戏文件)";
                         font-size: 12px;
@@ -74,7 +78,6 @@ export component GameActions inherits Rectangle {
                         button-width: 76px;
                         clicked => { root.delete-cancelled(); }
                     }
-                    Rectangle { horizontal-stretch: 1; background: #00000000; }
                 }
             }
     }
