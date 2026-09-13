@@ -316,12 +316,27 @@ impl Keyring {
     /// 第二个返回值现在恒为 `false`:`open_default` 不会再落到"什么都存不住"的状态,
     /// 参数保留是为了兼容调用方与将来可能出现的只读配置目录。
     pub fn open_default(encrypted_path: &Path, plain_path: &Path) -> (Self, bool) {
+        Self::open_default_with(Self::system(), encrypted_path, plain_path)
+    }
+
+    /// [`open_default`] with the keyring probe passed in.
+    ///
+    /// Split out so the *policy* — which store wins — can be tested without the
+    /// machine the test happens to run on deciding the answer. That is not
+    /// hypothetical: the fallback test passed on a niri session (no Secret
+    /// Service provider running) and failed on a Plasma one (ksecretd is up), and
+    /// neither result said anything about the policy.
+    fn open_default_with(
+        keyring: Result<Self, SecretError>,
+        encrypted_path: &Path,
+        plain_path: &Path,
+    ) -> (Self, bool) {
         let encrypted = EncryptedFile::new(encrypted_path);
         if encrypted.exists() {
             return (Self::from_encrypted(encrypted), false);
         }
 
-        if let Ok(keyring) = Self::system() {
+        if let Ok(keyring) = keyring {
             adopt_plain_entries(&keyring, plain_path);
             return (keyring, false);
         }
@@ -982,6 +997,10 @@ mod tests {
     /// 这条测试以前断言的是反过来的东西("绝不退化成明文")—— 用户明确改了这个决定:
     /// 日常工具(opencode / gh)都是明文 0600,不该为了一个 B2 key 逼用户输主密码。
     /// 现在硬性的部分变成:**必须能持久化,而且必须是 0600**。
+    ///
+    /// "没有密钥环"是**注入**的,不是指望这台机器恰好没有:Plasma 会话里
+    /// `ksecretd` 是被桌面拉起来的,KDE 上跑就会走到密钥环那一支(那是对的行为,
+    /// 不是这条测试要断言的东西)。见 [`Keyring::open_default_with`]。
     #[test]
     fn a_machine_without_a_keyring_falls_back_to_a_private_plain_file() {
         let dir = std::env::temp_dir().join(format!(
@@ -993,7 +1012,8 @@ mod tests {
         let encrypted = dir.join("secrets.json");
         let plain = dir.join("credentials.json");
 
-        let (store, ephemeral) = Keyring::open_default(&encrypted, &plain);
+        let (store, ephemeral) =
+            Keyring::open_default_with(Err(SecretError::BackendMissing), &encrypted, &plain);
         assert!(!ephemeral, "明文文件是能持久化的,不该报成临时的");
         assert!(!store.is_ephemeral());
         assert_eq!(
@@ -1010,7 +1030,8 @@ mod tests {
             Some("005keyid")
         );
         // 换一个句柄重开(等价于守护进程重启),凭据要还在。
-        let (reopened, _) = Keyring::open_default(&encrypted, &plain);
+        let (reopened, _) =
+            Keyring::open_default_with(Err(SecretError::BackendMissing), &encrypted, &plain);
         assert_eq!(
             reopened.get(SecretKey::B2KeyId).unwrap().as_deref(),
             Some("005keyid")
@@ -1051,6 +1072,70 @@ mod tests {
             "明文里的凭据必须搬进密钥环,不能像凭空消失了一样"
         );
         assert!(!plain.exists(), "搬全了就该删掉明文");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 挑选顺序本身:密钥环在跑时它赢,明文里的东西被搬走后不再留明文。
+    /// (顺序的另外两档——加密文件优先、都没有则明文——由上面两条测试覆盖。)
+    #[test]
+    fn a_running_keyring_wins_over_the_plaintext_file() {
+        let fake = FakeTool::new("wins");
+        let dir = std::env::temp_dir().join(format!(
+            "kotori-wins-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let encrypted = dir.join("secrets.json");
+        let plain = dir.join("credentials.json");
+        PlainFile::new(&plain)
+            .store(&[(SecretKey::B2KeyId, "005keyid".to_string())])
+            .unwrap();
+
+        let (store, ephemeral) = Keyring::open_default_with(Ok(fake.keyring()), &encrypted, &plain);
+
+        assert!(!ephemeral);
+        assert!(
+            matches!(store.kind(), StoreKind::System { .. }),
+            "{:?}",
+            store.kind()
+        );
+        assert_eq!(
+            store.get(SecretKey::B2KeyId).unwrap().as_deref(),
+            Some("005keyid"),
+            "切到密钥环不能把已有凭据弄丢"
+        );
+        assert!(!plain.exists(), "搬全了就该删掉明文");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 加密文件是用户显式选过的更严那一级,它比密钥环更优先。
+    #[test]
+    fn an_encrypted_file_wins_over_a_running_keyring() {
+        let fake = FakeTool::new("encrypted-first");
+        let dir = std::env::temp_dir().join(format!(
+            "kotori-encfirst-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let encrypted = dir.join("secrets.json");
+        let plain = dir.join("credentials.json");
+        // 一个存在(锁着)的加密文件就够:选它不需要密码,解锁是后面的事。
+        EncryptedFile::new(&encrypted)
+            .create(
+                "a-password-long-enough",
+                &[(SecretKey::B2KeyId, "005keyid".to_string())],
+            )
+            .unwrap();
+
+        let (store, _) = Keyring::open_default_with(Ok(fake.keyring()), &encrypted, &plain);
+
+        assert!(
+            matches!(store.kind(), StoreKind::EncryptedFile { .. }),
+            "{:?}",
+            store.kind()
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 

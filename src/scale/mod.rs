@@ -20,7 +20,7 @@ pub mod gamescope;
 pub mod teardown;
 pub mod x11;
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::ScaleProfile;
 
@@ -137,6 +137,17 @@ pub struct ScaleSession {
     pub process_group: Option<u32>,
     /// The process this session follows, if any.
     pub process_name: Option<String>,
+    /// The wine prefix this session's game runs under.
+    ///
+    /// Kept because part of a real teardown happens *inside* wine: wine's
+    /// `winedevice.exe` ignores `SIGTERM`, so it outlives every process-group and
+    /// process-tree kill, and only `wineserver -k` on this exact prefix removes it
+    /// (see [`crate::wine::close_prefix`]). Left-behind copies are what turn a
+    /// logout into a 90 s wait.
+    ///
+    /// `None` for watch-only sessions: kotori launched nothing, so it has no
+    /// business shutting down a prefix the user may be using themselves.
+    pub wine_prefix: Option<PathBuf>,
     /// True when kotori did not launch the game, only watched it.
     pub watch_only: bool,
 }

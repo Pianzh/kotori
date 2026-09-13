@@ -5,6 +5,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
+use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, RwLock};
 
 use crate::config::{self, Config};
@@ -125,6 +126,20 @@ impl Daemon {
 
         self.spawn_sync_events();
 
+        // A logout or a shutdown stops this daemon with SIGTERM, and that is the
+        // one exit where the games have to go with it. They live in the same
+        // systemd scope, and systemd waits for every process in that scope —
+        // including wine's `winedevice.exe`, which ignores SIGTERM and so costs
+        // the whole `TimeoutStopSec` (90 s, measured twice on 2026-09-13).
+        // Closing the sessions here takes seconds instead.
+        //
+        // `daemon.shutdown` deliberately still does *not* do this: a UI that quits
+        // must not kill a running game (ADR-002), so the two exits stay distinct
+        // and only the signal path tears games down.
+        let mut sigterm = signal(SignalKind::terminate())?;
+        let mut sigint = signal(SignalKind::interrupt())?;
+        let mut signalled = false;
+
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
@@ -147,13 +162,51 @@ impl Daemon {
                     tracing::info!("shutdown requested, stopping daemon");
                     break;
                 }
+                _ = sigterm.recv() => {
+                    tracing::info!("收到 SIGTERM（会话要结束了），把在跑的游戏一并收尾");
+                    signalled = true;
+                    break;
+                }
+                _ = sigint.recv() => {
+                    tracing::info!("收到 SIGINT，把在跑的游戏一并收尾");
+                    signalled = true;
+                    break;
+                }
             }
+        }
+
+        if signalled {
+            self.close_all_sessions().await;
         }
 
         drop(listener);
         let _ = std::fs::remove_file(&socket_path);
-        tracing::info!("daemon stopped; running games (if any) keep running");
+        if signalled {
+            tracing::info!("daemon stopped; 在跑的游戏已一并收尾");
+        } else {
+            tracing::info!("daemon stopped; running games (if any) keep running");
+        }
         Ok(())
+    }
+
+    /// Bring every live session down, for the one exit where that is right.
+    ///
+    /// A session's teardown already covers all three layers — process group,
+    /// process tree, and wine's own server for that prefix — so this only has to
+    /// find them. Without it the wine processes are orphaned into this daemon's
+    /// systemd scope, and the machine cannot shut down until that scope times out.
+    async fn close_all_sessions(&self) {
+        let sessions = self.engine.list_sessions().await;
+        if sessions.is_empty() {
+            return;
+        }
+
+        tracing::info!("还有 {} 个会话在跑，逐一收尾", sessions.len());
+        for session in sessions {
+            if let Err(err) = self.engine.stop_session(&session).await {
+                tracing::warn!("收尾会话 {} 失败：{err}", session.session_id);
+            }
+        }
     }
 
     /// Create a cheap clone of the shared state to move into a spawned task.

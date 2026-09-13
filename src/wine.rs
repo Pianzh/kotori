@@ -7,6 +7,8 @@
 //! use when the config does not name one.
 
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 
 use crate::config::{Config, GameConfig, SavePath, SavePathKind};
 
@@ -67,6 +69,88 @@ pub fn resolve_prefix(game: &GameConfig, config: &Config) -> (PathBuf, PrefixSou
         config,
         std::env::var_os("WINEPREFIX").map(PathBuf::from),
     )
+}
+
+/// Environment variable naming the `wineserver` binary, for installs that keep it
+/// somewhere unusual and for tests.
+pub const WINESERVER_ENV: &str = "KOTORI_WINESERVER";
+
+/// How long `wineserver -k` gets to answer before kotori stops waiting for it.
+///
+/// It is a signal-and-exit helper: past this point, waiting longer only delays
+/// the teardown it is a part of.
+const WINESERVER_KILL_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// Shut down the wine server of **exactly one** prefix.
+///
+/// This is the only reliable way to make wine's `winedevice.exe` exit. Measured
+/// on the real machine (2026-09-13): that process ignores `SIGTERM`, so
+/// signalling it — or the process group it puts itself in, or the tree it hangs
+/// off — leaves it behind, and a left-behind `winedevice.exe` keeps whatever
+/// systemd scope it landed in alive for the whole 90 s `TimeoutStopSec`. That
+/// happened twice, and each time it was 90 s added to a shutdown.
+/// `wineserver -k` terminates every process attached to that prefix's server in
+/// one step, instead of chasing them one at a time.
+///
+/// Deliberately one prefix, and never `pkill wineserver`: a machine holds several
+/// prefixes, and killing the wrong server would take down a game kotori does not
+/// own.
+///
+/// Call it *after* the game's own processes are gone, never before — while the
+/// game is running, `wineserver -k` would be killing a live game's server.
+/// Failures are logged and swallowed: a teardown that can fail is a teardown that
+/// leaves behind the mess it was called to remove.
+pub async fn close_prefix(prefix: &Path) {
+    let binary = std::env::var_os(WINESERVER_ENV)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("wineserver"));
+    close_prefix_with(&binary, prefix).await;
+}
+
+/// [`close_prefix`] with the binary named explicitly.
+///
+/// The binary and the prefix are both parameters, and `WINEPREFIX` is passed to
+/// the child rather than read from our own environment, so this can be tested
+/// without any test mutating the process environment — which would race with
+/// every other test thread.
+pub async fn close_prefix_with(binary: &Path, prefix: &Path) {
+    let mut child = match tokio::process::Command::new(binary)
+        .arg("-k")
+        .env("WINEPREFIX", prefix)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            tracing::warn!(
+                "起不了 {}（{err}）；{} 里的 wine 残留要留到下次重启了",
+                binary.display(),
+                prefix.display()
+            );
+            return;
+        }
+    };
+
+    match tokio::time::timeout(WINESERVER_KILL_TIMEOUT, child.wait()).await {
+        Ok(Ok(status)) if status.success() => {
+            tracing::debug!("wineserver -k 收掉了 {}", prefix.display());
+        }
+        Ok(Ok(status)) => tracing::debug!(
+            "wineserver -k 对 {} 退出码 {status}（通常表示本来就没有 server 在跑）",
+            prefix.display()
+        ),
+        Ok(Err(err)) => tracing::warn!("等 wineserver -k 出错：{err}"),
+        Err(_) => {
+            let _ = child.start_kill();
+            tracing::warn!(
+                "wineserver -k 超过 {}s 没返回，不再等它（{}）",
+                WINESERVER_KILL_TIMEOUT.as_secs(),
+                prefix.display()
+            );
+        }
+    }
 }
 
 /// [`resolve_prefix`] with the environment lookup passed in.
@@ -715,5 +799,77 @@ save_paths = [
         assert!(text.contains("kind = \"windows\""), "{text}");
         let reparsed: Config = toml::from_str(&text).unwrap();
         assert_eq!(reparsed.games["demo"].save_paths[2].exclude, ["*.log"]);
+    }
+
+    /// A scratch directory that names itself, so parallel tests never share one.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("kotori-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A fake `wineserver` that writes down what it was asked to do.
+    fn recording_wineserver(dir: &Path) -> PathBuf {
+        let script = dir.join("wineserver");
+        let log = dir.join("call.txt");
+        crate::secrets::testing::write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\n\
+                 if [ \"$1\" = \"--kotori-warmup\" ]; then exit 0; fi\n\
+                 echo \"args=$* prefix=$WINEPREFIX\" > {}\n",
+                log.display()
+            ),
+        );
+        script
+    }
+
+    #[tokio::test]
+    async fn closing_a_prefix_names_that_prefix_to_wineserver() {
+        let dir = scratch("wineserver-args");
+        let script = recording_wineserver(&dir);
+        let prefix = dir.join("prefix");
+
+        close_prefix_with(&script, &prefix).await;
+
+        let recorded = std::fs::read_to_string(dir.join("call.txt")).unwrap();
+        assert!(recorded.contains("args=-k"), "{recorded}");
+        assert!(
+            recorded.contains(&prefix.display().to_string()),
+            "the prefix must be the one we were asked to close: {recorded}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn a_missing_wineserver_is_survivable() {
+        // This runs while a session is being torn down, so "wine is not where we
+        // thought it was" must not turn into a failed teardown or a panic.
+        let missing = scratch("wineserver-missing").join("nope");
+        close_prefix_with(&missing, Path::new("/games/demo/prefix")).await;
+    }
+
+    #[tokio::test]
+    async fn a_wineserver_that_never_answers_does_not_hold_up_the_teardown() {
+        // The whole point of the timeout: a wedged helper must not become a
+        // wedged shutdown of its own.
+        let dir = scratch("wineserver-hang");
+        let script = dir.join("wineserver");
+        crate::secrets::testing::write_executable(
+            &script,
+            "#!/bin/sh\n\
+             if [ \"$1\" = \"--kotori-warmup\" ]; then exit 0; fi\n\
+             exec sleep 60\n",
+        );
+
+        let started = std::time::Instant::now();
+        close_prefix_with(&script, Path::new("/games/demo/prefix")).await;
+
+        let waited = started.elapsed();
+        assert!(
+            waited < WINESERVER_KILL_TIMEOUT * 3,
+            "waited {waited:?}, which means the timeout did not fire"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

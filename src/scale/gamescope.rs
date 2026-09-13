@@ -88,6 +88,8 @@ impl GamescopeScaleEngine {
             started_at: std::time::Instant::now(),
             process_group: None,
             process_name: Some(name.to_string()),
+            // Nothing was launched, so there is no prefix of ours to close.
+            wine_prefix: None,
             watch_only: true,
         };
 
@@ -293,6 +295,23 @@ impl GamescopeScaleEngine {
     }
 }
 
+/// Wine's own half of a teardown.
+///
+/// The process group and the process tree are kotori's kill; this is wine's, and
+/// it is not optional. Measured (2026-09-13): wine's `winedevice.exe` ignores
+/// `SIGTERM` and puts itself in a process group of its own, so it survives every
+/// signal kotori sends and then sits in whatever systemd scope the session lived
+/// in until that scope's 90 s `TimeoutStopSec` runs out — which is a 90 s
+/// shutdown, twice over. `wineserver -k` is what actually removes it.
+///
+/// Always called *after* the game's processes are gone: while a game is running
+/// this would kill that game's own server.
+async fn close_wine(prefix: Option<&Path>) {
+    if let Some(prefix) = prefix {
+        crate::wine::close_prefix(prefix).await;
+    }
+}
+
 /// Human-readable summary of a filter setting, for logs and RPC answers.
 fn describe(settings: &Settings) -> String {
     format!(
@@ -469,6 +488,7 @@ impl ScaleEngine for GamescopeScaleEngine {
             started_at: std::time::Instant::now(),
             process_group: Some(pgid),
             process_name: spec.process_name.map(str::to_string),
+            wine_prefix: spec.wine_prefix.map(Path::to_path_buf),
             watch_only: false,
         };
 
@@ -485,6 +505,7 @@ impl ScaleEngine for GamescopeScaleEngine {
         let sid = session.session_id.clone();
         let game_id = session.game_id.clone();
         let watched = session.process_name.clone();
+        let wine_prefix = session.wine_prefix.clone();
         tokio::spawn(async move {
             let status = child.wait().await;
             // `code()` is `None` when a signal killed the process, which is exactly
@@ -506,6 +527,10 @@ impl ScaleEngine for GamescopeScaleEngine {
                 process::wait_until_gone(name).await;
             }
 
+            // Everything of the game's is gone by now; wine's server is the last
+            // thing to close, or it leaves a `winedevice.exe` behind.
+            close_wine(wine_prefix.as_deref()).await;
+
             sessions.write().await.remove(&sid);
             let _ = events.send(SessionEvent {
                 session_id: sid,
@@ -521,6 +546,7 @@ impl ScaleEngine for GamescopeScaleEngine {
         let watchdog = pgid as i32;
         let watchdog_sid = session.session_id.clone();
         let watchdog_sessions = self.sessions.clone();
+        let watchdog_prefix = session.wine_prefix.clone();
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(TEARDOWN_POLL).await;
@@ -549,6 +575,11 @@ impl ScaleEngine for GamescopeScaleEngine {
                 unsafe {
                     libc::kill(-watchdog, libc::SIGKILL);
                 }
+                // The wedge this watchdog exists for is `winedevice.exe` refusing
+                // to die, and killing the group does not remove it — leaving now
+                // without closing wine's server would orphan exactly the process
+                // that makes a shutdown hang.
+                close_wine(watchdog_prefix.as_deref()).await;
                 return;
             }
         });
@@ -565,6 +596,7 @@ impl ScaleEngine for GamescopeScaleEngine {
         if let Some(name) = game_process {
             let detector_sessions = self.sessions.clone();
             let detector_sid = session.session_id.clone();
+            let detector_prefix = session.wine_prefix.clone();
             let root = watchdog;
             tokio::spawn(async move {
                 if !game_shows_up(&detector_sessions, &detector_sid, &name, root).await {
@@ -599,6 +631,7 @@ impl ScaleEngine for GamescopeScaleEngine {
                          （游戏内部退出／启动器交接），kotori 收尾整组进程"
                     );
                     terminate_session(root).await;
+                    close_wine(detector_prefix.as_deref()).await;
                     return;
                 }
             });
@@ -625,6 +658,10 @@ impl ScaleEngine for GamescopeScaleEngine {
         // SIGTERM the group *and* its tree, then SIGKILL what is left. The tree
         // matters here too: `winedevice.exe` sits in a process group of its own.
         terminate_session(pgid).await;
+
+        // ...and the tree is still not the whole story: the same `winedevice.exe`
+        // outlives the kill, so wine's server is closed for this prefix as well.
+        close_wine(session.wine_prefix.as_deref()).await;
 
         Ok(())
     }
