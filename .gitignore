@@ -1,17 +1,24 @@
 /target
 **/*.rs.bk
-Cargo.lock
 *.swp
 *.swo
 *~
 .DS_Store
 Thumbs.db
 
-# Local agent working doc - deliberately untracked
-AGENTS.md
+# ⚠ Cargo.lock **要入库**(以前这里忽略了它):kotori 是**二进制**,不是库 ——
+# 不锁版本的话每一次 CI / 每一次别人 clone 下来构建,依赖都可能悄悄换一个版本,
+# 而"昨天还绿"的流水线今天会因为一个补丁版本变红。CI 上也一样要靠它才能复现。
+# (库才需要忽略它,好让下游自己去解依赖。)
 
-# Project goals - same deal: kept on disk, deliberately untracked
+# 本地 / 面向 agent 的工作文档:刻意不入 git(见 AGENTS.md 开头)
+AGENTS.md
 /GOALS.md
+UI_GUIDE.md
+SHUTDOWN_HANG_FIX.md
+
+# 跑在仓库里那些 agent 工具自己的目录
+.opencode/
 
 # Local config / real data - NEVER commit
 config.toml

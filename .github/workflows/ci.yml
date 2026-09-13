@@ -1,0 +1,85 @@
+# 构建与测试 —— 目标有两个:① 每次 push/PR 都跑一遍那 244 项测试;
+# ② **在真的 aarch64 机器上**把同样的东西跑一遍(用户 2026-09-13 说的"进入 arm 测试")。
+#
+# ⚠ 这份文件是照着本机验证过的命令写的,**但还没有在 GitHub 上跑过第一次**。
+#    第一次跑最可能卡住的地方是系统库那一行(见下面两个 apt 步骤):Slint 在 Linux 上
+#    要 xkbcommon / fontconfig / xcb,runner 镜像里不一定都带。真报缺库就往那行加。
+#
+# 为什么不用交叉编译:Slint 官方文档给的路子是 `cross` + 自带系统库的容器,而
+# **GitHub 现在给公开仓库免费提供 arm64 原生 runner**(`ubuntu-24.04-arm`)——
+# 原生构建不用操心 sysroot/目标架构的 .so,而且能**真的把测试跑起来**,
+# 交叉编译到 aarch64 只能编译、不能验证。等真要出 ARM 发行包时再说打包。
+# https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  # 测试里有几处会真去碰桌面环境的东西:统一关掉,别让 CI 卡在等授权的对话框上。
+  KOTORI_NO_HOTKEYS: "1"
+
+jobs:
+  # ── x86_64:格式、lint、全部测试 ─────────────────────────────────────────
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Slint 的 Linux 依赖(libxcb-shape0-dev 等)。缺了会在链接期才炸,别省。
+      - name: 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev \
+            libfontconfig-dev libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 格式
+        run: cargo fmt --all --check
+
+      - name: Clippy(零告警是硬规矩)
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: 测试
+        run: cargo test --all-targets
+
+  # ── aarch64:同一套测试,跑在真 ARM 上 ───────────────────────────────────
+  # ⚠ 这一步只在**公开**仓库里免费(私有用 larger runner 才有 arm64)。
+  test-arm:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev \
+            libfontconfig-dev libssl-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 测试(原生 aarch64,不是交叉编译)
+        run: cargo test --all-targets
+
+      # 交付物:先在 CI 里证明它能构建出来。ARM64 是主交付目标(见 AGENTS.md §2.2),
+      # 但真机那一步(游戏真的在 ARM 上跑起来)只有用户自己有机器时才算验完。
+      - name: 构建 release
+        run: cargo build --release
+
+      - name: 记下产物
+        run: |
+          file target/release/kotori
+          ls -lh target/release/kotori
