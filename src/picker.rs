@@ -77,6 +77,8 @@ pub async fn pick(request: Request) -> Result<Option<PathBuf>, String> {
 
 #[cfg(unix)]
 mod platform {
+    use ashpd::PortalError;
+    use ashpd::desktop::ResponseError;
     use ashpd::desktop::file_chooser::{FileFilter, SelectedFiles};
 
     use super::*;
@@ -112,19 +114,44 @@ mod platform {
                 .filter(FileFilter::new("所有文件").glob("*"));
         }
 
-        let selected = dialog
-            .send()
-            .await
-            .map_err(|e| format!("打不开文件选择框:{e}"))?
-            .response()
-            .map_err(|e| format!("文件选择框出错:{e}"))?;
+        let request = match dialog.send().await {
+            Ok(request) => request,
+            Err(error) => return cancelled_or(error, "打不开文件选择框"),
+        };
+        let selected = match request.response() {
+            Ok(selected) => selected,
+            Err(error) => return cancelled_or(error, "文件选择框出错"),
+        };
 
         let Some(uri) = selected.uris().first() else {
-            return Ok(None); // 取消
+            // 取消的**另一种形状**:请求成功、但里面一个 URI 都没有。
+            return Ok(None);
         };
         uri_to_path(uri.as_str())
             .map(Some)
             .ok_or_else(|| format!("选择框回来的不是一个本地路径:{}", uri.as_str()))
+    }
+
+    /// 用户按了取消,还是真的出错了?
+    ///
+    /// portal 用**两种**形状报告取消(真机实测,用户 2026-09-13 点叉号踩到的):
+    /// 请求的响应里写 `cancelled`(ashpd 翻成 [`ResponseError::Cancelled`]),或者直接回一个
+    /// `org.freedesktop.portal.Error.Cancelled`。两个都得认成"用户取消了" ——
+    /// 认不出来就会把一次**正常操作**报成失败(而且界面还会据此把按钮灰掉)。
+    pub(super) fn cancelled_or(error: ashpd::Error, what: &str) -> Result<Option<PathBuf>, String> {
+        if is_cancelled(&error) {
+            Ok(None)
+        } else {
+            Err(format!("{what}:{error}"))
+        }
+    }
+
+    pub(super) fn is_cancelled(error: &ashpd::Error) -> bool {
+        matches!(
+            error,
+            ashpd::Error::Response(ResponseError::Cancelled)
+                | ashpd::Error::Portal(PortalError::Cancelled(_))
+        )
     }
 }
 
@@ -229,5 +256,33 @@ mod tests {
         assert_eq!(folder.want, Want::Folder);
         assert_eq!(folder.start, Some(PathBuf::from("/games")));
         assert!(Request::exe("挑 exe", None).start.is_none());
+    }
+
+    /// ⚠ 取消**必须**是"没选",不能是"失败":真机上点叉号那一下,portal 回的是
+    /// `Cancelled` 错误(不是空 URI 列表),当时被当成故障报了出来,而且界面还据此把
+    /// 「浏览…」按钮永久灰掉 —— 点一次取消就废掉一个功能。两种形状都要认。
+    #[cfg(unix)]
+    #[test]
+    fn cancelling_a_dialog_is_not_a_failure() {
+        use super::platform::{cancelled_or, is_cancelled};
+        use ashpd::PortalError;
+        use ashpd::desktop::ResponseError;
+
+        // 形状一:请求响应里写 cancelled。
+        let by_response = ashpd::Error::Response(ResponseError::Cancelled);
+        assert!(is_cancelled(&by_response));
+        assert_eq!(cancelled_or(by_response, "打不开文件选择框"), Ok(None));
+
+        // 形状二:portal 直接回 `org.freedesktop.portal.Error.Cancelled`。
+        let by_portal = ashpd::Error::Portal(PortalError::Cancelled("cancelled".into()));
+        assert!(is_cancelled(&by_portal));
+        assert_eq!(cancelled_or(by_portal, "文件选择框出错"), Ok(None));
+
+        // 真出错还是要报,而且带上是谁失败的。
+        let failed = ashpd::Error::Portal(PortalError::Failed("boom".into()));
+        assert!(!is_cancelled(&failed));
+        let message = cancelled_or(failed, "打不开文件选择框").unwrap_err();
+        assert!(message.starts_with("打不开文件选择框"), "{message}");
+        assert!(message.contains("boom"), "{message}");
     }
 }

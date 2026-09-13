@@ -722,6 +722,32 @@ mod tests {
         // 框开着的时候不给再开一个(点两下 = 弹两个对话框)。
         app.update(Message::PickPath(PathTarget::GameDir));
         assert!(app.picking && !app.can_browse());
+
+        // 用户点了取消:不是失败,更不许把按钮灰掉。⚠ 真机上踩过 —— 点一次叉号,
+        // 「浏览…」就永久灰了,因为这条回包当时被写成了"这台机器没有对话框"。
+        app.update(Message::PathPicked(PathTarget::GameDir, Ok(None)));
+        assert!(app.can_browse(), "取消之后还得能再点");
+        assert!(app.error.is_none(), "取消不是错误:{:?}", app.error);
+
+        // 真出错了也不灰:那是"这一次没成",不是"这台机器没有对话框"。
+        app.update(Message::PathPicked(
+            PathTarget::GameDir,
+            Err("DBus 断了".into()),
+        ));
+        assert!(app.can_browse(), "失败之后按钮也得留着");
+        assert!(
+            app.error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("DBus 断了"),
+            "{:?}",
+            app.error
+        );
+        assert!(
+            app.path_hint().is_empty(),
+            "这不代表这台机器没有对话框:{:?}",
+            app.path_hint()
+        );
     }
 
     /// 每次"请对话框出来"都要带上合适的标题与类别:目录 / 文件这两类认错了,

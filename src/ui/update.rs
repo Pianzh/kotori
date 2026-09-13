@@ -950,9 +950,13 @@ impl App {
                     // 用户按了取消:什么都不改(这不是失败)。
                     Ok(None) => Task::none(),
                     Err(e) => {
-                        // 顶部错误条(它不挑页面),并顺手把按钮灰掉 —— 打不开就别再让人点。
+                        // 这一次没成而已:顶部错误条说一句就够了。
+                        // ⚠ **不许**动 `self.picker` —— 它说的是"这台机器上有没有文件对话框",
+                        //    是开机探出来的结论。一次失败(何况用户取消)不代表它从此没有了:
+                        //    真机上点一次叉号就把「浏览…」永久灰掉了(用户 2026-09-13 报的),
+                        //    原因正是这里曾把它写成 `Some(Err(e))`。
+                        tracing::warn!("打开文件选择框失败：{e}");
                         self.error = Some(format!("打开文件选择框失败：{e}"));
-                        self.picker = Some(Err(e));
                         Task::none()
                     }
                     Ok(Some(path)) => self.apply_picked_path(target, &path),
