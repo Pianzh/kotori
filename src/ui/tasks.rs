@@ -23,6 +23,16 @@ pub(super) async fn connect_and_load() -> Result<Vec<UiGame>, String> {
     }
 }
 
+/// Look at the library **without** starting anything.
+///
+/// This is what the periodic refresh uses once the user has stopped the service
+/// by hand: a 刷新 must not quietly undo the thing they just asked for. (An
+/// explicit action that needs the daemon — adding a game, saving a profile —
+/// still boots it; that is the user asking, not the UI deciding.)
+pub(super) async fn load_without_booting() -> Result<Vec<UiGame>, String> {
+    load_games_from(&crate::config::socket_path()).await
+}
+
 pub(super) async fn load_games_from(socket: &Path) -> Result<Vec<UiGame>, String> {
     let value = crate::rpc::call(socket, "game.list", None).await?;
     parse_games(&value)
@@ -79,6 +89,27 @@ pub(super) async fn load_hotkeys() -> Result<HotkeyStatus, String> {
 pub(super) async fn load_wine_status() -> Result<WineStatus, String> {
     let value = crate::rpc::call(&crate::config::socket_path(), "wine.status", None).await?;
     Ok(parse_wine_status(&value))
+}
+
+/// 设置页的「启动服务」:把守护进程拉起来。`ensure_running` 是阻塞的(它会等
+/// socket 就绪),所以丢进 blocking 线程池,别把界面卡住。
+pub(super) async fn start_daemon() -> Result<String, String> {
+    let socket = crate::config::socket_path();
+    tokio::task::spawn_blocking(move || crate::daemon::ensure_running(&socket))
+        .await
+        .map_err(|e| format!("启动守护进程的任务失败: {e}"))?
+        .map_err(|e| e.to_string())?;
+    Ok("后台服务已启动".to_string())
+}
+
+/// 设置页的「停止服务」。
+///
+/// 走 `daemon.shutdown` 而不是发信号:这一条**故意不碰正在跑的游戏**(ADR-002 的
+/// 两个出口是分开的 —— 只有系统发的 SIGTERM 才会把游戏一并收尾)。所以玩家自己
+/// 点这个按钮时,那一局照常玩到退出。
+pub(super) async fn stop_daemon() -> Result<String, String> {
+    crate::rpc::call(&crate::config::socket_path(), "daemon.shutdown", None).await?;
+    Ok("后台服务已停止".to_string())
 }
 
 /// Read the cloud-sync status. Secrets are never returned by the daemon, so

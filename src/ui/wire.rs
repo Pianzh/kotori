@@ -166,6 +166,8 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_sync_delete_master_confirmed(|| dispatch(Message::SyncMasterDeleteConfirmed));
 
     // ── 设置 ──────────────────────────────────────────────────────────────
+    window.on_service_start(|| dispatch(Message::ServiceStart));
+    window.on_service_stop(|| dispatch(Message::ServiceStop));
     window.on_wine_prefix_changed(|text| dispatch(Message::WinePrefixChanged(text.to_string())));
     window.on_save_wine_prefix(|| dispatch(Message::SaveWinePrefix));
     window.on_clear_wine_prefix(|| dispatch(Message::ClearWinePrefix));

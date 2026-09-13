@@ -1,4 +1,4 @@
-// 全局设置:Wine 目录(prefix) + 全局快捷键状态。
+// 全局设置:后台服务(守护进程)+ Wine 目录(prefix) + 全局快捷键状态。
 //
 // ⚠ 快捷键这一组是**只读**的:daemon 现在只报「注册得怎么样」
 // (`daemon.status.hotkeys` 的 requested / ready / error / unbound / assign_hint),
@@ -16,6 +16,16 @@ import { HotkeyState } from "../types.slint";
 export component SettingsPage inherits ScrollView {
     in-out property <bool> revealed: false;
 
+    // ── 后台服务(守护进程) ──────────────────────────────────────────────
+    // 措辞由 Rust 拼(`render/settings.rs` 的 `service_state`):页面只管显示。
+    in property <string> service-status: "";
+    in property <int> service-state: 0;          // 0 检测中 / 1 运行中 / 2 未运行
+    in property <bool> service-running: false;
+    in property <bool> service-busy: false;
+    in property <string> service-message: "";
+    in property <bool> service-message-ok: true;
+    in property <string> service-hint: "";
+
     // ── Wine ──────────────────────────────────────────────────────────────
     in-out property <string> wine-prefix: "";
     in property <string> wine-msg: "";
@@ -31,6 +41,8 @@ export component SettingsPage inherits ScrollView {
     };
     in property <bool> hotkeys-loaded: false;
 
+    callback service-start();
+    callback service-stop();
     callback wine-prefix-changed(string);
     callback save-wine-prefix();
     callback clear-wine-prefix();
@@ -53,9 +65,75 @@ export component SettingsPage inherits ScrollView {
                 spacing: 4px;
                 Text { text: "设置"; font-size: 28px; font-weight: 600; color: Tokens.text; }
                 Text {
-                    text: "这台机器上的启动与快捷键设置。云存档在「云同步」那一页,单个游戏的缩放/存档在游戏库里点进去。";
+                    text: "这台机器上的后台服务、启动与快捷键设置。云存档在「云同步」那一页,单个游戏的缩放/存档在游戏库里点进去。";
                     font-size: 14px;
                     color: Tokens.text-3;
+                }
+            }
+        }
+
+        // ── 后台服务 ──────────────────────────────────────────────────────
+        RevealItem {
+            revealed: root.revealed;
+            step: 1;
+            bottom: 8px;
+            SectionTitle { text: "后台服务"; }
+        }
+        RevealItem {
+            revealed: root.revealed;
+            step: 2;
+            bottom: 24px;
+            Group {
+                CardRow {
+                    title: "守护进程";
+                    description: "游戏启动、缩放、存档同步都由它执行;这个界面只是它的客户端。";
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+                        Text {
+                            text: root.service-status;
+                            font-size: 13px;
+                            color: root.service-state == 1
+                                ? Tokens.ok
+                                : (root.service-state == 2 ? Tokens.text-3 : Tokens.text-3);
+                            vertical-alignment: center;
+                            min-width: 96px;
+                        }
+                        AccentButton {
+                            label: "启动服务";
+                            button-width: 92px;
+                            button-enabled: !root.service-running && !root.service-busy;
+                            clicked => { root.service-start(); }
+                        }
+                        StdButton {
+                            label: "停止服务";
+                            button-width: 92px;
+                            button-enabled: root.service-running && !root.service-busy;
+                            clicked => { root.service-stop(); }
+                        }
+                    }
+                }
+                if root.service-message != "" : VerticalLayout {
+                    Divider { }
+                    VerticalLayout {
+                        padding: 12px;
+                        Text {
+                            text: root.service-message;
+                            font-size: 12px;
+                            color: root.service-message-ok ? Tokens.ok : Tokens.danger;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                Divider { }
+                VerticalLayout {
+                    padding: 16px;
+                    Text {
+                        text: root.service-hint;
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
                 }
             }
         }
@@ -63,13 +141,13 @@ export component SettingsPage inherits ScrollView {
         // ── Wine ──────────────────────────────────────────────────────────
         RevealItem {
             revealed: root.revealed;
-            step: 1;
+            step: 3;
             bottom: 8px;
             SectionTitle { text: "Wine 目录(prefix)"; }
         }
         RevealItem {
             revealed: root.revealed;
-            step: 2;
+            step: 4;
             bottom: 24px;
             Group {
                 CardRow {
@@ -133,13 +211,13 @@ export component SettingsPage inherits ScrollView {
         // ── 快捷键 ────────────────────────────────────────────────────────
         RevealItem {
             revealed: root.revealed;
-            step: 3;
+            step: 5;
             bottom: 8px;
             SectionTitle { text: "全局快捷键"; }
         }
         RevealItem {
             revealed: root.revealed;
-            step: 4;
+            step: 6;
             bottom: 24px;
             Group {
                 VerticalLayout {

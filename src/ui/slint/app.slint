@@ -176,6 +176,14 @@ export component AppWindow inherits Window {
     callback sync-delete-master-confirmed();
 
     // ── 设置(全局) ───────────────────────────────────────────────────────
+    // 后台服务:守护进程的启动 / 停止(措辞与状态由 Rust 算,见 render/settings.rs)
+    in-out property <string> service-status: "";
+    in-out property <int> service-state: 0;          // 0 检测中 / 1 运行中 / 2 未运行
+    in-out property <bool> service-running: false;
+    in-out property <bool> service-busy: false;
+    in-out property <string> service-message: "";
+    in-out property <bool> service-message-ok: true;
+    in-out property <string> service-hint: "";
     in-out property <string> wine-prefix: "";
     in-out property <string> wine-message: "";
     in-out property <bool> wine-message-ok: true;
@@ -186,6 +194,8 @@ export component AppWindow inherits Window {
     in-out property <HotkeyState> hotkeys;
     in-out property <bool> hotkeys-loaded: false;
 
+    callback service-start();
+    callback service-stop();
     callback wine-prefix-changed(string);
     callback save-wine-prefix();
     callback clear-wine-prefix();
@@ -383,6 +393,13 @@ export component AppWindow inherits Window {
                         if root.tab == 3 : SettingsPage {
                             width: 100%;
                             height: 100%;
+                            service-status: root.service-status;
+                            service-state: root.service-state;
+                            service-running: root.service-running;
+                            service-busy: root.service-busy;
+                            service-message: root.service-message;
+                            service-message-ok: root.service-message-ok;
+                            service-hint: root.service-hint;
                             wine-prefix <=> root.wine-prefix;
                             wine-msg: root.wine-message;
                             wine-msg-ok: root.wine-message-ok;
@@ -392,6 +409,8 @@ export component AppWindow inherits Window {
                             wine-detected: root.wine-detected;
                             hotkeys: root.hotkeys;
                             hotkeys-loaded: root.hotkeys-loaded;
+                            service-start => { root.service-start(); }
+                            service-stop => { root.service-stop(); }
                             wine-prefix-changed(text) => { root.wine-prefix-changed(text); }
                             save-wine-prefix => { root.save-wine-prefix(); }
                             clear-wine-prefix => { root.clear-wine-prefix(); }

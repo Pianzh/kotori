@@ -31,6 +31,14 @@ pub struct App {
     pub(super) wine_prefix_dirty: bool,
     pub(super) wine_status: Option<WineStatus>,
     pub(super) wine_msg: Option<String>,
+    /// 设置页:后台服务(守护进程)的手动启动 / 停止。
+    ///
+    /// `daemon_paused` 是用户**亲手**停掉服务之后立的旗:自动重连(每 3 秒的轮询、
+    /// 刷新、失败退避重试)这时都不许把守护进程悄悄拉回来 —— 否则"停止"按下去三秒
+    /// 就自己复活了。它只在连上守护进程(用户点了启动、或从别处起了一个)时清掉。
+    pub(super) service_busy: bool,
+    pub(super) service_msg: Option<String>,
+    pub(super) daemon_paused: bool,
     /// 全局快捷键的注册情况(设置页);`None` = 还没问到。
     pub(super) hotkeys: Option<HotkeyStatus>,
     /// Automatic reconnect bookkeeping.
@@ -72,6 +80,9 @@ impl App {
                 wine_prefix_dirty: false,
                 wine_status: None,
                 wine_msg: None,
+                service_busy: false,
+                service_msg: None,
+                daemon_paused: false,
                 hotkeys: None,
                 retry_attempts: 0,
                 running: std::collections::BTreeMap::new(),
@@ -147,7 +158,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::test_support::{sync_payload, sync_status_fixture};
+    use crate::ui::test_support::{sync_payload, sync_status_fixture, ui_game};
 
     #[test]
     fn a_late_status_reply_never_eats_what_the_user_typed() {
@@ -214,6 +225,66 @@ mod tests {
         let _ = app.update(Message::SyncSettingsSaved(Err("boom".into())));
         app.sync_form.apply(&status, &sync_payload()["settings"]);
         assert_eq!(app.sync_form.bucket, "typo");
+    }
+
+    /// 用户自己按的「停止服务」必须真的停得住 —— 界面的自愈逻辑(轮询后的重连、
+    /// 失败退避重试)不能在三秒内把它又拉起来。
+    #[test]
+    fn stopping_the_service_by_hand_is_not_undone_by_the_ui() {
+        let (mut app, _task) = App::new();
+        app.daemon_connected = Some(true);
+
+        let _ = app.update(Message::ServiceStop);
+        assert!(app.daemon_paused && app.service_busy);
+        let _ = app.update(Message::ServiceStopped(Ok("后台服务已停止".into())));
+        assert_eq!(app.daemon_connected, Some(false));
+        assert!(!app.service_busy);
+        // 说清后果:正在玩的那一局不受影响。
+        assert!(
+            app.service_msg
+                .as_deref()
+                .unwrap_or_default()
+                .contains("不受影响"),
+            "{:?}",
+            app.service_msg
+        );
+
+        // 刷新与失败重试都不许把它拉回来。
+        let _ = app.update(Message::Refresh);
+        let _ = app.update(Message::GamesLoaded(Err("无法连接守护进程".into())));
+        assert!(app.daemon_paused);
+        assert_eq!(app.retry_attempts, 0, "停掉的服务不该进退避重试循环");
+
+        // 「启动服务」之后牌子摘掉,连接状态由回包摆正。
+        let _ = app.update(Message::ServiceStart);
+        assert!(app.service_busy);
+        let _ = app.update(Message::ServiceStarted(Ok("后台服务已启动".into())));
+        assert!(!app.daemon_paused);
+        let _ = app.update(Message::GamesLoaded(Ok(vec![ui_game()])));
+        assert_eq!(app.daemon_connected, Some(true));
+        assert_eq!(app.retry_attempts, 0);
+    }
+
+    /// 没停成 / 别处又起了一个:界面必须说实话,不能一边"已连接"一边"已停止"。
+    #[test]
+    fn a_service_that_is_alive_again_clears_the_stopped_flag() {
+        let (mut app, _task) = App::new();
+        let _ = app.update(Message::ServiceStop);
+        let _ = app.update(Message::ServiceStopped(Err("拒绝连接".into())));
+        assert!(!app.daemon_paused, "没停掉就别立那块牌子");
+        assert!(
+            app.service_msg
+                .as_deref()
+                .unwrap_or_default()
+                .contains("失败")
+        );
+
+        // 从命令行起的守护进程:会话轮询有回应 ⇒ 摘牌。
+        let _ = app.update(Message::ServiceStop);
+        assert!(app.daemon_paused);
+        let _ = app.update(Message::StatusLoaded(Ok(Default::default())));
+        assert!(!app.daemon_paused);
+        assert_eq!(app.daemon_connected, Some(true));
     }
 
     #[test]

@@ -1,10 +1,35 @@
-//! 设置页:Wine prefix 与全局快捷键状态。
+//! 设置页:后台服务(守护进程)的启停、Wine prefix 与全局快捷键状态。
 
 use super::*;
 
 pub(super) fn push_settings(ui: &mut Ui) {
     let app = &ui.app;
     let w = &ui.window;
+
+    let (status, state) = service_state(app);
+    push_str(w.get_service_status(), &status, |v| w.set_service_status(v));
+    push_int(w.get_service_state(), state, |v| w.set_service_state(v));
+    push_bool(
+        w.get_service_running(),
+        app.daemon_connected == Some(true),
+        |v| w.set_service_running(v),
+    );
+    push_bool(w.get_service_busy(), app.service_busy, |v| {
+        w.set_service_busy(v)
+    });
+    let message = app.service_msg.clone().unwrap_or_default();
+    let ok = !message.contains("失败");
+    push_str(w.get_service_message(), &message, |v| {
+        w.set_service_message(v)
+    });
+    push_bool(w.get_service_message_ok(), ok, |v| {
+        w.set_service_message_ok(v)
+    });
+    push_str(
+        w.get_service_hint(),
+        &service_hint(app.daemon_paused),
+        |v| w.set_service_hint(v),
+    );
 
     push_str(w.get_wine_prefix(), &app.wine_prefix_input, |v| {
         w.set_wine_prefix(v)
@@ -62,4 +87,58 @@ pub(super) fn push_settings(ui: &mut Ui) {
         },
         |v| w.set_hotkeys(v),
     );
+}
+
+/// 「守护进程」那一行的状态字与颜色码(0 检测中 / 1 运行中 / 2 未运行)。
+///
+/// "用户自己停掉的"和"没起来的"分开说:前者是他按的,后者可能只是还没探测完。
+fn service_state(app: &App) -> (String, i32) {
+    if app.service_busy {
+        return ("● 处理中…".to_string(), 0);
+    }
+    match app.daemon_connected {
+        Some(true) => ("● 运行中".to_string(), 1),
+        Some(false) if app.daemon_paused => ("● 已停止".to_string(), 2),
+        Some(false) => ("● 未运行".to_string(), 2),
+        None => ("● 检测中…".to_string(), 0),
+    }
+}
+
+/// 这一组下面的灰字说明。用户停过一次之后,那两句必须说清"现在这样会怎样"。
+fn service_hint(paused: bool) -> String {
+    let base = "启动服务 = 把守护进程拉起来(界面本身不会替它跑)。停止服务只停守护进程:\
+                正在玩的这一局不受影响,但它退出后不会再自动上传存档;下次打开界面时也会自动把它拉起来。";
+    if paused {
+        format!(
+            "{base}\n现在它是停着的状态,所以「刷新 / 重连」都不会把它拉起来 —— 要它回来就点「启动服务」。"
+        )
+    } else {
+        base.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_service_line_tells_stopped_by_hand_apart_from_not_running() {
+        let mut app = App::new().0;
+
+        assert_eq!(service_state(&app), ("● 检测中…".to_string(), 0));
+        app.daemon_connected = Some(true);
+        assert_eq!(service_state(&app).1, 1);
+
+        app.daemon_connected = Some(false);
+        assert_eq!(service_state(&app).0, "● 未运行");
+        app.daemon_paused = true;
+        assert_eq!(service_state(&app).0, "● 已停止");
+
+        app.service_busy = true;
+        assert_eq!(service_state(&app).1, 0);
+
+        // 停着的时候说明里要写"刷新也拉不起来",否则用户会去点刷新。
+        assert!(service_hint(true).contains("重连"));
+        assert!(!service_hint(false).contains("重连"));
+    }
 }

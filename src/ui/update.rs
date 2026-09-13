@@ -31,12 +31,19 @@ impl App {
             Message::Refresh => {
                 self.error = None;
                 self.loading = true;
-                Task::perform(async { connect_and_load().await }, Message::GamesLoaded)
+                // 后台服务是用户自己停的:刷新只看看它在不在,不许顺手把它拉起来。
+                if self.daemon_paused {
+                    Task::perform(async { load_without_booting().await }, Message::GamesLoaded)
+                } else {
+                    Task::perform(async { connect_and_load().await }, Message::GamesLoaded)
+                }
             }
             Message::GamesLoaded(Ok(games)) => {
                 self.games = games;
                 self.loading = false;
                 self.daemon_connected = Some(true);
+                // 连上了就是连上了 —— 无论它是我们拉起来的还是用户从别处起的。
+                self.daemon_paused = false;
                 self.error = None;
                 self.retry_attempts = 0;
                 Task::none()
@@ -45,6 +52,11 @@ impl App {
                 self.loading = false;
                 self.daemon_connected = Some(false);
                 self.error = Some(e);
+                // 用户亲手停掉的服务不该被退避重试一次次拉起来(那才叫"停不掉")。
+                if self.daemon_paused {
+                    self.retry_attempts = 0;
+                    return Task::none();
+                }
                 // Self-heal: keep retrying with backoff, so the UI recovers on
                 // its own once the daemon is back.
                 self.retry_attempts = self.retry_attempts.saturating_add(1);
@@ -258,6 +270,54 @@ impl App {
                 }
                 Task::none()
             }
+            // ── 后台服务(守护进程)的启停 ────────────────────────────────────
+            Message::ServiceStart => {
+                self.service_busy = true;
+                self.service_msg = None;
+                Task::perform(async { start_daemon().await }, Message::ServiceStarted)
+            }
+            Message::ServiceStarted(result) => {
+                self.service_busy = false;
+                match result {
+                    Ok(message) => {
+                        self.daemon_paused = false;
+                        self.service_msg = Some(message);
+                        // 起来了就把库重新读一遍(顺便把连接状态摆正)。
+                        self.retry_attempts = 0;
+                        Task::perform(async { connect_and_load().await }, Message::GamesLoaded)
+                    }
+                    Err(e) => {
+                        self.service_msg = Some(format!("启动失败: {e}"));
+                        Task::none()
+                    }
+                }
+            }
+            Message::ServiceStop => {
+                // 先立旗再发请求:回包还没回来时那次会话轮询就可能已经在路上了。
+                self.daemon_paused = true;
+                self.service_busy = true;
+                self.service_msg = None;
+                Task::perform(async { stop_daemon().await }, Message::ServiceStopped)
+            }
+            Message::ServiceStopped(result) => {
+                self.service_busy = false;
+                match result {
+                    Ok(message) => {
+                        self.daemon_connected = Some(false);
+                        // 会话列表随之作废:守护进程走了,这里再也问不到谁在跑。
+                        self.running.clear();
+                        self.service_msg = Some(format!(
+                            "{message}（正在玩的游戏不受影响,但它退出后不会再自动上传存档）"
+                        ));
+                    }
+                    Err(e) => {
+                        // 没停掉就别立那块牌子,否则界面在说一件没发生的事。
+                        self.daemon_paused = false;
+                        self.service_msg = Some(format!("停止失败: {e}"));
+                    }
+                }
+                Task::none()
+            }
             Message::WineStatusLoaded(result) => {
                 match result {
                     Ok(status) => {
@@ -378,6 +438,9 @@ impl App {
             Message::StatusLoaded(Ok(running)) => {
                 self.running = running;
                 self.daemon_connected = Some(true);
+                // 会话轮询有回应就说明它活着 —— 哪怕是别处重新起的。这时"已停止"
+                // 那块牌子必须摘掉,不然侧栏说"已连接"、设置页说过"已停止"。
+                self.daemon_paused = false;
                 Task::none()
             }
             Message::StatusLoaded(Err(e)) => {

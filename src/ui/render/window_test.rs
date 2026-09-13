@@ -231,10 +231,32 @@ fn every_page_renders_without_a_display() {
     });
     render(&mut ui);
 
-    // 设置:Wine 状态没到 / 到了 / 有回话,快捷键没问到 / 问到了(含"授权了但没绑键")。
+    // 设置:Wine 状态没到 / 到了 / 有回话,快捷键没问到 / 问到了(含"授权了但没绑键"),
+    // 后台服务的四种样子(检测中 / 运行中 / 用户停掉的 / 有回话)。
     show_tab(&mut ui, Tab::Settings);
     ui.app.sync_form.master_password.clear();
     render(&mut ui);
+    for (connected, paused) in [
+        (Some(true), false),
+        (Some(false), true),
+        (Some(false), false),
+    ] {
+        ui.app.daemon_connected = connected;
+        ui.app.daemon_paused = paused;
+        render(&mut ui);
+    }
+    ui.app.daemon_connected = Some(true);
+    ui.app.daemon_paused = false;
+    ui.app.service_msg = Some("后台服务已停止（正在玩的游戏不受影响）".into());
+    ui.app.service_busy = true;
+    render(&mut ui);
+    ui.app.service_msg = Some("启动失败: 守护进程未在 5 秒内就绪".into());
+    ui.app.service_busy = false;
+    render(&mut ui);
+    // 后台服务那一行的控件最宽(状态字 + 两个按钮),也量一次:整页横向溢出
+    // 就是从这里开始的(见 UI_GUIDE §7.14)。
+    fits(&ui, &["CardRow"]);
+    ui.app.service_msg = None;
     ui.app.wine_status = Some(WineStatus {
         configured: Some("/prefixes/games".into()),
         default_prefix: "/home/user/.wine".into(),
@@ -420,4 +442,11 @@ fn every_page_renders_without_a_display() {
     window.invoke_wine_prefix_changed("/prefixes/mine".into());
     assert_app(&|app| assert_eq!(app.wine_prefix_input, "/prefixes/mine"));
     assert_app(&|app| assert!(app.wine_prefix_dirty));
+
+    // 后台服务:停止会立刻立起"别自动拉回来"的旗(请求本身不会跑 —— 测试里的
+    // runtime 没人驱动,见 `Task`),启动则进入忙态。
+    window.invoke_service_stop();
+    assert_app(&|app| assert!(app.daemon_paused && app.service_busy));
+    window.invoke_service_start();
+    assert_app(&|app| assert!(app.service_busy));
 }
