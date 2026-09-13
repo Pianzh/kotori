@@ -10,8 +10,12 @@
 //! `register_font_from_path`/`_from_static` entry points (runtime registration
 //! now goes through the `unstable-fontique-010` feature), and it does per-glyph
 //! fallback anyway: a machine without YaHei still renders Chinese through
-//! whatever fontconfig offers. `assets/fonts/KotoriSans-Regular.ttf` is the
-//! older bundled fallback and is currently unused — see AGENTS.md P2-12.
+//! whatever fontconfig offers.
+//!
+//! The 17MB `KotoriSans-Regular.ttf` that used to be bundled for exactly this
+//! fallback was dropped from git history (nothing referenced it any more); a
+//! local copy sits in the ignored `.font-backup/`. Shipping it again means
+//! subsetting it *and* switching runtime registration on — see AGENTS.md P2-12.
 
 use super::*;
 
