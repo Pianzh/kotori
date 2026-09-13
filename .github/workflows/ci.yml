@@ -57,7 +57,13 @@ jobs:
 
   # ── aarch64:同一套测试,跑在真 ARM 上 ───────────────────────────────────
   # ⚠ 这一步只在**公开**仓库里免费(私有用 larger runner 才有 arm64)。
+  #
+  # ⚠ **只在手动触发或打 tag 时跑**(用户 2026-09-13:"arm 端不需要频繁构建"):
+  #   2026-09-13 已经验过它能在原生 aarch64 上装依赖、编译、跑完 235 条单测
+  #   (唯一失败是一条与本平台无关的断言,已修),所以没必要每次 push 都占一台 runner。
+  #   要跑:GitHub 上 Actions → CI → Run workflow,或者 `gh workflow run ci.yml`。
   test-arm:
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
