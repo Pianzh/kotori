@@ -10,6 +10,9 @@ Thumbs.db
 # Local agent working doc - deliberately untracked
 AGENTS.md
 
+# Project goals - same deal: kept on disk, deliberately untracked
+/GOALS.md
+
 # Local config / real data - NEVER commit
 config.toml
 *.local.toml
