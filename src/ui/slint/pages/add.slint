@@ -11,6 +11,8 @@ import { AccentButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 
 export component AddPage inherits ScrollView {
+    // 见 `games.slint` 里的长注释:fluent 默认关掉拖拽滚动,没有滚轮的机器要靠这一行。
+    mouse-drag-pan-enabled: true;
     in-out property <bool> revealed: false;
     in-out property <string> new-name: "";
     in-out property <string> new-game-dir: "";

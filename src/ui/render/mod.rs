@@ -29,6 +29,8 @@ mod sync;
 #[cfg(test)]
 mod hit_test;
 #[cfg(test)]
+mod scroll_test;
+#[cfg(test)]
 mod window_test;
 
 pub(super) fn render(ui: &mut Ui) {

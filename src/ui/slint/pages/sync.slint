@@ -14,6 +14,8 @@ import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { SyncCredentialsGroup } from "sync-credentials.slint";
 
 export component SyncPage inherits ScrollView {
+    // 见 `games.slint` 里的长注释:fluent 默认关掉拖拽滚动,没有滚轮的机器要靠这一行。
+    mouse-drag-pan-enabled: true;
     // ── 只读状态(daemon 报什么就显示什么) ────────────────────────────────
     in property <bool> loaded: false;
     in property <string> remote: "";

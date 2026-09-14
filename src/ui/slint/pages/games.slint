@@ -101,6 +101,10 @@ component GameRow inherits Rectangle {
 }
 
 export component GamesPage inherits ScrollView {
+    // ⚠ fluent 的 ScrollView 把内部 Flickable 的 `interactive` 默认设成 false:滚轮还能滚
+    // (它不看这个开关),**拖动/触摸一律不滚** —— 手机上没有滚轮就整个应用滚不动。
+    // 五个页面都要这一行,回归测试是 `render/scroll_test.rs`。
+    mouse-drag-pan-enabled: true;
     in property <[GameItem]> games;
     in property <string> subtitle;
     // 空列表 / 没有搜索结果时要说的话;空串表示不必说。

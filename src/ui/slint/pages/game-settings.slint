@@ -133,6 +133,8 @@ export component GameSettingsPage inherits Rectangle {
     Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
 
     ScrollView {
+        // 见 `games.slint` 里的长注释:fluent 默认关掉拖拽滚动,没有滚轮的机器要靠这一行。
+        mouse-drag-pan-enabled: true;
         VerticalLayout {
             padding-left: root.revealed ? 28px : 68px;
             animate padding-left { duration: 260ms; easing: ease-out; }
