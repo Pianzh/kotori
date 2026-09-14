@@ -15,12 +15,31 @@
 //! Niri and KDE are tried in that order because each probe fails fast when its
 //! compositor is absent: on KDE `niri msg` exits non-zero immediately, and on
 //! niri `kscreen-doctor` reports no outputs.
+//!
+//! ⚠ **Every probe is bounded in time** ([`PROBE_TIMEOUT`]). "Fails fast when
+//! its compositor is absent" is not the same as "always answers": these are
+//! clients of a compositor, and a compositor that accepts the connection but
+//! never answers leaves them running for good. That is not hypothetical — on
+//! the ARM target's bridged-Wayland session (`anland` v2) `kscreen-doctor`
+//! never exited, which hung `launch` forever and leaked one process per
+//! attempt (2026-09-14). The caller of this module is the launch path, so a
+//! probe without a timeout is a hang waiting to happen.
+
+use std::process::{Command, Output, Stdio};
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::Value;
 
 /// Environment variable overriding the detected output resolution (`WxH`).
 pub const OUTPUT_RESOLUTION_ENV: &str = "KOTORI_OUTPUT_RESOLUTION";
+
+/// How long one external compositor probe may take before we kill it.
+///
+/// The honest probes answer in tens of milliseconds; this only has to be long
+/// enough not to cut off a slow machine under load (an ARM container can be
+/// very slow) and short enough not to stall a launch.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Debug, Deserialize)]
 struct OutputMode {
@@ -71,19 +90,58 @@ pub fn primary_resolution_or(fallback: (u32, u32)) -> (u32, u32) {
 }
 
 fn niri_json(args: &[&str]) -> Option<Value> {
-    // `niri msg` fails fast when no compositor is reachable, so no timeout is
-    // needed here.
-    let output = std::process::Command::new("niri")
-        .arg("msg")
-        .arg("--json")
-        .args(args)
-        .output()
-        .ok()?;
+    let mut argv = vec!["msg", "--json"];
+    argv.extend_from_slice(args);
+    let output = probe_output("niri", &argv)?;
     if !output.status.success() {
         tracing::debug!("niri msg {:?} failed: {}", args, output.status);
         return None;
     }
     serde_json::from_slice(&output.stdout).ok()
+}
+
+/// Run one probe to completion, capturing its output, and kill it if it
+/// overstays [`PROBE_TIMEOUT`].
+///
+/// `None` means "no answer" — not on this machine, exited non-zero, printed
+/// garbage, or hung. Every caller treats those the same way (try the next
+/// probe, then fall back), which is the point: none of them may block a launch.
+fn probe_output(program: &str, args: &[&str]) -> Option<Output> {
+    probe_output_within(program, args, PROBE_TIMEOUT)
+}
+
+/// [`probe_output`] with an explicit deadline (tests use a short one).
+fn probe_output_within(program: &str, args: &[&str], timeout: Duration) -> Option<Output> {
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()?;
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            // Exited on its own: `wait_with_output` reaps it and drains both
+            // pipes (they are already closed, so this cannot block).
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) => {}
+            Err(err) => {
+                tracing::debug!("{program} 探测失败：{err}");
+                return None;
+            }
+        }
+        if Instant::now() >= deadline {
+            // Killing is not a courtesy here: a probe that never answers would
+            // otherwise sit in the process table forever, one per launch.
+            let _ = child.kill();
+            let _ = child.wait();
+            tracing::warn!("{program} 探测超过 {timeout:?} 没有返回，放弃（当作没有这个桌面）");
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 /// Parse `"2560x1440"` (also tolerates `2560X1440` and surrounding spaces).
@@ -134,10 +192,7 @@ fn largest_resolution_from_outputs_json(value: &Value) -> Option<(u32, u32)> {
 
 /// KDE: `kscreen-doctor -j` lists every configured output.
 fn kscreen_doctor_json() -> Option<Value> {
-    let output = std::process::Command::new("kscreen-doctor")
-        .arg("-j")
-        .output()
-        .ok()?;
+    let output = probe_output("kscreen-doctor", &["-j"])?;
     if !output.status.success() {
         tracing::debug!("kscreen-doctor -j failed: {}", output.status);
         return None;
@@ -245,6 +300,28 @@ fn resolution_from_kscreen_json(value: &Value) -> Option<(u32, u32)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // 这两条用 `/bin/sh`（POSIX 保证存在的绝对路径），不是 PATH 上的外部程序：
+    // CI 规则禁的是 rclone / secret-tool 这类"这台机器上可能没装"的工具。
+    #[test]
+    fn a_probe_that_never_answers_is_killed_and_read_as_no_answer() {
+        let started = Instant::now();
+        let out = probe_output_within("/bin/sh", &["-c", "sleep 60"], Duration::from_millis(200));
+        assert!(out.is_none(), "卡住的探针必须当成「没有答案」");
+        assert!(
+            started.elapsed() < Duration::from_secs(20),
+            "必须在超时后放弃，而不是等它自己结束（实耗 {:?}）",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_probe_that_answers_hands_back_its_output() {
+        let out = probe_output_within("/bin/sh", &["-c", "printf hi"], Duration::from_secs(5))
+            .expect("应当拿到输出");
+        assert!(out.status.success());
+        assert_eq!(out.stdout, b"hi");
+    }
 
     const FOCUSED_OUTPUT: &str = r#"{
         "name": "DP-3",
