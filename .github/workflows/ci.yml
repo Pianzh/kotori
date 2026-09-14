@@ -1,15 +1,18 @@
-# 构建与测试 —— 目标有两个:① 每次 push/PR 都跑一遍那 244 项测试;
-# ② **在真的 aarch64 机器上**把同样的东西跑一遍(用户 2026-09-13 说的"进入 arm 测试")。
-#
-# ⚠ 这份文件是照着本机验证过的命令写的,**但还没有在 GitHub 上跑过第一次**。
-#    第一次跑最可能卡住的地方是系统库那一行(见下面两个 apt 步骤):Slint 在 Linux 上
-#    要 xkbcommon / fontconfig / xcb,runner 镜像里不一定都带。真报缺库就往那行加。
+# 构建与测试 —— 目标有三个:
+#   ① 每次 push/PR 都在 x86_64 上跑一遍格式 / clippy / 全部测试;
+#   ② **在真的 aarch64 机器上**跑同一套测试(不是交叉编译);
+#   ③ 在同一个 aarch64 job 里**编出交付产物**(tar.zst)并当 artifact 传上来 ——
+#      ARM 设备的构建**一律在 CI 里做**,设备只负责跑(用户 2026-09-13)。
 #
 # 为什么不用交叉编译:Slint 官方文档给的路子是 `cross` + 自带系统库的容器,而
 # **GitHub 现在给公开仓库免费提供 arm64 原生 runner**(`ubuntu-24.04-arm`)——
 # 原生构建不用操心 sysroot/目标架构的 .so,而且能**真的把测试跑起来**,
-# 交叉编译到 aarch64 只能编译、不能验证。等真要出 ARM 发行包时再说打包。
+# 交叉编译到 aarch64 只能编译、不能验证。
 # https://github.blog/changelog/2025-08-07-arm64-hosted-runners-for-public-repositories-are-now-generally-available/
+#
+# ⚠ **产物只作为 artifact 上传,不打 Release**(用户 2026-09-13:"我们暂时不走 release,
+#   纯 actions 构建")。产物里带了 `ldd` 与 glibc 版本:设备是滚动更新的 Arch,
+#   而 runner 是 ubuntu-24.04(更新的系统装更旧的构建是安全方向,反过来才要命)。
 
 name: CI
 
@@ -68,26 +71,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # zstd 用来把产物压成 tar.zst(设备上解包快、体积小),strip 来自 binutils。
       - name: 系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev \
-            libfontconfig-dev libssl-dev
+            libfontconfig-dev libssl-dev zstd
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: 测试(原生 aarch64,不是交叉编译)
-        run: cargo test --all-targets
+      # ⚠ 测试跑在 **release** profile 上:这样"测过的那份"就是"要发的那份",
+      # 而且下面的 release 构建已经热乎(debug + release 各编一遍依赖是双倍等待;
+      # 用户 2026-09-13:"先在 action 编译,节省中间时间")。
+      - name: 测试(原生 aarch64,release profile,不是交叉编译)
+        run: cargo test --release --locked --all-targets
 
-      # 交付物:先在 CI 里证明它能构建出来。ARM64 是主交付目标(见 AGENTS.md §2.2),
-      # 但真机那一步(游戏真的在 ARM 上跑起来)只有用户自己有机器时才算验完。
+      # 交付物:ARM64 是主交付目标(见 AGENTS.md §2.2)。真机那一步(游戏真的在 ARM 上
+      # 跑起来)只有设备在手时才算验完 —— 这里只负责"编得出来、测过得去、装得下去"。
       - name: 构建 release
-        run: cargo build --release
+        run: cargo build --release --locked
 
-      - name: 记下产物
+      - name: 打包 ARM64 产物
         run: |
-          file target/release/kotori
-          ls -lh target/release/kotori
+          set -euo pipefail
+          name="kotori-aarch64-$(git rev-parse --short HEAD)"
+          mkdir -p "dist/$name"
+          strip target/release/kotori -o "dist/$name/kotori"
+          install -m 644 assets/io.github.kotori.desktop "dist/$name/"
+          install -m 644 LICENSE "dist/$name/"
+          # 设备上"跑不起来"的第一个问题永远是依赖和 glibc,所以让产物自己带着答案。
+          {
+            echo "commit: $(git rev-parse HEAD)"
+            echo "built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)  (ubuntu-24.04-arm runner)"
+            echo "rustc:  $(rustc --version)"
+            echo "glibc:  $(ldd --version | head -1)"
+            echo
+            echo "== file dist/$name/kotori =="
+            file "dist/$name/kotori"
+            echo
+            echo "== ldd target/release/kotori =="
+            ldd target/release/kotori
+          } > "dist/$name/BUILD-INFO.txt"
+          tar -C dist -I 'zstd -19 -T0' -cf "dist/$name.tar.zst" "$name"
+          ls -lh "dist/$name.tar.zst"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kotori-aarch64
+          path: dist/*.tar.zst
+          if-no-files-found: error
+          retention-days: 30
