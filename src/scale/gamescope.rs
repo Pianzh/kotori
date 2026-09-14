@@ -520,6 +520,13 @@ impl ScaleEngine for GamescopeScaleEngine {
                     .filter(|name| !name.trim().is_empty())
             });
 
+        // 把这个 prefix 记进数据目录:万一这一局之后我们没机会收尾(daemon 被 SIGKILL、
+        // 或者被另一个实例顶掉),下一个 daemon 至少能在关机时把它关干净
+        // (见 `wine_prefixes`)。收尾那条路照旧走 `close_wine`。
+        if let Some(prefix) = spec.wine_prefix {
+            crate::wine_prefixes::record(prefix);
+        }
+
         let session = ScaleSession {
             session_id: uuid::Uuid::new_v4().to_string(),
             game_id: Some(spec.game_id.to_string()),

@@ -101,10 +101,18 @@ const WINESERVER_KILL_TIMEOUT: Duration = Duration::from_secs(2);
 /// Failures are logged and swallowed: a teardown that can fail is a teardown that
 /// leaves behind the mess it was called to remove.
 pub async fn close_prefix(prefix: &Path) {
-    let binary = std::env::var_os(WINESERVER_ENV)
+    close_prefix_with(&wineserver_binary(), prefix).await;
+}
+
+/// The `wineserver` kotori is going to run.
+///
+/// `KOTORI_WINESERVER` names it explicitly (tests point it at a fake), which is also
+/// how the shutdown sweep in [`crate::wine_prefixes`] gets the same binary without
+/// repeating the lookup.
+pub fn wineserver_binary() -> PathBuf {
+    std::env::var_os(WINESERVER_ENV)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("wineserver"));
-    close_prefix_with(&binary, prefix).await;
+        .unwrap_or_else(|| PathBuf::from("wineserver"))
 }
 
 /// [`close_prefix`] with the binary named explicitly.

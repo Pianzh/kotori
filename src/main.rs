@@ -14,6 +14,7 @@ mod sync;
 mod ui;
 mod util;
 mod wine;
+mod wine_prefixes;
 
 use clap::Parser;
 use tracing_subscriber::{EnvFilter, fmt};

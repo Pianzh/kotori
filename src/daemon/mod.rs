@@ -164,6 +164,12 @@ impl Daemon {
 
         if signalled {
             self.close_all_sessions().await;
+
+            // 会话之外还可能有没人认领的残留:上一次 daemon 被 SIGKILL 掉的那一局,
+            // wine 的 `winedevice.exe` 会一直待在那儿 —— 它无视 SIGTERM、又不在任何
+            // 我们能杀的进程组或进程树里,只有 `wineserver -k` 收得掉它。它是怎么变成
+            // 90 秒关机的,见 `wine_prefixes` 的开头。
+            crate::wine_prefixes::close_all().await;
         }
 
         drop(listener);
