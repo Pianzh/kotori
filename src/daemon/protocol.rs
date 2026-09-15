@@ -55,7 +55,12 @@ pub(super) fn param_str<'a>(
 
 /// Fields a client may patch on an existing game. Absent keys are left alone;
 /// `null` clears an optional field.
+///
+/// ⚠ `deny_unknown_fields` 是**故意**的:没有它的时候,调用方多包一层(或者把键名
+/// 拼错一个字母)会被静默丢掉,却仍然拿到 `success: true` —— 调用方以为改了配置,
+/// 其实一个字节都没动(真踩过)。现在这种包法直接报"参数无效"。
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct GamePatch {
     pub(super) name: Option<String>,
     pub(super) game_dir: Option<PathBuf>,
@@ -99,5 +104,35 @@ pub mod rpc {
         pub method: String,
         #[serde(default)]
         pub params: Option<serde_json::Map<String, Value>>,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `game.update` 的字段是**平铺**在 `params` 里的(不是嵌在 `patch` 下)。
+    /// 所以最容易犯的错是"多包一层",它从前会被静默忽略 —— 这里把它钉住。
+    #[test]
+    fn a_patch_key_the_daemon_does_not_know_is_rejected() {
+        let known = json!({ "name": "示例游戏", "watch_only": true });
+        assert!(serde_json::from_value::<GamePatch>(known).is_ok());
+
+        let nested = json!({ "patch": { "name": "示例游戏" } });
+        let error = serde_json::from_value::<GamePatch>(nested).unwrap_err();
+        assert!(error.to_string().contains("patch"), "{error}");
+
+        let typo = json!({ "profil": {} });
+        let error = serde_json::from_value::<GamePatch>(typo).unwrap_err();
+        assert!(error.to_string().contains("profil"), "{error}");
+    }
+
+    /// 「键不在 = 不动这个字段」这条语义不能被误伤。
+    #[test]
+    fn an_absent_key_leaves_its_field_alone() {
+        let patch: GamePatch = serde_json::from_value(json!({ "watch_only": true })).unwrap();
+        assert_eq!(patch.watch_only, Some(true));
+        assert!(patch.name.is_none());
+        assert!(patch.profile.is_none());
     }
 }
