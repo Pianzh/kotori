@@ -1,0 +1,258 @@
+//! 云同步的状态:设置页要显示的那一份(`SyncStatus`)、凭据三级存储
+//! (`CredentialStore`)、以及可编辑的一半(`SyncForm`)。
+//!
+//! 措辞在这里定(三级存储各自怎么说、凭据到底存到哪一级),页面只显示 —— 所以它
+//! 和 `parse::sync` 里的 `credentials_label` 是一对,而不是和游戏状态住一起。
+
+use crate::ui::*;
+
+/// One game's sync situation, as reported by `sync.status`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncGameRow {
+    pub id: String,
+    pub name: String,
+    pub locations: u64,
+    /// Set when a save location cannot be resolved right now (unplugged disk,
+    /// removed prefix) — better to say so than to fail at sync time.
+    pub problem: Option<String>,
+    /// Human-readable "when and how it went" for the last sync.
+    pub last: Option<String>,
+}
+
+impl SyncGameRow {
+    /// One line describing the last sync of this game.
+    pub(in crate::ui) fn last_label(&self) -> String {
+        match &self.last {
+            Some(last) => last.clone(),
+            None => "还没同步过".to_string(),
+        }
+    }
+}
+
+/// Cloud-sync state for the settings page. Never carries a secret *value*.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SyncStatus {
+    /// The non-secret settings, as stored (`[sync]` in the config).
+    pub settings: Value,
+    pub remote: String,
+    pub rclone: Option<String>,
+    pub keyring: String,
+    pub ephemeral: bool,
+    /// `system` | `encrypted-file` | `session-only`.
+    pub store_kind: String,
+    /// Only meaningful for `encrypted-file`.
+    pub store_locked: bool,
+    /// `keyring.store.path` —— 明文/加密两种文件模式下就是那个文件的路径
+    /// (系统密钥环与内存那一级没有路径,是空串)。
+    pub store_path: String,
+    /// 主密码凭据文件的路径。三种存储下 daemon 都会报它(`keyring.secrets_file`),
+    /// 而 `store_path` 只在文件模式里才有 —— 所以"凭据会存到哪"一律用它。
+    pub master_file: String,
+    pub min_master_password: usize,
+    pub secrets: Vec<String>,
+    pub ready: bool,
+    pub problem: Option<String>,
+    pub password_hint: String,
+    pub games: Vec<SyncGameRow>,
+}
+
+impl SyncStatus {
+    /// Whether one of our credential slots is filled. `sync.status` reports
+    /// account names only — never a value.
+    pub(in crate::ui) fn has_secret(&self, account: &str) -> bool {
+        self.secrets.iter().any(|a| a == account)
+    }
+
+    /// 凭据现在存在哪一级(ADR-014)。
+    pub(in crate::ui) fn store(&self) -> CredentialStore {
+        CredentialStore::from_wire(&self.store_kind)
+    }
+}
+
+/// 凭据三级存储里**现在生效**的那一级。
+///
+/// 这是 UI 最容易说错的一件事:没有密钥环的机器上凭据只在内存里,说成"已存入系统
+/// 密钥环"就是在骗用户 —— 他会以为重启之后还在。所以措辞一律从这里取,别在文案里
+/// 写死某一级。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(in crate::ui) enum CredentialStore {
+    /// 系统密钥环(Secret Service;Windows 上是将来要接的凭据管理器)。
+    #[default]
+    System,
+    /// **默认落点**:明文凭据文件(权限 0600),见 `secrets/plain.rs`。
+    Plain,
+    /// 可选:主密码加密文件(Argon2id + ChaCha20-Poly1305,见 `secrets/encrypted.rs`)。
+    File,
+    /// 仅本次会话:本机没有可持久化的后端,守护进程一重启就没了。
+    Session,
+}
+
+impl CredentialStore {
+    /// `sync.status` 里的 `keyring.store.kind`。不认识的答复按最坏情况算:
+    /// 当作系统密钥环,不吓唬用户。
+    pub(in crate::ui) fn from_wire(kind: &str) -> Self {
+        match kind {
+            "plain-file" => Self::Plain,
+            "encrypted-file" => Self::File,
+            "session-only" => Self::Session,
+            _ => Self::System,
+        }
+    }
+
+    /// 页面用它挑要画哪一块(见 `sync.slint` 的 `store-kind`:
+    /// 0 密钥环 / 1 加密文件 / 2 内存 / 3 明文文件)。
+    pub(in crate::ui) fn index(self) -> i32 {
+        match self {
+            Self::System => 0,
+            Self::File => 1,
+            Self::Session => 2,
+            Self::Plain => 3,
+        }
+    }
+
+    /// 用户看到的这一级的名字,能直接接在"存入 / 删除"后面。
+    pub(in crate::ui) fn name(self) -> &'static str {
+        match self {
+            Self::System => "系统密钥环",
+            Self::Plain => "明文凭据文件",
+            Self::File => "主密码凭据文件",
+            Self::Session => "本次会话的内存",
+        }
+    }
+
+    /// 保存成功后的落点说明。`what` 是"凭据"或"同步密码"。
+    ///
+    /// 三级的说法必须分开写:"已存入系统密钥环、磁盘上没有明文"这套词只对第一级成立 ——
+    /// 文件那一级是加密落盘的,内存那一级则在守护进程重启后就没了。
+    pub(in crate::ui) fn saved_note(self, what: &str) -> String {
+        match self {
+            Self::System => format!("{what}已存入系统密钥环（磁盘上没有明文）"),
+            Self::Plain => {
+                format!(
+                    "{what}已保存到明文凭据文件（权限 0600，只有你能读；想更严可以设主密码加密）"
+                )
+            }
+            Self::File => format!("{what}已加密写入主密码凭据文件（只有主密码能打开它）"),
+            Self::Session => format!(
+                "{what}只在本次会话的内存里 —— 本机没有可用的密钥环，设一个主密码才能留住它"
+            ),
+        }
+    }
+
+    /// 只有内存可用时,保存被拒绝的理由。
+    ///
+    /// 内存那一级是**过渡态**(例如命令行"先存凭据、再封进文件"),不能当作落点:
+    /// 没有密钥环的机器(含尚未接凭据管理器的 Windows)必须先把主密码设起来,
+    /// 否则用户以为存好了,重启后凭据就没了。
+    pub(in crate::ui) fn needs_master_password() -> &'static str {
+        "本机既没有系统密钥环、凭据文件也写不下去（查一下配置目录的写权限）。\
+         在那之前凭据只会留在内存里，守护进程一重启就没了"
+    }
+}
+
+/// The editable half of the sync settings.
+#[derive(Debug, Clone, Default)]
+pub(in crate::ui) struct SyncForm {
+    pub(in crate::ui) loaded: bool,
+    /// Set as soon as the user edits a *settings* field. `sync.status` replies
+    /// can land seconds after the request (the daemon probes the keyring on the
+    /// way), so a reply that was already in flight must never overwrite what
+    /// the user is in the middle of typing. Cleared once a save succeeds.
+    pub(in crate::ui) settings_dirty: bool,
+    pub(in crate::ui) enabled: bool,
+    pub(in crate::ui) endpoint: String,
+    pub(in crate::ui) bucket: String,
+    pub(in crate::ui) prefix: String,
+    pub(in crate::ui) keep_versions: String,
+    pub(in crate::ui) encryption: bool,
+    pub(in crate::ui) key_id: String,
+    pub(in crate::ui) app_key: String,
+    pub(in crate::ui) password: String,
+    pub(in crate::ui) password_again: String,
+    /// Master password for the credential file (unlock, or set one up).
+    pub(in crate::ui) master_password: String,
+    /// An encryption change needs one more click: it decides whether existing
+    /// data in the bucket can still be read.
+    pub(in crate::ui) confirm_encryption: Option<bool>,
+    /// 删除主密码凭据文件前的二次确认(里面的凭据会一起消失)。
+    pub(in crate::ui) confirm_master_delete: bool,
+    pub(in crate::ui) msg: Option<String>,
+    pub(in crate::ui) busy: bool,
+}
+
+impl SyncForm {
+    /// Fill the form from what the daemon reports. Secrets are never echoed, so
+    /// their inputs are left alone here: they are only cleared when a save
+    /// actually consumed them (`SyncCredentialsSaved` / `SyncPasswordSaved`).
+    ///
+    /// Everything is skipped while `settings_dirty` is set — see the field.
+    pub(in crate::ui) fn apply(&mut self, status: &SyncStatus, settings: &Value) {
+        self.loaded = true;
+        self.confirm_encryption = None;
+        self.confirm_master_delete = false;
+        let _ = status;
+        if self.settings_dirty {
+            return;
+        }
+        self.enabled = settings["enabled"].as_bool().unwrap_or(false);
+        self.endpoint = str_field(settings, "endpoint");
+        self.bucket = str_field(settings, "bucket");
+        self.prefix = str_field(settings, "prefix");
+        self.keep_versions = settings["keep_versions"].as_u64().unwrap_or(0).to_string();
+        self.encryption = settings["encryption"].as_bool().unwrap_or(false);
+    }
+
+    /// The patch sent to `sync.set_settings`.
+    pub(in crate::ui) fn patch(&self, force: bool) -> Value {
+        let keep = self.keep_versions.trim().parse::<u32>().unwrap_or(0);
+        serde_json::json!({
+            "enabled": self.enabled,
+            "endpoint": self.endpoint.trim(),
+            "bucket": self.bucket.trim(),
+            "prefix": self.prefix.trim(),
+            "keep_versions": keep,
+            "encryption": self.encryption,
+            "force": force,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::test_support::{sync_payload, sync_status_fixture};
+
+    #[test]
+    fn the_sync_form_seeds_from_settings_and_never_from_secrets() {
+        let payload = sync_payload();
+        let mut form = SyncForm::default();
+        form.apply(&sync_status_fixture(), &payload["settings"]);
+
+        assert!(form.loaded);
+        assert!(form.enabled);
+        assert_eq!(form.endpoint, "");
+        assert_eq!(form.bucket, "kotori-saves");
+        assert_eq!(form.prefix, "kotori");
+        assert_eq!(form.keep_versions, "0");
+        assert!(!form.encryption);
+
+        // The daemon reports *which* secrets exist, never their values, so the
+        // inputs must start empty even though three are stored.
+        assert!(form.key_id.is_empty());
+        assert!(form.app_key.is_empty());
+        assert!(form.password.is_empty());
+        assert!(form.password_again.is_empty());
+
+        // The patch mirrors the form, trimmed.
+        form.bucket = "  spaced  ".into();
+        form.confirm_encryption = Some(true);
+        let patch = form.patch(true);
+        assert_eq!(patch["bucket"], "spaced");
+        assert_eq!(patch["force"], true);
+        assert_eq!(patch["enabled"], true);
+        assert!(
+            patch.get("key_id").is_none() && patch.get("password").is_none(),
+            "settings patches must carry no secrets: {patch}"
+        );
+    }
+}
