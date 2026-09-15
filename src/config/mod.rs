@@ -450,7 +450,30 @@ output_height = 1440
         // Profiles written before scaling ratios existed: no ratio, and the
         // window is free to drive the output size.
         assert_eq!(game.scale_profile.scale_ratio, None);
-        assert!(game.scale_profile.follow_window);
         assert_eq!(config.daemon.socket_path, default_socket_path());
+    }
+
+    #[test]
+    fn a_config_that_still_carries_follow_window_still_loads() {
+        // `follow_window` was never read by anything (see HANDOVER: the switch
+        // was empty), so the field is gone as of 2026-09-15. Every config on
+        // disk still has the key — loading must keep working, and the next
+        // write must stop emitting it.
+        let toml = r#"
+[games.old]
+name = "old"
+exe_path = "/games/old/game.exe"
+created_at = "2026-01-01T00:00:00Z"
+
+[games.old.scale_profile]
+name = "默认"
+algorithm = "Integer"
+follow_window = false
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.games.contains_key("old"));
+
+        let written = toml::to_string(&config).unwrap();
+        assert!(!written.contains("follow_window"), "{written}");
     }
 }

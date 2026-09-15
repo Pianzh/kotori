@@ -51,9 +51,6 @@ pub struct UiGame {
     /// Scaling ratio as stored; `None` means the window opens at the screen's size
     /// (see `ScaleProfile::output_size_for`).
     pub scale_ratio: Option<f32>,
-    /// Whether the window size may drive the output size (i.e. dragging the
-    /// window rescales live).
-    pub follow_window: bool,
     pub fullscreen: bool,
     pub framerate: Option<u32>,
 }
@@ -82,7 +79,6 @@ pub(in crate::ui) struct Draft {
     /// ratio". The widget for it arrives with the scale-section rework; until
     /// then this only carries the stored value through an open + save.
     pub(in crate::ui) scale_ratio: String,
-    pub(in crate::ui) follow_window: bool,
     pub(in crate::ui) fullscreen: bool,
     pub(in crate::ui) framerate: String,
 }
@@ -115,7 +111,6 @@ impl Draft {
             output_w: game.output.0.map(|v| v.to_string()).unwrap_or_default(),
             output_h: game.output.1.map(|v| v.to_string()).unwrap_or_default(),
             scale_ratio: game.scale_ratio.map(|r| r.to_string()).unwrap_or_default(),
-            follow_window: game.follow_window,
             fullscreen: game.fullscreen,
             framerate: game.framerate.map(|f| f.to_string()).unwrap_or_default(),
         }

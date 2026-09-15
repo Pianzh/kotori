@@ -36,9 +36,8 @@ pub fn sharpness_to_gamescope(sharpness: u32) -> u32 {
 /// otherwise `screen` — and "the screen" is exactly what "start maximised" means,
 /// because these are only the *initial* size. gamescope treats them as a preferred
 /// size only: a nested window stays freely resizable and gamescope follows every
-/// resize by adopting the new content size as its output size, so
-/// `follow_window = false` cannot be expressed here — it needs the compositor (see
-/// `config::ScaleProfile`).
+/// resize by adopting the new content size as its output size, so there is no
+/// flag here (and none to invent) that would pin the window's size.
 ///
 /// `screen` is passed in rather than probed here, so this stays a pure function of
 /// its arguments and no test depends on the machine it runs on.
@@ -205,19 +204,6 @@ mod tests {
         assert_eq!(p.scale_ratio, None);
         let args = build_gamescope_args(&p, SCREEN, &game_cmd());
         assert_eq!(&args[..4], ["-W", "1600", "-H", "900"]);
-    }
-
-    #[test]
-    fn follow_window_is_not_a_command_line_flag() {
-        // gamescope always follows the window; the switch is enforced by the
-        // compositor, so it must never leak into the argument list.
-        let mut pinned = profile(ScaleAlgorithm::Integer);
-        pinned.follow_window = false;
-        let floating = profile(ScaleAlgorithm::Integer);
-        assert_eq!(
-            build_gamescope_args(&pinned, SCREEN, &game_cmd()),
-            build_gamescope_args(&floating, SCREEN, &game_cmd())
-        );
     }
 
     #[test]

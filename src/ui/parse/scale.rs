@@ -28,7 +28,6 @@ pub(in crate::ui) fn profile_from_draft(draft: &Draft) -> Result<ScaleProfile, S
         output_width: parse_optional_u32(&draft.output_w, "输出分辨率宽")?,
         output_height: parse_optional_u32(&draft.output_h, "输出分辨率高")?,
         scale_ratio,
-        follow_window: draft.follow_window,
         framerate_limit: if draft.framerate.trim().is_empty() {
             None
         } else {
@@ -92,7 +91,6 @@ mod tests {
             output_w: "2560".into(),
             output_h: "1440".into(),
             scale_ratio: String::new(),
-            follow_window: true,
             fullscreen: true,
             framerate: String::new(),
         }
@@ -119,16 +117,13 @@ mod tests {
         let game = ui_game();
         let untouched = profile_from_draft(&Draft::from_game(&game)).unwrap();
         assert_eq!(untouched.scale_ratio, None);
-        assert!(untouched.follow_window);
 
-        let mut pinned = game.clone();
-        pinned.scale_ratio = Some(1.5);
-        pinned.follow_window = false;
-        let profile = profile_from_draft(&Draft::from_game(&pinned)).unwrap();
+        let mut scaled = game.clone();
+        scaled.scale_ratio = Some(1.5);
+        let profile = profile_from_draft(&Draft::from_game(&scaled)).unwrap();
         assert_eq!(profile.scale_ratio, Some(1.5));
-        assert!(!profile.follow_window);
 
-        let mut half_typed = Draft::from_game(&pinned);
+        let mut half_typed = Draft::from_game(&scaled);
         half_typed.scale_ratio = "1.5x".into();
         let err = profile_from_draft(&half_typed).unwrap_err();
         assert!(err.contains("缩放比例"), "{err}");

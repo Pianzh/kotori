@@ -148,7 +148,6 @@ mod test_support {
             internal: (Some(1280), Some(720)),
             output: (Some(2560), Some(1440)),
             scale_ratio: None,
-            follow_window: true,
             fullscreen: true,
             framerate: None,
         }

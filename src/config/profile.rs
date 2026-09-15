@@ -66,13 +66,6 @@ pub struct ScaleProfile {
     /// existed, and for the UI, which still edits them.
     #[serde(default)]
     pub scale_ratio: Option<f32>,
-    /// `true` (default) means the window decides the output size, so dragging
-    /// the window rescales live — which is what gamescope does anyway.
-    /// `false` means the output is pinned to `internal × scale_ratio` and the
-    /// backend has to stop the window from being resized: gamescope itself
-    /// never sets a min/max content size, so this is compositor work.
-    #[serde(default = "default_true")]
-    pub follow_window: bool,
     #[serde(default)]
     pub framerate_limit: Option<u32>,
     /// `-f`: pin the nested window to the whole output.
@@ -86,10 +79,6 @@ pub struct ScaleProfile {
     /// `-W/-H` already give, with `-f` nowhere in sight.
     #[serde(default)]
     pub force_fullscreen: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 /// Scaling algorithm bound to a game.
@@ -166,7 +155,6 @@ impl ScaleProfile {
             output_width: None,
             output_height: None,
             scale_ratio: None,
-            follow_window: true,
             framerate_limit: None,
             force_fullscreen: false,
         }

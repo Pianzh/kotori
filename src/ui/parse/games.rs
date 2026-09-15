@@ -83,10 +83,6 @@ pub(in crate::ui) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     .and_then(|s| s.get("scale_ratio"))
                     .and_then(|v| v.as_f64())
                     .map(|r| r as f32),
-                follow_window: scale
-                    .and_then(|s| s.get("follow_window"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true),
                 fullscreen: scale
                     .and_then(|s| s.get("force_fullscreen"))
                     .and_then(|v| v.as_bool())
