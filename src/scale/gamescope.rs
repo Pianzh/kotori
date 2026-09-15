@@ -330,7 +330,7 @@ impl GamescopeScaleEngine {
 /// ⚠ 窗口落到**另一块**屏时,启动之后**还没有**按那块屏再修一次:`desktop::kde` 的
 /// `resize_window` 只在运行时动作里被调用,启动路径没接线(2026-09-13 核对过)。
 /// 所以这句话从前写着"之后可以按实际输出修正"是不准确的 —— 要修得先让 KWin 脚本
-/// 把结果回传(见 AGENTS §5 里 `resize_window` 那条)。
+/// 把结果回传(见 HANDOVER §5 里 `resize_window` 那条)。
 fn screen_size() -> (u32, u32) {
     crate::display::primary_resolution_or((FALLBACK_OUTPUT_WIDTH, FALLBACK_OUTPUT_HEIGHT))
 }

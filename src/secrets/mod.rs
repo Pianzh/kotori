@@ -20,7 +20,7 @@
 //!   * Windows 上 `%APPDATA%` 的用户 ACL 就是明文文件的 0600,将来接上凭据管理器后更强。
 //!
 //! 只有 Linux 的密钥环后端(Secret Service,通过 `secret-tool`)实现了;Windows 的后端
-//! 属于 Windows 移植的一部分(AGENTS.md),在那之前明文文件就是 Windows 的落点。
+//! 属于 Windows 移植的一部分(HANDOVER.md),在那之前明文文件就是 Windows 的落点。
 
 /// The master-password file backend, public so callers can ask about its
 /// format version and password rules.
@@ -94,7 +94,7 @@ impl SecretKey {
 /// Kept in exactly one place: the first version of this message told everyone
 /// to start `kwalletd6` and add it to their niri config, which is nonsense on a
 /// GNOME box, inside a container, and on Windows. Platform advice belongs next
-/// to the other platform switches (see AGENTS.md ADR-011).
+/// to the other platform switches (see HANDOVER.md ADR-011).
 pub const fn keyring_hint() -> &'static str {
     if cfg!(target_os = "linux") {
         "桌面环境（KDE / GNOME 等）通常已经替你启动了密钥环；只有窗管、没有桌面的会话\

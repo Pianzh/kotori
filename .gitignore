@@ -11,8 +11,9 @@ Thumbs.db
 # 而"昨天还绿"的流水线今天会因为一个补丁版本变红。CI 上也一样要靠它才能复现。
 # (库才需要忽略它,好让下游自己去解依赖。)
 
-# 本地 / 面向 agent 的工作文档:刻意不入 git(见 AGENTS.md 开头)
+# 本地 / 面向 agent 的工作文档:刻意不入 git(见 HANDOVER.md 开头)
 AGENTS.md
+HANDOVER.md
 /GOALS.md
 UI_GUIDE.md
 SHUTDOWN_HANG_FIX.md

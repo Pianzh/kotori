@@ -26,7 +26,7 @@ env:
   # ⚠ 测试**不许依赖 PATH 上的外部程序**(rclone / gamescope / wine / KWin)—— 它们一律
   # 通过 `KOTORI_RCLONE` 这类变量指向测试自己写的假货。第一次跑 ARM 时被咬过一次:
   # 一条讲"凭据文件重启后还在"的测试顺手断言了 `sync.status.ready`,而 `ready` 还要求
-  # PATH 上有 rclone ⇒ 在 runner 上红得毫无道理(见 AGENTS.md §9)。
+  # PATH 上有 rclone ⇒ 在 runner 上红得毫无道理(见 HANDOVER.md §9)。
 
 jobs:
   # ── x86_64:格式、lint、全部测试 ─────────────────────────────────────────
@@ -89,7 +89,7 @@ jobs:
       - name: 测试(原生 aarch64,release profile,不是交叉编译)
         run: cargo test --release --locked --all-targets
 
-      # 交付物:ARM64 是主交付目标(见 AGENTS.md §2.2)。真机那一步(游戏真的在 ARM 上
+      # 交付物:ARM64 是主交付目标(见 HANDOVER.md §2.2)。真机那一步(游戏真的在 ARM 上
       # 跑起来)只有设备在手时才算验完 —— 这里只负责"编得出来、测过得去、装得下去"。
       - name: 构建 release
         run: cargo build --release --locked

@@ -1,6 +1,6 @@
 //! Cloud save sync (Phase 2).
 //!
-//! Design decisions (see AGENTS.md ADR-010):
+//! Design decisions (see HANDOVER.md ADR-010):
 //!   * **rclone** is the transfer engine, not kopia: encryption becomes an
 //!     optional `crypt` layer instead of a hard requirement, and without it the
 //!     saves live in the bucket as plain files that can be recovered with any

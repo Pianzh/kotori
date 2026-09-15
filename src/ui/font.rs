@@ -15,7 +15,7 @@
 //! The 17MB `KotoriSans-Regular.ttf` that used to be bundled for exactly this
 //! fallback was dropped from git history (nothing referenced it any more); a
 //! local copy sits in the ignored `.font-backup/`. Shipping it again means
-//! subsetting it *and* switching runtime registration on — see AGENTS.md P2-12.
+//! subsetting it *and* switching runtime registration on — see HANDOVER.md P2-12.
 
 use super::*;
 
