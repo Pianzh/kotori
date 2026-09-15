@@ -24,6 +24,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde::Serialize;
+use tokio::io::AsyncWriteExt;
 
 use super::{
     CURRENT_DIR, SaveTarget, SyncError, game_remote, is_snapshot, list_dirs_args, parse_dirs,
@@ -188,16 +189,26 @@ impl Runner {
         self.run_with(args, timeout, env).await
     }
 
-    /// Run rclone without any credentials — only `obscure` works this way.
-    async fn run_bare(&self, args: &[String], timeout: Duration) -> Result<String, SyncError> {
-        self.run_with(args, timeout, Vec::new()).await
-    }
-
+    /// `run_with_stdin`, with nothing on stdin.
     async fn run_with(
         &self,
         args: &[String],
         timeout: Duration,
         env: Vec<(String, String)>,
+    ) -> Result<String, SyncError> {
+        self.run_with_stdin(args, timeout, env, None).await
+    }
+
+    /// The one place an rclone child is spawned.
+    ///
+    /// `stdin` exists for `rclone obscure -` alone: it reads the password as
+    /// the first line of stdin, which is what keeps the password out of `ps`.
+    async fn run_with_stdin(
+        &self,
+        args: &[String],
+        timeout: Duration,
+        env: Vec<(String, String)>,
+        stdin: Option<&str>,
     ) -> Result<String, SyncError> {
         let mut command = tokio::process::Command::new(&self.rclone);
         command
@@ -205,13 +216,34 @@ impl Runner {
             .envs(env)
             // Even the "no credentials" path must ignore the user's config.
             .env("RCLONE_CONFIG", super::null_config_path())
-            .stdin(Stdio::null())
+            .stdin(if stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // A timed-out transfer must not keep running in the background.
             .kill_on_drop(true);
 
-        let output = tokio::time::timeout(timeout, command.output())
+        let mut child = command
+            .spawn()
+            .map_err(|e| SyncError::Command(format!("无法执行 {}: {e}", self.rclone.display())))?;
+
+        if let Some(line) = stdin
+            && let Some(mut pipe) = child.stdin.take()
+        {
+            // Hand over the line and close the pipe, so the child is not left
+            // waiting for more. A write error is not the verdict: an rclone too
+            // old to read stdin never touches the pipe, and the exit status and
+            // stderr are what actually say what happened (the same shape as the
+            // keyring's EPIPE — see `secrets`).
+            let _ = pipe.write_all(line.as_bytes()).await;
+            let _ = pipe.write_all(b"\n").await;
+            drop(pipe);
+        }
+
+        let output = tokio::time::timeout(timeout, child.wait_with_output())
             .await
             .map_err(|_| {
                 SyncError::Command(format!("rclone {} 超过 {:?} 未完成", args[0], timeout))
@@ -238,14 +270,17 @@ impl Runner {
     ///
     /// Deliberately delegated to rclone: a re-implementation that differs by one
     /// byte derives a different key, which would lock the user out of their own
-    /// backups (ADR-010). rclone only accepts this value as an argument, so the
-    /// password is briefly visible in `ps` during this one-off setup call —
-    /// accepted in exchange for never deriving the key ourselves. Sync runs
-    /// themselves read the obscured form from the keyring and put nothing on a
-    /// command line.
+    /// backups (ADR-010). The password goes in on **stdin** (`rclone obscure -`),
+    /// so no command line ever carries it; sync runs themselves read the
+    /// obscured form from the keyring and likewise put nothing on a command line.
     pub async fn obscure(&self, password: &str) -> Result<String, SyncError> {
         let output = self
-            .run_bare(&super::obscure_args(password), COMMAND_TIMEOUT)
+            .run_with_stdin(
+                &super::obscure_args(),
+                COMMAND_TIMEOUT,
+                Vec::new(),
+                Some(password),
+            )
             .await?;
         let obscured = output.trim().to_string();
         if obscured.is_empty() {
@@ -364,10 +399,16 @@ mod tests {
     async fn obscuring_is_left_to_rclone_and_stored_in_both_forms() {
         let fake = FakeRclone::new("obscure");
         let runner = fake.runner(true, 0);
-        assert_eq!(runner.obscure("hunter2").await.unwrap(), "obscured-blob");
+        // The fake echoes back what it read on stdin, so this value is proof
+        // that the password travelled there rather than on the command line.
+        assert_eq!(runner.obscure("hunter2").await.unwrap(), "obscured-hunter2");
 
         let calls = fake.calls();
-        assert!(calls[0].starts_with("obscure hunter2"), "{calls:?}");
+        assert!(calls[0].starts_with("obscure -"), "{calls:?}");
+        assert!(
+            !calls[0].contains("hunter2"),
+            "the password must not be on the command line: {calls:?}"
+        );
         // No credentials are needed to obscure, and the user's own rclone.conf
         // must not be consulted even here.
         assert!(!fake.env_log().contains("RCLONE_CONFIG_KOTORI_KEY="));

@@ -93,8 +93,12 @@ pub fn purge_args(remote: &str) -> Vec<String> {
 /// rclone to do the conversion instead of implementing it: getting that
 /// algorithm subtly wrong would derive a different key and leave the user
 /// unable to open their own backups. This runs once, when the password is set.
-pub fn obscure_args(password: &str) -> Vec<String> {
-    vec!["obscure".to_string(), password.to_string()]
+///
+/// ⚠ 密码**不进参数**:`-` 让 rclone 读 stdin 的第一行(`Runner::obscure` 负责喂),
+/// 所以 `ps` 里看不到它 —— 从前写的是 `rclone obscure <密码>`,那一次调用期间
+/// 同机器上任何人 `ps` 都能看见。
+pub fn obscure_args() -> Vec<String> {
+    vec!["obscure".to_string(), "-".to_string()]
 }
 
 #[cfg(test)]
@@ -126,12 +130,11 @@ mod tests {
     }
 
     #[test]
-    fn obscuring_is_left_to_rclone() {
+    fn obscuring_is_left_to_rclone_and_the_password_stays_out_of_argv() {
         // kotori must never implement this algorithm itself: a mismatch would
         // derive a different key and lock the user out of their own backups.
-        assert_eq!(
-            obscure_args("hunter2"),
-            vec!["obscure".to_string(), "hunter2".to_string()]
-        );
+        // `-` is rclone's "read the password from stdin"; `Runner::obscure`
+        // feeds it there, which is what keeps it out of `ps`.
+        assert_eq!(obscure_args(), vec!["obscure".to_string(), "-".to_string()]);
     }
 }

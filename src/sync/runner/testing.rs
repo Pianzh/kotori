@@ -43,7 +43,10 @@ if [ -f "$dir/fail" ] && printf '%s' "$*" | grep -qF "$(cat "$dir/fail")"; then
   exit 1
 fi
 if [ "$1" = "obscure" ]; then
-  echo "obscured-blob"
+  # `rclone obscure -` reads the password from the first line of stdin; echo it
+  # back "obscured" so a test can prove it travelled that way and not on argv.
+  IFS= read -r line || line=""
+  printf 'obscured-%s\n' "$line"
 fi
 if [ "$1" = "lsf" ]; then
   key=$(printf '%s' "$3" | tr '/:' '__')
