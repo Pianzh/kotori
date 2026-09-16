@@ -58,11 +58,16 @@ pub(super) struct Kopia {
 
 impl Kopia {
     pub(super) fn new(settings: SyncConfig, keyring: Keyring) -> Result<Self, SyncError> {
-        let binary = find_kopia().ok_or_else(|| SyncError::EngineMissing {
-            engine: "kopia",
-            detail: "PATH 里找不到 kopia（≥0.22）。Arch: sudo pacman -S archlinuxcn/kopia"
-                .to_string(),
-        })?;
+        // 设置页可以指点位置（目录或完整路径），`KOTORI_KOPIA` 与 PATH 是它后面的
+        // 两步 —— 顺序与理由见 [`crate::sync::executables`]。
+        let binary =
+            crate::sync::find_kopia(&settings.kopia_binary).ok_or_else(|| {
+                SyncError::EngineMissing {
+                    engine: "kopia",
+                    detail: "找不到 kopia（≥0.22）：在设置页填上它的位置，或者 Arch: sudo pacman -S archlinuxcn/kopia"
+                        .to_string(),
+                }
+            })?;
         let home = crate::config::data_dir().join("kopia");
         Ok(Self {
             binary,
@@ -385,17 +390,6 @@ impl Kopia {
             .await
             .map(|_| ())
     }
-}
-
-/// 找 kopia：先看 `KOTORI_KOPIA`，再找 PATH。
-pub fn find_kopia() -> Option<PathBuf> {
-    if let Some(explicit) = std::env::var_os("KOTORI_KOPIA") {
-        let path = PathBuf::from(explicit);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    crate::util::executor::find_binary("kopia")
 }
 
 /// `KOTORI_KOPIA_REPOSITORY`：本地目录仓库的注入点。

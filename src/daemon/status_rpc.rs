@@ -32,7 +32,9 @@ impl Daemon {
     /// 用户点开设置页时问一次 —— 探测会真去跑外部程序(`--version`、portal 代理、
     /// 密钥环问一次),不适合跟 `daemon.status` 一起每 3 秒轮询。
     pub(super) async fn rpc_env_report(&self) -> Result<Value, String> {
-        let report = crate::platform::report().await;
+        // 拿一份快照就够了：探测要跑好几秒，别一直占着配置的读锁。
+        let settings = self.config.read().await.sync.clone();
+        let report = crate::platform::report(&settings).await;
         serde_json::to_value(&report).map_err(|e| e.to_string())
     }
 

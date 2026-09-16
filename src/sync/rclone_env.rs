@@ -1,7 +1,8 @@
-//! rclone 的运行环境：凭据怎么交给子进程，以及 rclone 可执行文件在哪。
+//! rclone 的运行环境：凭据怎么交给子进程。
 //!
 //! 单独成文件，是因为这里是"秘密只走环境变量、绝不落盘"这条规则的唯一落点
-//! （ADR-010）：参数构造在 `rclone_args`，真正跑进程在 `runner`。
+//! （ADR-010）：参数构造在 `rclone_args`，真正跑进程在 `runner`，而**可执行文件
+//! 在哪**是另一件事（见 [`super::executables`]）。
 //!
 //! ⚠ 这里只有 B2 凭据。从前还叠过一层 `crypt` 远端（`kotorienc`）和一个同步
 //! 密码；现在 rclone 这条路**不提供任何加密**（一版一个 zip，zip 里就是明文），
@@ -37,17 +38,6 @@ pub fn rclone_env(settings: &SyncConfig, key_id: &str, app_key: &str) -> Vec<(St
     // the credentials, and a wrong region only produces signature errors.
 
     env
-}
-
-/// Is a usable rclone available?
-pub fn find_rclone() -> Option<std::path::PathBuf> {
-    if let Some(explicit) = std::env::var_os("KOTORI_RCLONE") {
-        let path = std::path::PathBuf::from(explicit);
-        if path.is_file() {
-            return Some(path);
-        }
-    }
-    crate::util::executor::find_binary("rclone")
 }
 
 #[cfg(test)]

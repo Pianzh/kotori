@@ -295,6 +295,18 @@ impl App {
                 "选 wine 目录(prefix)",
                 existing_dir(&self.wine_prefix_input).or_else(|| self.machine_prefix()),
             ),
+            // 聊天框问的是"程序在哪"，用户给的多半是**目录**（"kopia 进程所在目录"），
+            // 所以对话框也按目录来 —— 想指具体某个文件的话，输入框里手打就行。
+            PathTarget::RcloneBinary => Request::folder(
+                "选 rclone 所在目录（也可以直接在输入框里写完整路径）",
+                existing_dir(&self.sync_form.rclone_binary)
+                    .or_else(|| parent_dir(&self.sync_form.rclone_binary)),
+            ),
+            PathTarget::KopiaBinary => Request::folder(
+                "选 kopia 所在目录（也可以直接在输入框里写完整路径）",
+                existing_dir(&self.sync_form.kopia_binary)
+                    .or_else(|| parent_dir(&self.sync_form.kopia_binary)),
+            ),
         }
     }
 
@@ -334,6 +346,16 @@ impl App {
                 self.wine_prefix_input = text;
                 // 用户亲手选的路径不许被随后回来的 `wine.status` 盖掉。
                 self.wine_prefix_dirty = true;
+            }
+            // 两个"程序位置"是 `[sync]` 里的设置项，所以它们和 bucket 那些一样是**表单
+            // 的一部分**（随「保存设置」一起提交），只是另有一个浏览按钮帮着填。
+            PathTarget::RcloneBinary => {
+                self.sync_form.rclone_binary = text;
+                self.sync_form.settings_dirty = true;
+            }
+            PathTarget::KopiaBinary => {
+                self.sync_form.kopia_binary = text;
+                self.sync_form.settings_dirty = true;
             }
             PathTarget::GameDir | PathTarget::Exe => {
                 let Some(draft) = self.draft.as_mut() else {

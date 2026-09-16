@@ -311,3 +311,62 @@ fn setting_only_the_engine_leaves_the_other_settings_alone() {
     assert!(written.contains(r#"engine = "kopia""#), "{written}");
     assert!(written.contains(r#"bucket = "my-bucket""#), "{written}");
 }
+
+/// 设置页里指的**程序位置**要真的被用上：填一个目录，daemon 就在里面找那个程序，
+/// 并如实把它报进 `sync.status`。
+///
+/// 这一条是"不想配 PATH 的人"整件事的验收 —— 用户 2026-09-16 要的就是它：Windows 上
+/// 把 kopia 解压到某个目录、PATH 里什么都不加，也该能用。
+#[test]
+fn a_configured_program_directory_is_where_the_daemon_looks() {
+    let mut fixture = Fixture::new("bin-path");
+    fixture.enable_fake_sync(false);
+    fixture.start();
+
+    // "装在别处"的 kopia：一个目录，里面是程序本体。
+    let tools = fixture.dir.join("my-tools");
+    std::fs::create_dir_all(&tools).unwrap();
+    let kopia = tools.join("kopia");
+    std::fs::write(&kopia, b"#!/bin/sh\nexit 0\n").unwrap();
+    let asked = tools.to_str().unwrap().to_string();
+
+    let response = fixture.rpc(
+        "sync.set_settings",
+        json!({ "enabled": false, "kopia_binary": asked }),
+    );
+    assert_eq!(
+        response["result"]["settings"]["kopia_binary"], asked,
+        "{response}"
+    );
+
+    // daemon 报的"当前生效的 kopia"就是目录里那一个 —— 不是 PATH 里的，也不是没有。
+    let status = fixture.rpc("sync.status", json!({}));
+    assert_eq!(
+        status["result"]["kopia"],
+        kopia.to_str().unwrap(),
+        "{status}"
+    );
+
+    // 指了一个空目录则是"你填的位置不对"，而不是含糊的"PATH 里找不到"。
+    // ⚠ 先存一对假凭据：没有它 `validate_secrets` 会抢在"程序位置"前面报"缺凭据"，
+    // 而这一条测的恰恰是后者（problem 是一串 or_else，按顺序问）。
+    let response = fixture.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "test-key-id", "app_key": "test-app-key" }),
+    );
+    assert_eq!(response["result"]["stored"], true, "{response}");
+
+    let empty = fixture.dir.join("empty-tools");
+    std::fs::create_dir_all(&empty).unwrap();
+    fixture.rpc(
+        "sync.set_settings",
+        json!({ "enabled": true, "kopia_binary": empty.to_str().unwrap(), "engine": "kopia" }),
+    );
+    let status = fixture.rpc("sync.status", json!({}));
+    let problem = status["result"]["problem"].as_str().unwrap_or_default();
+    assert!(problem.contains("找不到 kopia"), "{status}");
+    assert!(
+        problem.contains(empty.to_str().unwrap()),
+        "要说清是哪个位置不对：{problem}"
+    );
+}

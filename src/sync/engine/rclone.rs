@@ -33,9 +33,12 @@ pub(super) struct RcloneZip {
 impl RcloneZip {
     /// 找到 rclone，找不到就当场说清楚。
     pub(super) fn new(settings: SyncConfig, keyring: Keyring) -> Result<Self, SyncError> {
-        let binary = crate::sync::find_rclone().ok_or_else(|| SyncError::EngineMissing {
-            engine: "rclone",
-            detail: "PATH 里找不到 rclone。Arch: sudo pacman -S rclone".to_string(),
+        let binary = crate::sync::find_rclone(&settings.rclone_binary).ok_or_else(|| {
+            SyncError::EngineMissing {
+                engine: "rclone",
+                detail: "找不到 rclone：在设置页填上它的位置，或者 Arch: sudo pacman -S rclone"
+                    .to_string(),
+            }
         })?;
         Ok(Self {
             binary,

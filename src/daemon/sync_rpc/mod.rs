@@ -166,7 +166,14 @@ pub struct SyncRecord {
 }
 
 /// Fields a client may change on the sync settings.
+///
+/// ⚠ `deny_unknown_fields` 是**故意**的（照 `GamePatch` 的规矩来）：没有它的时候，
+/// 调用方多发一个键（比如界面新加了一项、而这里忘了跟上）会被**静默丢掉**，却仍然
+/// 拿到 `success: true` —— 调用方以为改了配置，其实一个字节都没动。写这两个"程序
+/// 位置"时就真踩了一次：界面把 `kopia_binary` 发出去了，这里没这个字段，用户填的
+/// 路径消失了而且不报错（e2e 抓到的）。现在这种包法直接报"参数无效"。
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct SettingsPatch {
     enabled: Option<bool>,
     engine: Option<SyncEngine>,
@@ -174,6 +181,9 @@ pub(super) struct SettingsPatch {
     bucket: Option<String>,
     prefix: Option<String>,
     keep_versions: Option<u32>,
+    /// 两个引擎的可执行文件在哪（空串 = 清掉，回到"自己找"）。
+    rclone_binary: Option<String>,
+    kopia_binary: Option<String>,
 }
 
 /// A password a client sent, plus "yes, I mean it" when the change cannot be
@@ -219,8 +229,10 @@ impl Daemon {
     pub(super) async fn rpc_sync_status(&self) -> Result<Value, String> {
         let config = self.config.read().await;
         let settings = config.sync.clone();
-        let rclone = sync::find_rclone().map(|p| p.to_string_lossy().to_string());
-        let kopia = sync::engine::find_kopia().map(|p| p.to_string_lossy().to_string());
+        let rclone =
+            sync::find_rclone(&settings.rclone_binary).map(|p| p.to_string_lossy().to_string());
+        let kopia =
+            sync::find_kopia(&settings.kopia_binary).map(|p| p.to_string_lossy().to_string());
         // 当前生效的引擎要哪个二进制。选中的那个没装 = 没准备好；另一个没有
         // 不影响什么（用户可以只装一个）。
         let engine_binary = match settings.engine {
@@ -237,24 +249,10 @@ impl Daemon {
 
         // Only meaningful once sync is on; an unfinished setup is not an error
         // while the user is still typing.
+        // 只有"开着同步"时才谈"为什么跑不起来"：还在填的过程中不算错。
+        // 判据本身在 `actions::readiness_problem`（它只依赖参数，所以能单独测）。
         let problem = if settings.enabled {
-            sync::validate(&settings)
-                .err()
-                .or_else(|| sync::validate_secrets(&self.sync.keyring()).err())
-                .map(|error| error.to_string())
-                .or_else(|| {
-                    // 当前引擎的可执行文件不在：配置本身没写错，但一样跑不起来。
-                    // 点明是哪一个 —— 两个引擎互为备选，用户很可能只装了一个。
-                    engine_binary.is_none().then(|| match settings.engine {
-                        SyncEngine::Rclone => {
-                            "PATH 里找不到 rclone（Arch: sudo pacman -S rclone）".to_string()
-                        }
-                        SyncEngine::Kopia => {
-                            "PATH 里找不到 kopia（Arch: sudo pacman -S archlinuxcn/kopia）"
-                                .to_string()
-                        }
-                    })
-                })
+            actions::readiness_problem(&settings, &self.sync.keyring(), engine_binary.as_deref())
         } else {
             None
         };
@@ -350,6 +348,14 @@ impl Daemon {
                     return Err(format!("保留版本数最多 {MAX_KEEP_VERSIONS}（当前 {keep}）"));
                 }
                 candidate.keep_versions = keep;
+            }
+            // 两个"程序位置"：界面填什么就是什么（目录或完整路径都行，怎么解释见
+            // `sync::executables`）。空串 = 清掉，回到自己找。
+            if let Some(value) = &patch.rclone_binary {
+                candidate.rclone_binary = value.trim().to_string();
+            }
+            if let Some(value) = &patch.kopia_binary {
+                candidate.kopia_binary = value.trim().to_string();
             }
 
             if candidate.enabled {

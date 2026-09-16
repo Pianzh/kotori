@@ -206,6 +206,13 @@ pub(in crate::ui) struct SyncForm {
     pub(in crate::ui) bucket: String,
     pub(in crate::ui) prefix: String,
     pub(in crate::ui) keep_versions: String,
+    /// 两个引擎的可执行文件在哪（**用户填的**；空 = 由 kotori 自己找）。
+    ///
+    /// 填目录或完整路径都行 —— 用户在 Windows 上从资源管理器复制过来的是目录，
+    /// 而"把程序放在一个目录里、不配 PATH"正是这一项存在的理由
+    /// （见 `crate::sync::executables` 的四步查找）。
+    pub(in crate::ui) rclone_binary: String,
+    pub(in crate::ui) kopia_binary: String,
     pub(in crate::ui) key_id: String,
     pub(in crate::ui) app_key: String,
     /// Master password for the credential file (unlock, or set one up).
@@ -239,6 +246,8 @@ impl SyncForm {
         self.bucket = str_field(settings, "bucket");
         self.prefix = str_field(settings, "prefix");
         self.keep_versions = settings["keep_versions"].as_u64().unwrap_or(0).to_string();
+        self.rclone_binary = str_field(settings, "rclone_binary");
+        self.kopia_binary = str_field(settings, "kopia_binary");
     }
 
     /// The patch sent to `sync.set_settings`.
@@ -251,6 +260,8 @@ impl SyncForm {
             "bucket": self.bucket.trim(),
             "prefix": self.prefix.trim(),
             "keep_versions": keep,
+            "rclone_binary": self.rclone_binary.trim(),
+            "kopia_binary": self.kopia_binary.trim(),
         })
     }
 }
@@ -280,9 +291,13 @@ mod tests {
 
         // The patch mirrors the form, trimmed.
         form.bucket = "  spaced  ".into();
+        form.rclone_binary = "  D:\\tools\\rclone  ".into();
         let patch = form.patch();
         assert_eq!(patch["bucket"], "spaced");
         assert_eq!(patch["enabled"], true);
+        // 两个"程序位置"也是 `[sync]` 里的设置项，随这一笔一起提交，同样 trim。
+        assert_eq!(patch["rclone_binary"], "D:\\tools\\rclone");
+        assert_eq!(patch["kopia_binary"], "");
         assert!(
             patch.get("key_id").is_none() && patch.get("force").is_none(),
             "settings patches must carry no secrets: {patch}"

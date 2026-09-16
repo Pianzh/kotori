@@ -69,11 +69,11 @@ pub(super) async fn wine(distro: &Distro) -> Check {
     }
 }
 
-pub(super) async fn rclone(distro: &Distro) -> Check {
+pub(super) async fn rclone(distro: &Distro, configured: &str) -> Check {
     const IMPACT: &str = "没有它就用不了 rclone 那种同步方式(默认就是它);选了 kopia 的机器可以不要";
     let install = distro.install(Package::same("rclone"));
-    // 尊重 `KOTORI_RCLONE`:用户可能把它放在别处(测试也用它指向假货)。
-    let Some(binary) = crate::sync::find_rclone() else {
+    // 设置页里可以指点位置，之后才是 `KOTORI_RCLONE` 与 PATH（见 `sync::executables`）。
+    let Some(binary) = crate::sync::find_rclone(configured) else {
         return Check::missing("rclone", "rclone", IMPACT, install);
     };
     let path = binary.display().to_string();
@@ -99,11 +99,11 @@ pub(super) async fn rclone(distro: &Distro) -> Check {
 /// kopia 那**一种**同步方式（rclone 是另一种，两者互不依赖）。
 ///
 /// ⚠ Arch 官方仓库**没有** kopia，只有 archlinuxcn 有，所以安装命令里带着仓库名。
-pub(super) async fn kopia(distro: &Distro) -> Check {
+pub(super) async fn kopia(distro: &Distro, configured: &str) -> Check {
     const IMPACT: &str =
         "没有它就用不了 kopia 那种同步方式(增量、去重、自带加密);rclone 那条路不受影响";
     let install = distro.install(Package::per_distro("archlinuxcn/kopia", "kopia", "kopia"));
-    let Some(binary) = crate::sync::engine::find_kopia() else {
+    let Some(binary) = crate::sync::find_kopia(configured) else {
         // **可选**:没有它 rclone 那条路照常,报告不该因此判成"这台机器不行"。
         return Check::missing_optional("kopia", "kopia", IMPACT, install);
     };

@@ -94,8 +94,13 @@ fn push_picked_path(ui: &mut Ui) {
                 }
             }
         }
-        // 其它目标由各自的页面从 App 状态读(添加游戏页与设置页都是单向推的)。
-        PathTarget::NewGameDir | PathTarget::NewExe | PathTarget::WinePrefix => {}
+        // 其它目标由各自的页面从 App 状态读(添加游戏页、设置页与云同步页都是单向推的：
+        // 那几个框是窗口属性,`render` 下一帧就会把新值写进去)。
+        PathTarget::NewGameDir
+        | PathTarget::NewExe
+        | PathTarget::WinePrefix
+        | PathTarget::RcloneBinary
+        | PathTarget::KopiaBinary => {}
     }
 }
 /// The stored profile, as the per-game page's "reset" basis.

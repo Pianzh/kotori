@@ -48,6 +48,7 @@ pub enum SyncError {
 
 pub mod archive;
 pub mod engine;
+pub mod executables;
 pub mod runner;
 
 /// Suffix of a version package in the bucket.
@@ -71,8 +72,9 @@ mod validate;
 
 // 对外只做转发：这些名字原来就定义在 `sync` 下，`crate::sync::X` 这个路径
 // （daemon、UI、tests/ipc_e2e.rs 都在用）必须一字不变。
+pub use executables::{find_kopia, find_rclone, misconfigured};
 pub use rclone_args::{copyto_args, deletefile_args, list_files_args};
-pub use rclone_env::{find_rclone, rclone_env};
+pub use rclone_env::rclone_env;
 pub use remote_paths::{game_remote, package_remote, remote_root, save_key};
 pub use save_targets::{SaveTarget, targets};
 pub use snapshots::{is_snapshot, parse_packages, prune_plan, version_stamp};

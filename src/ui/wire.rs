@@ -151,11 +151,17 @@ pub(super) fn install_callbacks(window: &AppWindow) {
             4 => dispatch(Message::SyncField(SyncField::KeyId, text)),
             5 => dispatch(Message::SyncField(SyncField::AppKey, text)),
             7 => dispatch(Message::SyncKopiaPasswordChanged(text)),
+            // 8/9 是两个引擎的"程序位置"：它们是 `[sync]` 里的设置项，走 SyncField。
+            8 => dispatch(Message::SyncField(SyncField::RcloneBinary, text)),
+            9 => dispatch(Message::SyncField(SyncField::KopiaBinary, text)),
             _ => dispatch(Message::SyncMasterPasswordChanged(text)),
         }
     });
     window.on_sync_save_kopia_password(|| dispatch(Message::SyncSaveKopiaPassword));
     window.on_sync_save_settings(|| dispatch(Message::SyncSaveSettings));
+    // 「程序位置」的两个「浏览…」：借系统对话框挑目录（或可执行文件所在的目录）。
+    window.on_sync_browse_rclone_binary(|| dispatch(Message::PickPath(PathTarget::RcloneBinary)));
+    window.on_sync_browse_kopia_binary(|| dispatch(Message::PickPath(PathTarget::KopiaBinary)));
     window.on_sync_test(|| dispatch(Message::SyncTest));
     window.on_sync_now(|id| {
         let id = id.to_string();

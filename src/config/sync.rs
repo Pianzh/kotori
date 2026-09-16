@@ -69,6 +69,18 @@ pub struct SyncConfig {
     /// default — silently dropping an old save is worse than using space.
     #[serde(default)]
     pub keep_versions: u32,
+    /// rclone 可执行文件在哪。**留空 = 由 kotori 自己找**（`KOTORI_RCLONE` →
+    /// kotori 自己的目录 → `PATH`，顺序与理由见 [`crate::sync::executables`]）。
+    ///
+    /// 填**目录**或**完整文件路径**都行。这一项是给"不想配环境变量的人"准备的
+    /// （用户 2026-09-16）：Windows 上把 kopia/rclone 放在一个目录里、PATH 里什么都
+    /// 不加才是常态，而 PATH 这件事普通人根本不会配；从资源管理器复制过来的又多半
+    /// 是目录，所以两种都认。
+    #[serde(default)]
+    pub rclone_binary: String,
+    /// kopia 可执行文件在哪；语义与 [`SyncConfig::rclone_binary`] 完全一样。
+    #[serde(default)]
+    pub kopia_binary: String,
 }
 
 fn default_sync_prefix() -> String {
@@ -84,6 +96,8 @@ impl Default for SyncConfig {
             bucket: String::new(),
             prefix: default_sync_prefix(),
             keep_versions: 0,
+            rclone_binary: String::new(),
+            kopia_binary: String::new(),
         }
     }
 }
@@ -133,5 +147,22 @@ keep_versions = 3
         let written = toml::to_string(&config).unwrap();
         let back: SyncConfig = toml::from_str(&written).unwrap();
         assert_eq!(back.engine, SyncEngine::Kopia);
+    }
+
+    /// 两个"程序在哪"的键是 2026-09-16 加的：在那之前写下的配置没有它们，
+    /// 加载必须照常，而且默认是**空**（＝由 kotori 自己找，见 `sync::executables`）。
+    #[test]
+    fn a_sync_config_without_binary_paths_finds_the_programs_itself() {
+        let config: SyncConfig = toml::from_str("enabled = true\n").unwrap();
+        assert!(config.rclone_binary.is_empty());
+        assert!(config.kopia_binary.is_empty());
+
+        // 填了就存得住 —— 这是"设置页里指路"整件事的前提。
+        let filled = SyncConfig {
+            kopia_binary: r"D:\tools\kopia".to_string(),
+            ..SyncConfig::default()
+        };
+        let back: SyncConfig = toml::from_str(&toml::to_string(&filled).unwrap()).unwrap();
+        assert_eq!(back.kopia_binary, r"D:\tools\kopia");
     }
 }

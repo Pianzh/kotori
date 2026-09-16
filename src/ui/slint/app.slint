@@ -161,6 +161,11 @@ export component AppWindow inherits Window {
     in-out property <string> sync-prefix: "";
     in-out property <string> sync-endpoint: "";
     in-out property <string> sync-keep-versions: "";
+    // 两个引擎的可执行文件在哪（空 = 由 kotori 自己找；目录或完整路径都行）。
+    // ⚠ 名字里的 `-input` 不能省：`sync-rclone` 与 `sync-kopia-binary` 已经被
+    // 「当前生效的那个路径」占着了（只读状态，见 render/sync.rs 的只读区）。
+    in-out property <string> sync-rclone-input: "";
+    in-out property <string> sync-kopia-input: "";
     in-out property <string> sync-key-id: "";
     in-out property <string> sync-app-key: "";
     in-out property <string> sync-master-password: "";
@@ -173,6 +178,9 @@ export component AppWindow inherits Window {
     callback sync-enabled-toggled(bool);
     callback sync-engine-selected(string);
     callback sync-field(int, string);
+    // 「程序位置」那一组的两个「浏览…」。
+    callback sync-browse-rclone-binary();
+    callback sync-browse-kopia-binary();
     callback sync-save-settings();
     callback sync-save-kopia-password();
     callback sync-test();
@@ -392,6 +400,8 @@ export component AppWindow inherits Window {
                             prefix <=> root.sync-prefix;
                             endpoint <=> root.sync-endpoint;
                             keep-versions <=> root.sync-keep-versions;
+                            rclone-input <=> root.sync-rclone-input;
+                            kopia-input <=> root.sync-kopia-input;
                             key-id <=> root.sync-key-id;
                             app-key <=> root.sync-app-key;
                             master-password <=> root.sync-master-password;
@@ -403,6 +413,8 @@ export component AppWindow inherits Window {
                             enabled-toggled(value) => { root.sync-enabled-toggled(value); }
                             engine-selected(engine) => { root.sync-engine-selected(engine); }
                             field(id, text) => { root.sync-field(id, text); }
+                            browse-rclone-binary => { root.sync-browse-rclone-binary(); }
+                            browse-kopia-binary => { root.sync-browse-kopia-binary(); }
                             save-settings => { root.sync-save-settings(); }
                             save-kopia-password => { root.sync-save-kopia-password(); }
                             test => { root.sync-test(); }

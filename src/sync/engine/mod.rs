@@ -35,7 +35,6 @@ mod rclone;
 #[cfg(test)]
 mod tests;
 
-pub use kopia::find_kopia;
 pub use kopia_args::repo_prefix;
 
 /// 真正干活的引擎。这个枚举就是"两个引擎"这件事本身。

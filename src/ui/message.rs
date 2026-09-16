@@ -20,6 +20,9 @@ pub enum SyncField {
     KeepVersions,
     KeyId,
     AppKey,
+    /// 两个引擎的可执行文件在哪（云同步页的「程序位置」）。
+    RcloneBinary,
+    KopiaBinary,
 }
 
 /// 「浏览…」要往哪个输入框里填。
@@ -38,6 +41,9 @@ pub enum PathTarget {
     SavePath(usize),
     /// 设置页:wine prefix。
     WinePrefix,
+    /// 云同步页:两个引擎的可执行文件位置(「程序位置」那一组)。
+    RcloneBinary,
+    KopiaBinary,
 }
 
 #[derive(Debug, Clone)]

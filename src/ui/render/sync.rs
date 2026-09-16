@@ -20,6 +20,14 @@ pub(super) fn push_sync(ui: &mut Ui) {
     push_str(w.get_sync_keep_versions(), &form.keep_versions, |v| {
         w.set_sync_keep_versions(v)
     });
+    // 两个"程序位置"：用户**填的**那一份（空 = 由 kotori 自己找）。它们和 bucket 一样
+    // 属于表单；"当前生效的路径"是另一回事，由下面只读区推（见 `sync-rclone`）。
+    push_str(w.get_sync_rclone_input(), &form.rclone_binary, |v| {
+        w.set_sync_rclone_input(v)
+    });
+    push_str(w.get_sync_kopia_input(), &form.kopia_binary, |v| {
+        w.set_sync_kopia_input(v)
+    });
     push_str(w.get_sync_key_id(), &form.key_id, |v| w.set_sync_key_id(v));
     push_str(w.get_sync_app_key(), &form.app_key, |v| {
         w.set_sync_app_key(v)

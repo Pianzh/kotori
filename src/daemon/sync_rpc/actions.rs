@@ -6,7 +6,51 @@
 
 use serde_json::{Value, json};
 
+use crate::config::{SyncConfig, SyncEngine};
+use crate::secrets::Keyring;
+
 use super::{Daemon, GameOutcome, PULL_TIMEOUT, SETTLE_DELAY, sync};
+
+/// 同步现在为什么跑不起来；一切就绪时是 `None`。
+///
+/// 顺序是"先问最根本的"：配置本身写错了吗 → 凭据在不在 → 当前引擎那个程序找得到吗。
+/// 最后一步要分成两种说法，因为它们完全不同：**你填的位置不对**
+/// （[`sync::misconfigured`]，用户明明填了 D 盘却被回一句"PATH 里找不到"是答非所问）
+/// 和**根本没装**（那就该给出安装命令）。
+///
+/// `engine_binary` 是当前引擎那个可执行文件（找到了就是它的路径）。它只依赖参数，
+/// 所以不用起 daemon 也能测。
+pub(super) fn readiness_problem(
+    settings: &SyncConfig,
+    keyring: &Keyring,
+    engine_binary: Option<&str>,
+) -> Option<String> {
+    sync::validate(settings)
+        .err()
+        .or_else(|| sync::validate_secrets(keyring).err())
+        .map(|error| error.to_string())
+        .or_else(|| {
+            let (configured, name) = match settings.engine {
+                SyncEngine::Rclone => (&settings.rclone_binary, "rclone"),
+                SyncEngine::Kopia => (&settings.kopia_binary, "kopia"),
+            };
+            sync::misconfigured(configured, name).or_else(|| {
+                // 点明是哪一个 —— 两个引擎互为备选，用户很可能只装了一个。
+                engine_binary.is_none().then(|| match settings.engine {
+                    SyncEngine::Rclone => {
+                        "找不到 rclone：在设置页填上它的位置（目录或完整路径都行），\
+                         或者 Arch: sudo pacman -S rclone"
+                            .to_string()
+                    }
+                    SyncEngine::Kopia => {
+                        "找不到 kopia：在设置页填上它的位置（目录或完整路径都行），\
+                         或者 Arch: sudo pacman -S archlinuxcn/kopia"
+                            .to_string()
+                    }
+                })
+            })
+        })
+}
 
 impl Daemon {
     /// Check credentials, bucket and write access.

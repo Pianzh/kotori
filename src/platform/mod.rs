@@ -187,13 +187,18 @@ pub const fn platform() -> &'static str {
 ///
 /// 几个 `--version` 顺序跑:它们都在几十毫秒内回答(实测),并发换来的复杂度不值。
 /// 真正可能慢的是 portal 那一步,它自带 5 秒上限。
-pub async fn report() -> Report {
+/// 探一遍这台机器。
+///
+/// 收 [`crate::config::SyncConfig`]，是因为两项探测要尊重**设置页里填的程序位置**
+/// （rclone / kopia 的目录或完整路径）—— 否则用户在界面上指了路，环境检查却还报
+/// "没装"，两处说法就打架了。
+pub async fn report(settings: &crate::config::SyncConfig) -> Report {
     let distro = Distro::detect();
     let checks = vec![
         probes::gamescope(&distro).await,
         probes::wine(&distro).await,
-        probes::rclone(&distro).await,
-        probes::kopia(&distro).await,
+        probes::rclone(&distro, &settings.rclone_binary).await,
+        probes::kopia(&distro, &settings.kopia_binary).await,
         probes::file_dialog(&distro).await,
         probes::window_control(),
         probes::resolution(),

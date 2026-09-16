@@ -9,6 +9,7 @@ import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
 import { Divider, RevealItem } from "../widgets/base.slint";
 import { Switch, TextField } from "../widgets/controls.slint";
+import { PathField } from "../widgets/path-field.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { SyncCredentialsGroup } from "sync-credentials.slint";
@@ -52,6 +53,10 @@ export component SyncPage inherits ScrollView {
     in-out property <string> prefix: "";
     in-out property <string> endpoint: "";
     in-out property <string> keep-versions: "";
+    // 两个引擎的**程序位置**（用户填的；空 = 由 kotori 自己找：`KOTORI_*` → kotori
+    // 自己的目录 → PATH）。填目录或完整路径都行 —— 从资源管理器复制过来的是目录。
+    in-out property <string> rclone-input: "";
+    in-out property <string> kopia-input: "";
     in-out property <string> key-id: "";
     in-out property <string> app-key: "";
     in-out property <string> master-password: "";
@@ -61,12 +66,16 @@ export component SyncPage inherits ScrollView {
     in property <bool> busy: false;
     in property <string> message: "";
     in property <bool> message-ok: true;
+    // 「浏览…」这台机器上能不能用（与其它页面同一个来源，理由在 `path-hint` 里）。
+    in property <bool> browse-enabled: true;
 
     in-out property <bool> revealed: false;
 
     callback enabled-toggled(bool);
     callback engine-selected(string);
     callback field(int, string);
+    callback browse-rclone-binary();
+    callback browse-kopia-binary();
     callback save-settings();
     callback save-kopia-password();
     callback test();
@@ -226,6 +235,50 @@ export component SyncPage inherits ScrollView {
                             button-width: 96px;
                             button-enabled: !root.busy && root.engine != "kopia";
                             clicked => { root.engine-selected("kopia"); }
+                        }
+                    }
+                }
+                Divider { }
+                CardRow {
+                    title: "rclone 程序位置";
+                    description: "rclone 可执行文件在哪。填目录或完整路径都行；留空＝由 kotori 自己去找。把 rclone 放在一个目录里、不想动 PATH 的人用这一项。";
+                    VerticalLayout {
+                        spacing: 4px;
+                        PathField {
+                            field-width: 300px;
+                            text <=> root.rclone-input;
+                            edited(text) => { root.field(8, text); }
+                            browse-enabled: root.browse-enabled;
+                            browse-clicked => { root.browse-rclone-binary(); }
+                            placeholder: "留空＝自己去 PATH 里找";
+                        }
+                        Text {
+                            text: root.rclone == "" ? "当前：没找到 rclone" : "当前：" + root.rclone;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                Divider { }
+                CardRow {
+                    title: "kopia 程序位置";
+                    description: "kopia 可执行文件在哪。填目录或完整路径都行；留空＝由 kotori 自己去找（先看 KOTORI_KOPIA 环境变量，再看 kotori 自己的目录，最后 PATH）。";
+                    VerticalLayout {
+                        spacing: 4px;
+                        PathField {
+                            field-width: 300px;
+                            text <=> root.kopia-input;
+                            edited(text) => { root.field(9, text); }
+                            browse-enabled: root.browse-enabled;
+                            browse-clicked => { root.browse-kopia-binary(); }
+                            placeholder: "留空＝自己去 PATH 里找";
+                        }
+                        Text {
+                            text: root.kopia-binary == "" ? "当前：没找到 kopia" : "当前：" + root.kopia-binary;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
                         }
                     }
                 }

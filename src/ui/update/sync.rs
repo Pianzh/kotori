@@ -37,6 +37,8 @@ impl App {
                     SyncField::KeepVersions => form.keep_versions = value,
                     SyncField::KeyId => form.key_id = value,
                     SyncField::AppKey => form.app_key = value,
+                    SyncField::RcloneBinary => form.rclone_binary = value,
+                    SyncField::KopiaBinary => form.kopia_binary = value,
                 }
                 if matches!(
                     field,
@@ -44,6 +46,8 @@ impl App {
                         | SyncField::Bucket
                         | SyncField::Prefix
                         | SyncField::KeepVersions
+                        | SyncField::RcloneBinary
+                        | SyncField::KopiaBinary
                 ) {
                     form.settings_dirty = true;
                 }
