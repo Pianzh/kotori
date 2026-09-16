@@ -242,6 +242,19 @@ impl Daemon {
                 .err()
                 .or_else(|| sync::validate_secrets(&self.sync.keyring()).err())
                 .map(|error| error.to_string())
+                .or_else(|| {
+                    // 当前引擎的可执行文件不在：配置本身没写错，但一样跑不起来。
+                    // 点明是哪一个 —— 两个引擎互为备选，用户很可能只装了一个。
+                    engine_binary.is_none().then(|| match settings.engine {
+                        SyncEngine::Rclone => {
+                            "PATH 里找不到 rclone（Arch: sudo pacman -S rclone）".to_string()
+                        }
+                        SyncEngine::Kopia => {
+                            "PATH 里找不到 kopia（Arch: sudo pacman -S archlinuxcn/kopia）"
+                                .to_string()
+                        }
+                    })
+                })
         } else {
             None
         };
