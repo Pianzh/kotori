@@ -1,26 +1,23 @@
-//! 恢复与保留窗口：把云端某个时刻的存档铺回本机（`restore`），以及按滑动窗口
-//! 删掉云上的旧快照（`prune`）。
+//! 恢复与保留窗口：把云端某一版铺回本机（`restore`），以及按滑动窗口删掉云上的
+//! 旧版本（`prune`）。
 //!
-//! 与 `upload.rs` 分开：这里的每一步都可能覆盖本机数据，所以顺序很重要——
-//! 先给自己留一份快照（`snapshot_now`），再覆盖，最后才谈清理；上传和拉取只做
-//! 合并，不会删本机任何东西。
+//! 与 `pull.rs` 分开：这里的每一步都可能覆盖本机数据，所以语义必须是"用户说了
+//! 算"（[`Merge::Replace`]）。**恢复前不再把本机推上云**——那一手正是从前"恢复
+//! 到最新"变成空操作的根因（自保快照先把本机推进了 current/，随后的恢复自然是
+//! 无变化）。恢复的可撤销性由"上一版还在"保证：每一版都是完整的，回退到上一版
+//! 就是撤销。
 
+use super::staging::Staging;
 use super::{COMMAND_TIMEOUT, GameOutcome, LocationOutcome, Runner};
-use crate::sync::{
-    CURRENT_DIR, Merge, SaveTarget, SyncError, copy_args, game_remote, purge_args, restore_args,
-    version_stamp, versions_remote,
-};
+use crate::sync::archive::{self, Merge};
+use crate::sync::{SaveTarget, SyncError, is_snapshot, prune_plan};
 
 impl Runner {
-    /// Restore a game's saves.
+    /// Put a game's saves back.
     ///
-    /// `version = None` restores the newest state. Naming a snapshot restores
-    /// the state as it was *before* that upload: the snapshot holds the files
-    /// that were replaced at the time, so it is overlaid on top of the current
-    /// copy to rebuild that point in time.
-    ///
-    /// Before overwriting anything, the current local state is uploaded as a
-    /// fresh snapshot (best effort). A restore is therefore itself undoable.
+    /// `version = None` restores the newest package. A named version restores
+    /// exactly that package: it holds *every* file of *every* location as it was
+    /// then, so rolling back is laying it down, not un-picking a diff.
     pub async fn restore(
         &self,
         game_id: &str,
@@ -32,143 +29,176 @@ impl Runner {
             return GameOutcome::failed(game_id, name, error.to_string());
         }
         if let Some(version) = version
-            && !super::is_snapshot(version)
+            && !is_snapshot(version)
         {
             return GameOutcome::failed(
                 game_id,
                 name,
-                format!("不是合法的快照名: {version}（形如 20260911T101500Z）"),
+                format!("不是合法的版本名: {version}（形如 20260911T101500Z）"),
             );
         }
 
-        // Keep what we are about to replace.
-        if let Err(error) = self.snapshot_now(game_id, targets).await {
-            tracing::warn!("{}: 恢复前快照失败（继续恢复）: {error}", game_id);
-        }
-
-        let available = match self.current_keys(game_id).await {
-            Ok(keys) => keys,
-            Err(error) => return GameOutcome::failed(game_id, name, error.to_string()),
+        let stamp = match version {
+            Some(version) => version.to_string(),
+            None => match self.latest_package(game_id).await {
+                Ok(Some(stamp)) => stamp,
+                Ok(None) => {
+                    return GameOutcome::from_locations(
+                        game_id,
+                        name,
+                        targets
+                            .iter()
+                            .map(|target| {
+                                LocationOutcome::new(target, "skipped", "云端还没有这个游戏的存档")
+                            })
+                            .collect(),
+                    );
+                }
+                Err(error) => return GameOutcome::failed(game_id, name, error.to_string()),
+            },
         };
 
-        let mut outcomes = Vec::with_capacity(targets.len());
-        for target in targets {
-            if !available.contains(&target.key) {
-                outcomes.push(LocationOutcome::new(
-                    target,
-                    "skipped",
-                    "云端还没有这个位置的存档",
-                ));
-                continue;
-            }
-
-            let current = format!(
-                "{}/{CURRENT_DIR}/{}",
-                game_remote(&self.settings, game_id),
-                target.key
-            );
-            let mut args = restore_args(&current, &target.local.to_string_lossy());
-            super::push_excludes(&mut args, &target.exclude);
-
-            if let Err(error) = self.run(&args, COMMAND_TIMEOUT).await {
-                outcomes.push(LocationOutcome::new(target, "failed", error.to_string()));
-                continue;
-            }
-
-            // Overlay the snapshot to get back to that point in time.
-            if let Some(version) = version {
-                let snapshot = format!(
-                    "{}/{version}/{}",
-                    versions_remote(&self.settings, game_id),
-                    target.key
-                );
-                let mut args = restore_args(&snapshot, &target.local.to_string_lossy());
-                super::push_excludes(&mut args, &target.exclude);
-                if let Err(error) = self.run(&args, COMMAND_TIMEOUT).await {
-                    outcomes.push(LocationOutcome::new(
-                        target,
-                        "failed",
-                        format!("快照 {version} 叠加失败: {error}"),
-                    ));
-                    continue;
-                }
-                outcomes.push(LocationOutcome::new(
-                    target,
-                    "restored",
-                    format!("已恢复到快照 {version}"),
-                ));
-            } else {
-                outcomes.push(LocationOutcome::new(target, "restored", "已恢复到最新备份"));
-            }
+        let staging = match Staging::new(&self.work_dir) {
+            Ok(staging) => staging,
+            Err(error) => return GameOutcome::failed(game_id, name, error),
+        };
+        let file = staging.package_file(&stamp);
+        if let Err(error) = self
+            .fetch_package(game_id, &stamp, &file, COMMAND_TIMEOUT)
+            .await
+        {
+            return GameOutcome::failed(game_id, name, format!("取不回版本 {stamp}: {error}"));
         }
+
+        let manifest = match archive::extract(&file, &staging.unpacked()) {
+            Ok(manifest) => manifest,
+            Err(error) => return GameOutcome::failed(game_id, name, error),
+        };
+        // 用户点了"恢复"：以云端为准，本机更新的也盖掉。
+        let plan = match archive::plan(&manifest, targets, Merge::Replace) {
+            Ok(plan) => plan,
+            Err(error) => return GameOutcome::failed(game_id, name, error),
+        };
+        if let Err(error) = staging.lay_down(targets, &plan) {
+            return GameOutcome::failed(game_id, name, format!("写入本机存档失败: {error}"));
+        }
+
+        let outcomes = targets
+            .iter()
+            .map(|target| {
+                if !manifest.has_location(&target.key) {
+                    return LocationOutcome::new(target, "skipped", "云端还没有这个位置的存档");
+                }
+                let mut detail = format!("已恢复到 {stamp}");
+                // 回退之后本机可能还剩这一版里没有的文件，游戏照旧可能读到它们。
+                // **只报不删**：删本地数据永远是用户点头才做的事。
+                let extras: Vec<&String> = plan
+                    .extras
+                    .iter()
+                    .filter(|name| name.starts_with(&format!("{}/", target.key)))
+                    .collect();
+                if !extras.is_empty() {
+                    detail.push_str(&format!(
+                        "；本机另有 {} 个文件不在这一版里（保留未动）：{}",
+                        extras.len(),
+                        summarize(&extras)
+                    ));
+                }
+                LocationOutcome::new(target, "restored", detail)
+            })
+            .collect();
 
         GameOutcome::from_locations(game_id, name, outcomes)
     }
 
-    /// Upload the current state without touching the retention window.
+    /// Delete the packages that fall outside the retention window.
     ///
-    /// Used before a restore so the state being replaced is recoverable. It
-    /// deliberately does not reuse [`Self::upload`]: that one prunes, and a
-    /// restore must not be able to expire a snapshot as a side effect.
-    async fn snapshot_now(&self, game_id: &str, targets: &[SaveTarget]) -> Result<(), SyncError> {
-        let stamp = version_stamp(chrono::Utc::now());
-        for target in targets {
-            if !target.local.is_dir() {
-                continue;
-            }
-            let destination = format!(
-                "{}/{CURRENT_DIR}/{}",
-                game_remote(&self.settings, game_id),
-                target.key
-            );
-            let backup = format!(
-                "{}/{stamp}/{}",
-                versions_remote(&self.settings, game_id),
-                target.key
-            );
-            let mut args = copy_args(
-                &target.local.to_string_lossy(),
-                &destination,
-                Some(&backup),
-                Merge::Replace,
-            );
-            super::push_excludes(&mut args, &target.exclude);
-            self.run(&args, COMMAND_TIMEOUT).await?;
-        }
-        Ok(())
-    }
-
-    /// Delete the snapshots that fall outside the retention window.
-    ///
-    /// Never touches local files, and never touches a cloud directory that does
-    /// not look like one of our own snapshots.
+    /// Never touches local files, and never touches a cloud object that does not
+    /// look like one of our own packages.
     pub async fn prune(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
-        let stamps = self.versions(game_id).await?;
-        let doomed = super::prune_plan(&stamps, self.settings.keep_versions);
-        if doomed.is_empty() {
-            return Ok(doomed);
-        }
-
-        let root = versions_remote(&self.settings, game_id);
+        let stamps = self.packages(game_id).await?;
+        let doomed = prune_plan(&stamps, self.settings.keep_versions);
         for stamp in &doomed {
-            let args = purge_args(&format!("{root}/{stamp}"));
-            self.run(&args, COMMAND_TIMEOUT).await?;
-            tracing::info!("{game_id}: 已删除旧快照 {stamp}");
+            self.remove_package(game_id, stamp).await?;
+            tracing::info!("{game_id}: 已删除旧版本 {stamp}");
         }
         Ok(doomed)
     }
 }
 
+/// 列出最靠前的几个名字，其余用省略号收尾——一行提示不该被一屏文件名撑爆。
+fn summarize(names: &[&String]) -> String {
+    const SHOWN: usize = 3;
+    let head: Vec<&str> = names.iter().take(SHOWN).map(|name| name.as_str()).collect();
+    if names.len() > SHOWN {
+        format!("{} 等", head.join("、"))
+    } else {
+        head.join("、")
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::sync::runner::testing::{CURRENT, FakeRclone, VERSIONS, target};
+    use crate::sync::archive;
+    use crate::sync::runner::testing::{FakeRclone, target};
+
+    fn publish(fake: &FakeRclone, saves: &std::path::Path, stamp: &str, body: &str) {
+        std::fs::create_dir_all(saves).unwrap();
+        std::fs::write(saves.join("save.sav"), body).unwrap();
+        let target = target(saves, "savedata", "rel-savedata");
+        let zip = fake.dir.join(format!("publish-{stamp}.zip"));
+        archive::pack(&zip, &[target], chrono::Utc::now()).unwrap();
+        fake.put_package("demo", stamp, &zip);
+    }
 
     #[tokio::test]
-    async fn restoring_snapshots_what_it_is_about_to_replace() {
+    async fn restoring_lays_the_package_down_over_whatever_is_local() {
         let fake = FakeRclone::new("restore");
+        let cloud = fake.dir.join("cloud");
+        publish(&fake, &cloud, "20260901T000000Z", "cloud one");
+        publish(&fake, &cloud, "20260902T000000Z", "cloud two");
+
+        // 本机是新的一版，而且已经被改坏了。
         let saves = fake.dir.join("saves");
         std::fs::create_dir_all(&saves).unwrap();
-        fake.set_listing(CURRENT, &["rel-savedata"]);
+        std::fs::write(saves.join("save.sav"), "corrupted").unwrap();
+
+        let outcome = fake
+            .runner(false, 0)
+            .restore(
+                "demo",
+                "Demo",
+                &[target(&saves, "savedata", "rel-savedata")],
+                Some("20260901T000000Z"),
+            )
+            .await;
+        assert!(outcome.ok, "{outcome:?}");
+        assert_eq!(outcome.locations[0].action, "restored");
+        assert!(outcome.locations[0].detail.contains("20260901T000000Z"));
+        assert_eq!(
+            std::fs::read_to_string(saves.join("save.sav")).unwrap(),
+            "cloud one",
+            "an explicit restore is meant to win, even over a newer local file"
+        );
+
+        // 恢复不再"先把本机推上云"：那次自保快照正是"恢复到最新"变成空操作的根因。
+        let calls = fake.calls();
+        assert!(
+            !calls.iter().any(|call| call.starts_with("copy ")),
+            "no safety snapshot: {calls:?}"
+        );
+        assert!(calls.iter().any(|call| call.starts_with("copyto ")));
+    }
+
+    #[tokio::test]
+    async fn restoring_without_a_version_takes_the_newest_package() {
+        let fake = FakeRclone::new("restore-latest");
+        let cloud = fake.dir.join("cloud");
+        publish(&fake, &cloud, "20260901T000000Z", "older");
+        publish(&fake, &cloud, "20260902T000000Z", "newer");
+
+        let saves = fake.dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
 
         let outcome = fake
             .runner(false, 0)
@@ -180,31 +210,23 @@ mod tests {
             )
             .await;
         assert!(outcome.ok, "{outcome:?}");
-        assert_eq!(outcome.locations[0].action, "restored");
-
-        let calls = fake.calls();
-        // 1: the safety snapshot, 2: the listing, 3: the restore itself.
-        assert!(
-            calls[0].contains("--backup-dir"),
-            "snapshot first: {calls:?}"
-        );
-        assert!(calls[1].starts_with("lsf"), "{calls:?}");
-        assert!(
-            calls[2].contains(&format!("{CURRENT}/rel-savedata {}", saves.display())),
-            "{calls:?}"
-        );
-        assert!(
-            !calls[2].contains("--update"),
-            "an explicit restore is meant to win: {calls:?}"
+        assert!(outcome.locations[0].detail.contains("20260902T000000Z"));
+        assert_eq!(
+            std::fs::read_to_string(saves.join("save.sav")).unwrap(),
+            "newer"
         );
     }
 
     #[tokio::test]
-    async fn restoring_a_snapshot_overlays_it_on_the_newest_state() {
-        let fake = FakeRclone::new("restore-version");
+    async fn extra_local_files_are_listed_and_never_deleted() {
+        let fake = FakeRclone::new("restore-extras");
+        let cloud = fake.dir.join("cloud");
+        publish(&fake, &cloud, "20260901T000000Z", "cloud");
+
         let saves = fake.dir.join("saves");
         std::fs::create_dir_all(&saves).unwrap();
-        fake.set_listing(CURRENT, &["rel-savedata"]);
+        std::fs::write(saves.join("save.sav"), "local").unwrap();
+        std::fs::write(saves.join("only-local.sav"), "keep me").unwrap();
 
         let outcome = fake
             .runner(false, 0)
@@ -212,28 +234,22 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
-                Some("20260911T101500Z"),
+                None,
             )
             .await;
         assert!(outcome.ok, "{outcome:?}");
-        assert!(outcome.locations[0].detail.contains("20260911T101500Z"));
-
-        let calls = fake.calls();
-        // Current first, then the snapshot that holds the replaced files: a
-        // snapshot on its own is only the diff of one upload.
-        let current = calls
-            .iter()
-            .position(|c| c.contains(&format!("{CURRENT}/rel-savedata ")))
-            .expect("current copy");
-        let snapshot = calls
-            .iter()
-            .position(|c| c.contains(&format!("{VERSIONS}/20260911T101500Z/rel-savedata ")))
-            .expect("snapshot overlay");
-        assert!(current < snapshot, "{calls:?}");
+        let detail = &outcome.locations[0].detail;
+        assert!(detail.contains("保留未动"), "{detail}");
+        assert!(detail.contains("only-local.sav"), "{detail}");
+        assert_eq!(
+            std::fs::read_to_string(saves.join("only-local.sav")).unwrap(),
+            "keep me",
+            "removing local data is the user's call, never ours"
+        );
     }
 
     #[tokio::test]
-    async fn a_bogus_snapshot_name_is_refused_before_anything_is_touched() {
+    async fn a_bogus_version_name_is_refused_before_anything_is_touched() {
         let fake = FakeRclone::new("restore-bogus");
         let saves = fake.dir.join("saves");
         std::fs::create_dir_all(&saves).unwrap();
@@ -249,7 +265,7 @@ mod tests {
             .await;
 
         assert!(!outcome.ok);
-        assert!(outcome.error.unwrap().contains("不是合法的快照名"));
+        assert!(outcome.error.unwrap().contains("不是合法的版本名"));
         assert!(
             fake.calls().is_empty(),
             "nothing may run: {:?}",
@@ -258,35 +274,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retention_only_ever_purges_our_own_old_snapshots() {
+    async fn retention_only_ever_deletes_our_own_old_packages() {
         let fake = FakeRclone::new("prune");
-        fake.set_listing(
-            VERSIONS,
-            &[
-                "20260903T000000Z",
-                "20260901T000000Z",
-                "20260902T000000Z",
-                "current",
-                "not-ours",
-            ],
-        );
+        for stamp in ["20260903T000000Z", "20260901T000000Z", "20260902T000000Z"] {
+            fake.put(&format!("kotori:bkt/prefix/games/demo/{stamp}.zip"), "old");
+        }
+        fake.put("kotori:bkt/prefix/games/demo/notes.txt", "not ours");
 
         let removed = fake.runner(false, 2).prune("demo").await.unwrap();
         assert_eq!(removed, vec!["20260901T000000Z".to_string()]);
-
-        let purges = fake.calls_matching("purge");
-        assert_eq!(purges.len(), 1, "{purges:?}");
-        assert!(purges[0].contains(&format!("{VERSIONS}/20260901T000000Z")));
+        assert_eq!(
+            fake.package_names("demo"),
+            vec![
+                "20260902T000000Z".to_string(),
+                "20260903T000000Z".to_string()
+            ]
+        );
         assert!(
-            !fake.env_log().is_empty(),
-            "pruning still needs credentials in the environment"
+            fake.remote_exists("kotori:bkt/prefix/games/demo/notes.txt"),
+            "pruning must never touch an object it does not recognise"
         );
     }
 
     #[tokio::test]
     async fn retention_keeps_everything_unless_the_user_asked_otherwise() {
         let fake = FakeRclone::new("prune-off");
-        fake.set_listing(VERSIONS, &["20260901T000000Z", "20260902T000000Z"]);
+        for stamp in ["20260901T000000Z", "20260902T000000Z"] {
+            fake.put(&format!("kotori:bkt/prefix/games/demo/{stamp}.zip"), "old");
+        }
 
         assert!(
             fake.runner(false, 0)
@@ -295,9 +310,8 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
-        assert!(fake.calls_matching("purge").is_empty());
-        // Even with the window off, no listing is needed if keep is 0 — but if
-        // it is, it must not delete anything it does not recognise.
+        assert!(fake.calls_matching("deletefile").is_empty());
+        // 保留窗口比版本数大：什么都不该删。
         assert!(
             fake.runner(false, 5)
                 .prune("demo")
@@ -305,5 +319,6 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        assert!(fake.calls_matching("deletefile").is_empty());
     }
 }

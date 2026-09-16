@@ -88,9 +88,9 @@ sharpness = 4
     ///
     /// The fake rclone really moves bytes: `kotori:<path>` mirrors to
     /// `<dir>/<path>`, so the returned directory *is* the remote root.
-    /// `copy` copies files (moving the replaced ones into `--backup-dir`),
-    /// `lsf` lists, `purge` deletes — which makes the assertions about versions
-    /// and restores statements about actual files.
+    /// `copyto` copies an object each way, `lsf --files-only` lists the packages
+    /// and `deletefile` removes one — so the assertions about versions and
+    /// restores are statements about actual files.
     fn enable_fake_sync(&mut self, enabled: bool) -> PathBuf {
         let bin = self.dir.join("bin");
         std::fs::create_dir_all(&bin).unwrap();
@@ -121,44 +121,20 @@ cmd="$1"; shift
 case "$cmd" in
   obscure) echo "obscured-blob" ;;
   mkdir) mkdir -p "$(remote_path "$1")" ;;
-  purge) rm -rf "$(remote_path "$1")" ;;
+  # One version is one package: a transfer is a single object each way.
+  copyto)
+    sp=$(remote_path "$1"); dp=$(remote_path "$2")
+    mkdir -p "$(dirname "$dp")"
+    cp "$sp" "$dp"
+    ;;
+  # `lsf --files-only <remote>`: the file names *are* the version list.
   lsf)
     target=''
-    for a in "$@"; do [ "$a" = '--dirs-only' ] || target="$a"; done
+    for a in "$@"; do [ "$a" = '--files-only' ] || target="$a"; done
     p=$(remote_path "$target")
-    if [ -d "$p" ]; then
-      for d in "$p"/*/; do [ -d "$d" ] && basename "$d"; done
-    fi
+    if [ -d "$p" ]; then ls -1 "$p" | grep '\.zip$'; fi
     ;;
-  copy)
-    src=''; dst=''; backup=''; update=0
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --backup-dir) backup="$2"; shift 2 ;;
-        --suffix|--exclude) shift 2 ;;
-        --update) update=1; shift ;;
-        --create-empty-src-dirs) shift ;;
-        *) if [ -z "$src" ]; then src="$1"; else dst="$1"; fi; shift ;;
-      esac
-    done
-    sp=$(remote_path "$src"); dp=$(remote_path "$dst")
-    mkdir -p "$dp"
-    [ -d "$sp" ] || exit 3
-    cd "$sp" || exit 3
-    find . -type f | while read -r f; do
-      rel="${{f#./}}"
-      if [ -f "$dp/$rel" ]; then
-        if [ "$update" = 1 ] && [ "$dp/$rel" -nt "$sp/$rel" ]; then continue; fi
-        if [ -n "$backup" ]; then
-          bp=$(remote_path "$backup")
-          mkdir -p "$bp/$(dirname "$rel")"
-          mv "$dp/$rel" "$bp/$rel"
-        fi
-      fi
-      mkdir -p "$dp/$(dirname "$rel")"
-      cp "$sp/$rel" "$dp/$rel"
-    done
-    ;;
+  deletefile) rm -f "$(remote_path "$1")" ;;
 esac
 exit 0
 "#,
@@ -239,6 +215,9 @@ exit 0
             .arg("daemon")
             .env("KOTORI_CONFIG", &self.config)
             .env("KOTORI_SOCKET", &self.socket)
+            // 数据目录也搬到临时目录里：同步要在这儿放打包用的临时包，
+            // 而一次测试绝不该往用户真正的 `~/.local/share/kotori` 里写东西。
+            .env("KOTORI_DATA_DIR", self.dir.join("data"))
             // Keep display detection out of the test: the daemon must use this
             // value for new games regardless of the machine it runs on.
             .env("KOTORI_OUTPUT_RESOLUTION", "2560x1440")
@@ -357,6 +336,24 @@ fn wait_until(timeout: Duration, mut check: impl FnMut() -> bool) -> bool {
         std::thread::sleep(Duration::from_millis(100));
     }
     check()
+}
+
+/// The version packages the fake bucket holds for a game, oldest first.
+///
+/// "One version, one package" is the whole point of the layout, so the number of
+/// `.zip` objects *is* the version count.
+fn cloud_packages(game_dir: &std::path::Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(game_dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .filter(|name| name.ends_with(".zip"))
+                .collect()
+        })
+        .unwrap_or_default();
+    names.sort();
+    names
 }
 
 /// Every `rclone` invocation the daemon made.
@@ -1145,28 +1142,30 @@ fn cloud_sync_uploads_keeps_versions_and_restores_over_ipc() {
         "{response}"
     );
 
-    let current = remote.join("games/sync-game/current/rel-savedata/cg.dat");
-    assert_eq!(std::fs::read_to_string(&current).unwrap(), "first");
+    let packages = remote.join("games/sync-game");
+    assert_eq!(
+        cloud_packages(&packages).len(),
+        1,
+        "one version, one package"
+    );
 
-    // --- second upload keeps the replaced copy as a snapshot ---------------
+    // --- second upload: a second, complete package -------------------------
     std::fs::write(saves.join("cg.dat"), b"second").unwrap();
     let response = fixture.rpc("sync.now", json!({ "id": "sync-game" }));
     assert_eq!(response["result"]["ok"], true, "{response}");
-    assert_eq!(std::fs::read_to_string(&current).unwrap(), "second");
 
     let versions = fixture.rpc("sync.versions", json!({ "id": "sync-game" }));
-    let stamps = versions["result"]["versions"].as_array().unwrap().clone();
-    assert_eq!(stamps.len(), 1, "{versions}");
-    let stamp = stamps[0].as_str().unwrap().to_string();
-    let snapshot = remote
-        .join("games/sync-game/versions")
-        .join(&stamp)
-        .join("rel-savedata/cg.dat");
-    assert_eq!(
-        std::fs::read_to_string(&snapshot).unwrap(),
-        "first",
-        "the snapshot holds what the upload replaced"
-    );
+    let stamps: Vec<String> = versions["result"]["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|stamp| stamp.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(stamps.len(), 2, "{versions}");
+    assert_eq!(cloud_packages(&packages).len(), 2, "{versions}");
+    // 名字就是时间序：第一个包是第一版。
+    let first = stamps[0].clone();
+    assert!(first.starts_with("20"), "{first}");
 
     // Sync also shows up in the status, so the UI can say when it last ran.
     let status = fixture.rpc("sync.status", json!({}));
@@ -1180,23 +1179,24 @@ fn cloud_sync_uploads_keeps_versions_and_restores_over_ipc() {
     assert_eq!(
         std::fs::read_to_string(saves.join("cg.dat")).unwrap(),
         "second",
-        "a restore brings the newest backup back"
+        "a restore brings the newest package back"
     );
 
-    // --- roll back to the snapshot ----------------------------------------
+    // --- roll back to an older package -------------------------------------
     let response = fixture.rpc(
         "sync.restore",
-        json!({ "id": "sync-game", "version": stamp }),
+        json!({ "id": "sync-game", "version": first }),
     );
     assert_eq!(response["result"]["ok"], true, "{response}");
     assert_eq!(
         std::fs::read_to_string(saves.join("cg.dat")).unwrap(),
         "first",
-        "a named snapshot restores the state from before that upload\n{:?}",
+        "each package is a complete point in time, so rolling back just lays it \
+         down\n{:?}",
         rclone_calls(&fixture)
     );
 
-    // A snapshot name that is not ours is refused before anything runs.
+    // A version name that is not ours is refused before anything runs.
     let response = fixture.rpc(
         "sync.restore",
         json!({ "id": "sync-game", "version": "../../etc" }),
@@ -1205,15 +1205,15 @@ fn cloud_sync_uploads_keeps_versions_and_restores_over_ipc() {
         response["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("不是合法的快照名"),
+            .contains("不是合法的版本名"),
         "{response}"
     );
 
     // --- retention stays off unless asked for ------------------------------
     let listing = rclone_calls(&fixture);
     assert!(
-        !listing.iter().any(|call| call.starts_with("purge")),
-        "keep_versions = 0 must never delete a snapshot: {listing:?}"
+        !listing.iter().any(|call| call.starts_with("deletefile")),
+        "keep_versions = 0 must never delete a version: {listing:?}"
     );
 }
 
@@ -1249,7 +1249,7 @@ fn save_sync_follows_the_game_lifecycle() {
     );
     assert_eq!(response["result"]["stored"], true, "{response}");
 
-    let cloud = remote.join("games/life-game/current/rel-savedata/save.dat");
+    let packages = remote.join("games/life-game");
 
     // Put something in the cloud, then remove the local copy.
     assert_eq!(
@@ -1305,25 +1305,30 @@ fn save_sync_follows_the_game_lifecycle() {
     child.kill().unwrap();
     child.wait().unwrap();
 
-    // The session ends, and the exit hook uploads what the game wrote.
+    // The session ends, and the exit hook uploads what the game wrote as a new
+    // package — the previous one is still there.
     assert!(
-        wait_until(Duration::from_secs(30), || {
-            std::fs::read_to_string(&cloud)
-                .map(|body| body == "progress-made")
-                .unwrap_or(false)
-        }),
+        wait_until(Duration::from_secs(30), || cloud_packages(&packages).len()
+            >= 2),
         "the saves were never uploaded after the game exited ({} calls: {:?})",
         rclone_calls(&fixture).len(),
         rclone_calls(&fixture)
     );
 
-    // And the previous state is preserved as a snapshot.
     let versions = fixture.rpc("sync.versions", json!({ "id": "life-game" }));
-    assert!(
-        !versions["result"]["versions"]
-            .as_array()
-            .unwrap()
-            .is_empty(),
+    assert_eq!(
+        versions["result"]["versions"].as_array().unwrap().len(),
+        2,
         "{versions}"
+    );
+
+    // 退出后那一版就是最新的包：删掉本机存档再恢复，应该拿到游戏写下的进度。
+    std::fs::remove_dir_all(&saves).unwrap();
+    let response = fixture.rpc("sync.restore", json!({ "id": "life-game" }));
+    assert_eq!(response["result"]["ok"], true, "{response}");
+    assert_eq!(
+        std::fs::read_to_string(saves.join("save.dat")).unwrap(),
+        "progress-made",
+        "the version uploaded after the exit is the newest one"
     );
 }

@@ -585,11 +585,11 @@ impl Daemon {
         }))
     }
 
-    /// The snapshots the cloud holds for a game.
+    /// The version packages the cloud holds for a game.
     pub(super) async fn rpc_sync_versions(&self, game_id: &str) -> Result<Value, String> {
         let settings = self.config.read().await.sync.clone();
         let runner = self.sync_runner(&settings)?;
-        let versions = runner.versions(game_id).await.map_err(|e| e.to_string())?;
+        let versions = runner.packages(game_id).await.map_err(|e| e.to_string())?;
         Ok(json!({ "versions": versions }))
     }
 
@@ -605,7 +605,7 @@ impl Daemon {
             && !sync::is_snapshot(version)
         {
             return Err(format!(
-                "不是合法的快照名: {version}（形如 20260911T101500Z）"
+                "不是合法的版本名: {version}（形如 20260911T101500Z）"
             ));
         }
 

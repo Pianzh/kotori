@@ -1,119 +1,83 @@
-//! 存档的上行生命周期：把本机目录推上云端（`upload`），以及在启动游戏前把云端
-//! 较新的文件取回来（`pull`）。
+//! 存档的上行：把本机这一版打成一个包推上云端（`upload`）。
 //!
-//! 与 `restore.rs` 分开：这两个方向都只是"合并"——上传把被替换的文件挪进快照，
-//! 拉取只拿更新的；恢复（以及它为自保先做的快照）和保留窗口的清理在那边。
-//! 两边挂在同一个 [`Runner`] 上，靠子模块关系共用它的私有字段和私有传输底座。
+//! 与 `pull.rs` 分开：上传是"我说了算"——包打的是本机现状，旧包一个都不动
+//! （失败也不动），所以上传失败最多是这一版没上去，回退能力毫发无损。
 
+use super::staging::Staging;
 use super::{COMMAND_TIMEOUT, GameOutcome, LocationOutcome, Runner};
-use crate::sync::{
-    CURRENT_DIR, Merge, SaveTarget, copy_args, game_remote, version_stamp, versions_remote,
-};
+use crate::sync::archive;
 
 impl Runner {
-    /// Push every location of a game into the cloud.
-    pub async fn upload(&self, game_id: &str, name: &str, targets: &[SaveTarget]) -> GameOutcome {
+    /// Push every location of a game into the cloud as one package.
+    ///
+    /// 全量上传，不做"内容没变就跳过"：想省空间的人用 kopia（用户 2026-09-15
+    /// 明确）。换来的是"一个包 = 一个时间点的完整存档"，恢复因此不需要拼差量。
+    pub async fn upload(
+        &self,
+        game_id: &str,
+        name: &str,
+        targets: &[crate::sync::SaveTarget],
+    ) -> GameOutcome {
         if let Err(error) = self.ready() {
             return GameOutcome::failed(game_id, name, error.to_string());
         }
 
-        let stamp = version_stamp(chrono::Utc::now());
-        let mut outcomes = Vec::with_capacity(targets.len());
+        let staging = match Staging::new(&self.work_dir) {
+            Ok(staging) => staging,
+            Err(error) => return GameOutcome::failed(game_id, name, error),
+        };
+        let stamp = crate::sync::version_stamp(chrono::Utc::now());
+        let archive_path = staging.package_file(&stamp);
 
-        for target in targets {
-            if !target.local.is_dir() {
-                outcomes.push(LocationOutcome::new(
-                    target,
-                    "skipped",
-                    "本地没有这个目录，没什么可上传的",
-                ));
-                continue;
+        let report = match archive::pack(&archive_path, targets, chrono::Utc::now()) {
+            Ok(report) => report,
+            Err(error) => {
+                // 打包失败绝不能动旧包：它们还在，回退能力不受影响。
+                return GameOutcome::failed(game_id, name, format!("打包失败: {error}"));
             }
+        };
 
-            let destination = format!(
-                "{}/{CURRENT_DIR}/{}",
-                game_remote(&self.settings, game_id),
-                target.key
+        if report.locations.is_empty() {
+            // 本机一个存档目录都没有：上传一个空包只会往版本列表里塞垃圾。
+            return GameOutcome::from_locations(
+                game_id,
+                name,
+                targets
+                    .iter()
+                    .map(|target| {
+                        LocationOutcome::new(target, "skipped", "本地没有这个目录，没什么可上传的")
+                    })
+                    .collect(),
             );
-            // Replaced files land under their own snapshot, per location, so two
-            // locations in the same game can never overwrite each other there.
-            let backup = format!(
-                "{}/{stamp}/{}",
-                versions_remote(&self.settings, game_id),
-                target.key
-            );
-
-            let mut args = copy_args(
-                &target.local.to_string_lossy(),
-                &destination,
-                Some(&backup),
-                Merge::Replace,
-            );
-            super::push_excludes(&mut args, &target.exclude);
-
-            match self.run(&args, COMMAND_TIMEOUT).await {
-                Ok(_) => outcomes.push(LocationOutcome::new(target, "uploaded", "已上传")),
-                Err(error) => {
-                    outcomes.push(LocationOutcome::new(target, "failed", error.to_string()))
-                }
-            }
         }
+
+        tracing::info!(
+            "{game_id}: 打包完成 {stamp}（{} 个文件，跳过 {} 个被排除的）",
+            report.entries.len(),
+            report.excluded
+        );
+        let send = self
+            .send_package(game_id, &stamp, &archive_path, COMMAND_TIMEOUT)
+            .await;
+
+        let outcomes = targets
+            .iter()
+            .map(|target| match &send {
+                Err(error) => LocationOutcome::new(target, "failed", error.to_string()),
+                Ok(()) if report.missing.contains(&target.key) => {
+                    LocationOutcome::new(target, "skipped", "本地没有这个目录，没什么可上传的")
+                }
+                Ok(()) => LocationOutcome::new(target, "uploaded", format!("已上传为 {stamp}")),
+            })
+            .collect::<Vec<_>>();
 
         // Retention is a separate, best-effort step: failing to tidy up must
         // never turn a successful upload into a failure.
-        if self.settings.keep_versions > 0
+        if send.is_ok()
+            && self.settings.keep_versions > 0
             && let Err(error) = self.prune(game_id).await
         {
-            tracing::warn!("{}: 清理旧快照失败: {error}", game_id);
-        }
-
-        GameOutcome::from_locations(game_id, name, outcomes)
-    }
-
-    /// Fetch anything that is *newer* in the cloud, keeping newer local files.
-    ///
-    /// Used before a launch. `Merge::Newer` means a local save that was never
-    /// uploaded (because the last upload failed) survives this.
-    pub async fn pull(&self, game_id: &str, name: &str, targets: &[SaveTarget]) -> GameOutcome {
-        if let Err(error) = self.ready() {
-            return GameOutcome::failed(game_id, name, error.to_string());
-        }
-
-        let available = match self.current_keys(game_id).await {
-            Ok(keys) => keys,
-            // Nothing has ever been uploaded: not an error, just nothing to do.
-            Err(error) => return GameOutcome::failed(game_id, name, error.to_string()),
-        };
-
-        let mut outcomes = Vec::with_capacity(targets.len());
-        for target in targets {
-            if !available.contains(&target.key) {
-                outcomes.push(LocationOutcome::new(
-                    target,
-                    "skipped",
-                    "云端还没有这个位置的存档",
-                ));
-                continue;
-            }
-
-            let source = format!(
-                "{}/{CURRENT_DIR}/{}",
-                game_remote(&self.settings, game_id),
-                target.key
-            );
-            let mut args = copy_args(&source, &target.local.to_string_lossy(), None, Merge::Newer);
-            super::push_excludes(&mut args, &target.exclude);
-
-            match self.run(&args, COMMAND_TIMEOUT).await {
-                Ok(_) => outcomes.push(LocationOutcome::new(
-                    target,
-                    "pulled",
-                    "已取回云端较新的文件",
-                )),
-                Err(error) => {
-                    outcomes.push(LocationOutcome::new(target, "failed", error.to_string()))
-                }
-            }
+            tracing::warn!("{game_id}: 清理旧版本失败: {error}");
         }
 
         GameOutcome::from_locations(game_id, name, outcomes)
@@ -122,53 +86,51 @@ impl Runner {
 
 #[cfg(test)]
 mod tests {
-    use crate::sync::runner::testing::{CURRENT, FakeRclone, VERSIONS, target};
+    use crate::sync::archive;
+    use crate::sync::runner::testing::{FakeRclone, target};
 
     #[tokio::test]
-    async fn upload_sends_each_location_into_its_own_cloud_directory() {
+    async fn upload_sends_the_whole_game_as_one_package() {
         let fake = FakeRclone::new("upload");
         let saves = fake.dir.join("saves");
         std::fs::create_dir_all(saves.join("nested")).unwrap();
+        std::fs::write(saves.join("save01.sav"), "one").unwrap();
+        std::fs::write(saves.join("nested/save02.sav"), "two").unwrap();
 
         let mut target = target(&saves, "savedata", "rel-savedata");
-        target.exclude = vec!["*.log".to_string(), "  ".to_string()];
+        target.exclude = vec!["*.log".to_string()];
+        std::fs::write(saves.join("debug.log"), "noise").unwrap();
+
         let outcome = fake
             .runner(false, 0)
             .upload("demo", "Demo", std::slice::from_ref(&target))
             .await;
-
         assert!(outcome.ok, "{outcome:?}");
         assert_eq!(outcome.locations[0].action, "uploaded");
 
         let calls = fake.calls();
-        assert_eq!(calls.len(), 1, "{calls:?}");
-        let call = &calls[0];
-        assert!(call.starts_with("copy "), "{call}");
+        assert_eq!(calls.len(), 1, "one package, one transfer: {calls:?}");
+        assert!(calls[0].starts_with("copyto "), "{calls:?}");
         assert!(
-            call.contains(&format!("copy {} {CURRENT}/rel-savedata", saves.display())),
-            "{call}"
-        );
-        // Replaced files go aside so we keep history without a repo format.
-        assert!(
-            call.contains(&format!("--backup-dir {VERSIONS}/")),
-            "{call}"
+            calls[0].contains("kotori:bkt/prefix/games/demo/"),
+            "{calls:?}"
         );
         assert!(
-            call.contains("/rel-savedata "),
-            "per-location snapshot: {call}"
+            !calls[0].contains("--backup-dir") && !calls[0].contains("--delete"),
+            "a package upload cannot delete anything: {calls:?}"
         );
+
+        // 云端真的多了一个包，而且里面是完整的、排除了 .log 的那一版。
+        let packages = fake.package_names("demo");
+        assert_eq!(packages.len(), 1, "{packages:?}");
+        let unpacked = fake.dir.join("check");
+        let manifest =
+            archive::extract(&fake.package_path("demo", &packages[0]), &unpacked).unwrap();
+        assert_eq!(manifest.entries.len(), 2);
         assert!(
-            call.contains("--suffix  "),
-            "empty suffix keeps names: {call}"
+            std::fs::read_to_string(unpacked.join("rel-savedata/save01.sav")).unwrap() == "one"
         );
-        assert!(call.contains("--exclude *.log"), "{call}");
-        assert!(
-            !call.contains("--update"),
-            "an upload must overwrite: {call}"
-        );
-        assert!(!call.contains("--delete"), "{call}");
-        // Blank patterns are dropped rather than sent to rclone.
-        assert!(!call.contains("--exclude   "), "{call}");
+        assert!(!unpacked.join("rel-savedata/debug.log").exists());
     }
 
     #[tokio::test]
@@ -190,16 +152,18 @@ mod tests {
         );
         assert_eq!(outcome.locations[0].action, "skipped");
         assert!(fake.calls().is_empty(), "no rclone call was needed");
+        assert!(
+            fake.package_names("demo").is_empty(),
+            "an empty package must not be uploaded"
+        );
     }
 
     #[tokio::test]
-    async fn a_failing_location_is_named_and_does_not_hide_the_others() {
-        let fake = FakeRclone::new("partial");
-        let first = fake.dir.join("one");
-        let second = fake.dir.join("two");
-        std::fs::create_dir_all(&first).unwrap();
-        std::fs::create_dir_all(&second).unwrap();
-        fake.fail_on(&format!("copy {} ", first.display()));
+    async fn one_missing_location_does_not_hold_back_the_others() {
+        let fake = FakeRclone::new("partial-missing");
+        let present = fake.dir.join("here");
+        std::fs::create_dir_all(&present).unwrap();
+        std::fs::write(present.join("save.sav"), "one").unwrap();
 
         let outcome = fake
             .runner(false, 0)
@@ -207,69 +171,90 @@ mod tests {
                 "demo",
                 "Demo",
                 &[
-                    target(&first, "one", "rel-one"),
-                    target(&second, "two", "rel-two"),
+                    target(&present, "here", "rel-here"),
+                    target(&fake.dir.join("elsewhere"), "there", "rel-there"),
                 ],
+            )
+            .await;
+
+        assert!(outcome.ok, "{outcome:?}");
+        assert_eq!(outcome.locations[0].action, "uploaded");
+        assert_eq!(outcome.locations[1].action, "skipped");
+
+        let packages = fake.package_names("demo");
+        let unpacked = fake.dir.join("check");
+        let manifest =
+            archive::extract(&fake.package_path("demo", &packages[0]), &unpacked).unwrap();
+        assert!(manifest.has_location("rel-here"));
+        assert!(!manifest.has_location("rel-there"));
+    }
+
+    #[tokio::test]
+    async fn a_failed_transfer_is_named_and_leaves_the_old_packages_alone() {
+        let fake = FakeRclone::new("partial");
+        let saves = fake.dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        std::fs::write(saves.join("save.sav"), "new").unwrap();
+        fake.put(
+            "kotori:bkt/prefix/games/demo/20260901T000000Z.zip",
+            "old package",
+        );
+
+        fake.fail_on("copyto ");
+
+        let outcome = fake
+            .runner(false, 0)
+            .upload(
+                "demo",
+                "Demo",
+                &[target(&saves, "savedata", "rel-savedata")],
             )
             .await;
 
         assert!(!outcome.ok);
         assert_eq!(outcome.locations[0].action, "failed");
+        assert!(outcome.error.unwrap().contains("copyto"));
+        // 旧包还在：这一版没上去，但回退能力一点没少。
         assert_eq!(
-            outcome.locations[1].action, "uploaded",
-            "one bad location must not abort the rest"
+            fake.package_names("demo"),
+            vec!["20260901T000000Z".to_string()]
         );
-        assert!(outcome.error.unwrap().contains("one"));
     }
 
     #[tokio::test]
-    async fn pulling_before_a_launch_can_never_overwrite_a_newer_local_save() {
-        let fake = FakeRclone::new("pull");
+    async fn retention_only_ever_deletes_our_own_old_packages() {
+        let fake = FakeRclone::new("prune-on-upload");
         let saves = fake.dir.join("saves");
         std::fs::create_dir_all(&saves).unwrap();
-        fake.set_listing(CURRENT, &["rel-savedata"]);
+        std::fs::write(saves.join("save.sav"), "one").unwrap();
+        for stamp in ["20260901T000000Z", "20260902T000000Z", "20260903T000000Z"] {
+            fake.put(&format!("kotori:bkt/prefix/games/demo/{stamp}.zip"), "old");
+        }
+        fake.put("kotori:bkt/prefix/games/demo/notes.txt", "not ours");
 
+        // 上传这一版之后一共四个包，保留两个：最老的两个该走。
         let outcome = fake
-            .runner(false, 0)
-            .pull(
+            .runner(false, 2)
+            .upload(
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
             )
             .await;
-
         assert!(outcome.ok, "{outcome:?}");
-        assert_eq!(outcome.locations[0].action, "pulled");
 
-        let call = &fake.calls()[1];
-        assert!(call.contains(&format!("{CURRENT}/rel-savedata {}", saves.display())));
-        // The whole point: an upload that failed earlier means the local copy is
-        // newer, and it must win.
-        assert!(call.contains("--update"), "{call}");
+        let left = fake.package_names("demo");
+        assert_eq!(left.len(), 2, "{left:?}");
+        assert_eq!(left[0], "20260903T000000Z", "{left:?}");
         assert!(
-            !call.contains("--backup-dir"),
-            "a pull must not create local versions: {call}"
+            !left
+                .iter()
+                .any(|name| name.starts_with("20260901") || name.starts_with("20260902")),
+            "the two oldest packages are the ones that go: {left:?}"
         );
-    }
-
-    #[tokio::test]
-    async fn a_game_the_cloud_has_never_seen_is_not_an_error() {
-        let fake = FakeRclone::new("pull-empty");
-        let saves = fake.dir.join("saves");
-        std::fs::create_dir_all(&saves).unwrap();
-
-        let outcome = fake
-            .runner(false, 0)
-            .pull(
-                "demo",
-                "Demo",
-                &[target(&saves, "savedata", "rel-savedata")],
-            )
-            .await;
-
-        assert!(outcome.ok, "{outcome:?}");
-        assert_eq!(outcome.locations[0].action, "skipped");
-        assert!(outcome.locations[0].detail.contains("云端还没有"));
-        assert_eq!(fake.calls().len(), 1, "only the listing happened");
+        assert!(
+            fake.remote_exists("kotori:bkt/prefix/games/demo/notes.txt"),
+            "pruning must never touch an object it does not recognise"
+        );
     }
 }

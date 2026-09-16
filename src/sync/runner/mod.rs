@@ -1,45 +1,50 @@
 //! Driving rclone: the orchestration half of cloud sync.
 //!
-//! [`super`] builds argument lists; this module runs them, resolves what each
-//! save location means on *this* machine, and reports per-location outcomes
-//! that the UI and CLI can show verbatim.
+//! [`super`] builds argument lists and `archive` knows what is inside a package;
+//! this module runs rclone, resolves what each save location means on *this*
+//! machine, and reports per-location outcomes that the UI and CLI can show
+//! verbatim.
 //!
-//! Three rules shape everything here (ADR-010 / ADR-011):
-//!   * **Never destroy local data.** Uploads use `copy` (which cannot delete at
-//!     the destination), the automatic pre-launch pull uses `--update` so a
-//!     newer local save always survives, and pruning only ever touches snapshot
-//!     directories in the cloud.
+//! Three rules shape everything here (ADR-010 / ADR-012):
+//!   * **Never destroy local data.** A package is uploaded whole, the automatic
+//!     pre-launch pull only takes files that are newer in the cloud, and pruning
+//!     only ever deletes packages in the cloud.
 //!   * **Secrets never touch a disk or a command line.** They are read from the
 //!     keyring and handed to the child through its environment.
 //!   * **A failure says what failed.** Every location gets its own outcome, so
 //!     "synced" is never reported for something that was skipped.
 //!
 //! 文件分工：本文件是 [`Runner`] 本身——超时预算、"跑一次 rclone"的传输底座，
-//! 以及每次操作的汇报类型（[`GameOutcome`] / [`LocationOutcome`]）；
-//! `upload.rs` 管上传与启动前拉取，`restore.rs` 管恢复与保留窗口，
-//! `diagnostics.rs` 把 rclone 的 stderr 翻成人话，`testing.rs` 是测试用的假 rclone。
+//! 以及"云端有哪些包"这几个查询；`upload.rs` 管上传，`pull.rs` 管启动前取回，
+//! `restore.rs` 管恢复与保留窗口，`staging.rs` 管临时目录与铺文件，
+//! `outcome.rs` 是汇报类型，`diagnostics.rs` 把 rclone 的 stderr 翻成人话，
+//! `testing.rs` 是测试用的假 rclone。
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use serde::Serialize;
 use tokio::io::AsyncWriteExt;
 
 use super::{
-    CURRENT_DIR, SaveTarget, SyncError, game_remote, is_snapshot, list_dirs_args, parse_dirs,
-    prune_plan, push_excludes, rclone_env, remote_root, validate, validate_secrets,
-    versions_remote,
+    SyncError, copyto_args, deletefile_args, game_remote, list_files_args, package_remote,
+    parse_packages, rclone_env, remote_root, validate, validate_secrets,
 };
 use crate::config::SyncConfig;
 use crate::secrets::{Keyring, SecretKey};
 
 use self::diagnostics::explain_failure;
+pub use self::outcome::{GameOutcome, LocationOutcome};
 
 mod diagnostics;
+mod outcome;
+mod pull;
 mod restore;
+mod staging;
 #[cfg(test)]
 mod testing;
+#[cfg(test)]
+mod tests;
 mod upload;
 
 /// Ceiling for one rclone invocation.
@@ -56,76 +61,14 @@ pub const PULL_TIMEOUT: Duration = Duration::from_secs(30);
 /// would come back on the next launch, so we wait a moment first.
 pub const SETTLE_DELAY: Duration = Duration::from_secs(3);
 
-/// What happened to one save location.
-#[derive(Debug, Clone, Serialize)]
-pub struct LocationOutcome {
-    /// The location as configured (portable form).
-    pub configured: String,
-    /// Where it resolved to on this machine.
-    pub local: String,
-    /// `uploaded` / `pulled` / `restored` / `skipped` / `failed`.
-    pub action: &'static str,
-    /// One line explaining the action, safe to show to the user.
-    pub detail: String,
-}
-
-impl LocationOutcome {
-    fn new(target: &SaveTarget, action: &'static str, detail: impl Into<String>) -> Self {
-        Self {
-            configured: target.configured.clone(),
-            local: target.local.to_string_lossy().to_string(),
-            action,
-            detail: detail.into(),
-        }
-    }
-
-    pub fn ok(&self) -> bool {
-        self.action != "failed"
-    }
-}
-
-/// Result of one operation on one game.
-#[derive(Debug, Clone, Serialize)]
-pub struct GameOutcome {
-    pub game_id: String,
-    pub name: String,
-    pub ok: bool,
-    pub locations: Vec<LocationOutcome>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl GameOutcome {
-    pub fn failed(game_id: &str, name: &str, error: impl Into<String>) -> Self {
-        Self {
-            game_id: game_id.to_string(),
-            name: name.to_string(),
-            ok: false,
-            locations: Vec::new(),
-            error: Some(error.into()),
-        }
-    }
-
-    fn from_locations(game_id: &str, name: &str, locations: Vec<LocationOutcome>) -> Self {
-        let error = locations
-            .iter()
-            .find(|o| !o.ok())
-            .map(|o| format!("{}: {}", o.configured, o.detail));
-        Self {
-            game_id: game_id.to_string(),
-            name: name.to_string(),
-            ok: error.is_none(),
-            locations,
-            error,
-        }
-    }
-}
-
 /// Runs rclone against one sync configuration.
 pub struct Runner {
     rclone: PathBuf,
     settings: SyncConfig,
     keyring: Keyring,
+    /// 打包与解包的落脚点。默认在数据目录下（`~/.local/share/kotori/sync`），
+    /// **不放在存档目录旁边**：那儿多出来的临时文件会被下一次打包收进去。
+    work_dir: PathBuf,
 }
 
 impl Runner {
@@ -146,7 +89,18 @@ impl Runner {
             rclone: rclone.into(),
             settings,
             keyring,
+            work_dir: crate::config::data_dir().join("sync"),
         }
+    }
+
+    /// Point the temporary work area somewhere else.
+    ///
+    /// 只给测试用：一次测试运行绝不该往真实数据目录里写包（生产路径永远走
+    /// 数据目录下的 `sync/`）。
+    #[cfg(test)]
+    pub fn with_work_dir(mut self, dir: impl Into<PathBuf>) -> Self {
+        self.work_dir = dir.into();
+        self
     }
 
     /// Structural check plus "are the credentials actually there".
@@ -304,125 +258,53 @@ impl Runner {
         Ok(root)
     }
 
-    /// The save-location directories that already exist in the cloud.
-    pub async fn current_keys(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
-        let remote = format!("{}/{CURRENT_DIR}", game_remote(&self.settings, game_id));
-        let output = self.run(&list_dirs_args(&remote), COMMAND_TIMEOUT).await?;
-        Ok(parse_dirs(&output))
+    /// The version packages the cloud holds for a game, oldest first.
+    pub async fn packages(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
+        let remote = game_remote(&self.settings, game_id);
+        let output = self.run(&list_files_args(&remote), COMMAND_TIMEOUT).await?;
+        // Only ever report names that look like our own packages.
+        Ok(parse_packages(&output))
     }
 
-    /// Snapshot stamps present in the cloud, oldest first.
-    pub async fn versions(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
-        let remote = versions_remote(&self.settings, game_id);
-        let output = self.run(&list_dirs_args(&remote), COMMAND_TIMEOUT).await?;
-        // Only ever report our own snapshot directories.
-        Ok(parse_dirs(&output)
-            .into_iter()
-            .filter(|name| super::is_snapshot(name))
-            .collect())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::sync::runner::testing::FakeRclone;
-
-    #[tokio::test]
-    async fn credentials_reach_rclone_through_the_environment_only() {
-        let fake = FakeRclone::new("secrets");
-        let outcome = fake.runner(false, 0).check().await.unwrap();
-        assert_eq!(outcome, "kotori:bkt/prefix");
-
-        let calls = fake.calls();
-        assert!(calls[0].starts_with("mkdir kotori:bkt/prefix"), "{calls:?}");
-        // Nothing secret may ever appear on a command line: `ps` is world-read.
-        for call in &calls {
-            assert!(!call.contains("appkey456"), "{call}");
-            assert!(!call.contains("keyid123"), "{call}");
-        }
-
-        let env = fake.env_log();
-        assert!(
-            env.contains("env:RCLONE_CONFIG_KOTORI_ACCOUNT=keyid123"),
-            "{env}"
-        );
-        assert!(
-            env.contains("env:RCLONE_CONFIG_KOTORI_KEY=appkey456"),
-            "{env}"
-        );
-        assert!(env.contains("env:RCLONE_CONFIG=/dev/null"), "{env}");
-        // Unencrypted setups carry no crypt remote at all.
-        assert!(!env.contains("KOTORIENC"), "{env}");
+    /// The newest package, or `None` when the cloud has never seen this game.
+    ///
+    /// "Newest" is simply the largest name: the stamp starts with second-
+    /// precision UTC, so lexicographic order is chronological order and no
+    /// pointer file has to be kept in sync.
+    pub async fn latest_package(&self, game_id: &str) -> Result<Option<String>, SyncError> {
+        Ok(self.packages(game_id).await?.pop())
     }
 
-    #[tokio::test]
-    async fn encrypted_setups_hand_over_only_the_obscured_password() {
-        let fake = FakeRclone::new("encrypted");
-        fake.runner(true, 0).check().await.unwrap();
-
-        let env = fake.env_log();
-        assert!(
-            env.contains("env:RCLONE_CONFIG_KOTORIENC_TYPE=crypt"),
-            "{env}"
-        );
-        assert!(
-            env.contains("env:RCLONE_CONFIG_KOTORIENC_PASSWORD=obscured-blob"),
-            "{env}"
-        );
-        assert!(!env.contains("hunter2"), "{env}");
+    /// Download one package to a local file.
+    pub async fn fetch_package(
+        &self,
+        game_id: &str,
+        stamp: &str,
+        into: &Path,
+        timeout: Duration,
+    ) -> Result<(), SyncError> {
+        let remote = package_remote(&self.settings, game_id, stamp);
+        let args = copyto_args(&remote, &into.to_string_lossy());
+        self.run(&args, timeout).await.map(|_| ())
     }
 
-    #[tokio::test]
-    async fn missing_credentials_stop_the_run_before_rclone_is_started() {
-        let fake = FakeRclone::new("no-secrets");
-        let runner = Runner::with_binary(&fake.bin, fake.settings(false, 0), Keyring::memory());
-        let outcome = runner.upload("demo", "Demo", &[]).await;
-
-        assert!(!outcome.ok);
-        assert!(outcome.error.unwrap().contains("B2 凭据"));
-        assert!(fake.calls().is_empty());
+    /// Upload one local file as this game's package.
+    pub async fn send_package(
+        &self,
+        game_id: &str,
+        stamp: &str,
+        from: &Path,
+        timeout: Duration,
+    ) -> Result<(), SyncError> {
+        let remote = package_remote(&self.settings, game_id, stamp);
+        let args = copyto_args(&from.to_string_lossy(), &remote);
+        self.run(&args, timeout).await.map(|_| ())
     }
 
-    #[test]
-    fn a_missing_endpoint_means_rclone_picks_one() {
-        // The native B2 backend is happy with no endpoint, and that is the
-        // normal case; the S3 endpoint the B2 console shows is a different API
-        // and is rejected before a run ever starts (see `sync::validate`).
-        let fake = FakeRclone::new("no-endpoint");
-        let settings = fake.settings(false, 0);
-        assert!(settings.endpoint.is_empty());
-        assert!(crate::sync::validate(&settings).is_ok());
-    }
-
-    #[tokio::test]
-    async fn obscuring_is_left_to_rclone_and_stored_in_both_forms() {
-        let fake = FakeRclone::new("obscure");
-        let runner = fake.runner(true, 0);
-        // The fake echoes back what it read on stdin, so this value is proof
-        // that the password travelled there rather than on the command line.
-        assert_eq!(runner.obscure("hunter2").await.unwrap(), "obscured-hunter2");
-
-        let calls = fake.calls();
-        assert!(calls[0].starts_with("obscure -"), "{calls:?}");
-        assert!(
-            !calls[0].contains("hunter2"),
-            "the password must not be on the command line: {calls:?}"
-        );
-        // No credentials are needed to obscure, and the user's own rclone.conf
-        // must not be consulted even here.
-        assert!(!fake.env_log().contains("RCLONE_CONFIG_KOTORI_KEY="));
-        assert!(fake.env_log().contains("env:RCLONE_CONFIG=/dev/null"));
-    }
-
-    #[tokio::test]
-    async fn a_disabled_sync_config_is_refused() {
-        let fake = FakeRclone::new("disabled");
-        let mut settings = fake.settings(false, 0);
-        settings.enabled = false;
-        let runner = Runner::with_binary(&fake.bin, settings, fake.keyring(false));
-
-        assert!(matches!(runner.ready(), Err(SyncError::NotEnabled)));
-        assert!(fake.calls().is_empty());
+    /// Delete one version package.
+    async fn remove_package(&self, game_id: &str, stamp: &str) -> Result<(), SyncError> {
+        let remote = package_remote(&self.settings, game_id, stamp);
+        let args = deletefile_args(&remote);
+        self.run(&args, COMMAND_TIMEOUT).await.map(|_| ())
     }
 }

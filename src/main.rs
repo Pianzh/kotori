@@ -622,9 +622,9 @@ fn print_sync_result(method: &str, value: &serde_json::Value) {
         "sync.versions" => {
             let versions = value["versions"].as_array().cloned().unwrap_or_default();
             if versions.is_empty() {
-                println!("云端还没有这个游戏的快照");
+                println!("云端还没有这个游戏的存档版本");
             } else {
-                println!("快照（最旧在前）:");
+                println!("版本（最旧在前）:");
                 for version in versions {
                     println!("  {}", version.as_str().unwrap_or("-"));
                 }

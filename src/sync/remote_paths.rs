@@ -1,10 +1,10 @@
 //! 远端路径与键名：把 bucket/prefix、游戏 id 和存档位置翻译成 rclone 认得的
 //! `remote:path`，以及云端每个存档位置该叫什么目录名。
 //!
-//! 与 `snapshots` 分开：这里只回答"东西放在哪"，快照的命名、识别与保留策略
+//! 与 `snapshots` 分开：这里只回答"东西放在哪"，包的命名、识别与保留策略
 //! 全在那边。
 
-use super::{REMOTE, REMOTE_CRYPT, VERSIONS_DIR};
+use super::{REMOTE, REMOTE_CRYPT};
 use crate::config::SyncConfig;
 
 /// Does the configured remote carry the crypt layer?
@@ -33,14 +33,21 @@ pub fn remote_root(settings: &SyncConfig) -> String {
     }
 }
 
-/// Remote directory holding one game's save data.
+/// Remote directory holding one game's version packages.
+///
+/// 一版一个包，所以这个目录里**只有**包：`<stamp>.zip`。"最新的一版"就是名字
+/// 最大的那个包，不额外维护指针文件——少一个会写坏的东西。
 pub fn game_remote(settings: &SyncConfig, game_id: &str) -> String {
     format!("{}/games/{game_id}", remote_root(settings))
 }
 
-/// Remote directory holding one game's version snapshots.
-pub fn versions_remote(settings: &SyncConfig, game_id: &str) -> String {
-    format!("{}/{VERSIONS_DIR}", game_remote(settings, game_id))
+/// Remote path of one version package.
+pub fn package_remote(settings: &SyncConfig, game_id: &str, stamp: &str) -> String {
+    format!(
+        "{}/{stamp}{}",
+        game_remote(settings, game_id),
+        super::PACKAGE_SUFFIX
+    )
 }
 
 /// A stable, readable directory name for one save location.
@@ -94,9 +101,10 @@ mod tests {
             game_remote(&config, "3days"),
             "kotori:kotori-saves/prefix/games/3days"
         );
+        // 一版一个包：远端目录里只有 `<stamp>.zip`。
         assert_eq!(
-            versions_remote(&config, "3days"),
-            "kotori:kotori-saves/prefix/games/3days/versions"
+            package_remote(&config, "3days", "20260915T120000Z-1a2b3c4d"),
+            "kotori:kotori-saves/prefix/games/3days/20260915T120000Z-1a2b3c4d.zip"
         );
 
         // Encrypted setups read through the crypt remote.

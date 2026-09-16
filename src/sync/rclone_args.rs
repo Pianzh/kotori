@@ -1,90 +1,42 @@
-//! 一次 rclone 调用的参数表：上行与下行都用 `copy`，列目录用 `lsf`，删快照用
-//! `purge`，外加把明文密码交给 rclone 自己 `obscure`。
+//! 一次 rclone 调用的参数表：一个包上行或下行都用 `copyto`（整份搬一个对象），
+//! 列包用 `lsf --files-only`，删旧包用 `deletefile`，另外把明文密码交给 rclone
+//! 自己 `obscure`。
 //!
 //! 单独成文件，是因为"参数长什么样"（这里）、"凭据从哪来"（`rclone_env`）、
 //! "跑起来以后怎么解读结果"（`runner`）是三件事。这里全是纯函数：不碰进程、
 //! 不碰网络，可以逐条断言。
+//!
+//! ⚠ 这里**没有** `copy`/`sync` 了：一版一包之后，一次传输就是一个 zip 对象的
+//! 一来一回，不存在"目录对目录地合并"这件事——合并（只取新的 / 覆盖）改由我们
+//! 自己在 `archive` 里做，那是 ADR-012 的新落点。
 
-/// How a transfer treats a file that already exists at the destination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Merge {
-    /// Overwrite the destination, moving whatever it replaced into the version
-    /// snapshot. This is what an upload does.
-    Replace,
-    /// Never overwrite a **newer** file at the destination (`rclone --update`).
-    ///
-    /// This is what the automatic pre-launch pull uses: if an earlier upload
-    /// failed (no network, machine crashed) the local saves are newer than the
-    /// cloud, and a plain restore would happily throw away the progress the
-    /// user just made. With `--update` the newer local copy simply wins.
-    Newer,
-}
-
-/// Arguments for uploading local data into the cloud (`rclone copy`).
+/// Arguments for moving one local file to a remote object (`rclone copyto`).
 ///
-/// `copy` never deletes anything on the destination, and it is also what makes
-/// a re-run after a failure cheap: only changed files move.
-pub fn copy_args(
-    source: &str,
-    destination: &str,
-    backup_dir: Option<&str>,
-    merge: Merge,
-) -> Vec<String> {
-    let mut args = vec![
-        "copy".to_string(),
-        source.to_string(),
-        destination.to_string(),
-    ];
-    args.push("--create-empty-src-dirs".to_string());
-    if merge == Merge::Newer {
-        args.push("--update".to_string());
-    }
-    if let Some(backup_dir) = backup_dir {
-        // Replaced files are moved aside instead of being overwritten, which is
-        // what gives us version history without a repository format.
-        args.push("--backup-dir".to_string());
-        args.push(backup_dir.to_string());
-        args.push("--suffix".to_string());
-        args.push(String::new());
-    }
-    args
-}
-
-/// Append the per-location ignore patterns.
-pub fn push_excludes(args: &mut Vec<String>, exclude: &[String]) {
-    for pattern in exclude {
-        let pattern = pattern.trim();
-        if !pattern.is_empty() {
-            args.push("--exclude".to_string());
-            args.push(pattern.to_string());
-        }
-    }
-}
-
-/// Arguments for downloading cloud data into a local directory.
-pub fn restore_args(source: &str, destination: &str) -> Vec<String> {
-    // Deliberately `copy`, never `sync`: a bad backup must not delete saves.
+/// `copyto` 而不是 `copy`：源是一个临时 zip 文件，目的地是一个**确切的远端
+/// 对象名**，不是目录。B2 的对象上传是原子的（没传完的对象不在列表里），所以
+/// 不需要 `.part` + rename 那一套。
+pub fn copyto_args(source: &str, destination: &str) -> Vec<String> {
     vec![
-        "copy".to_string(),
+        "copyto".to_string(),
         source.to_string(),
         destination.to_string(),
-        "--create-empty-src-dirs".to_string(),
     ]
 }
 
-/// Arguments for listing the immediate sub-directories of a remote path.
-pub fn list_dirs_args(remote: &str) -> Vec<String> {
+/// Arguments for listing the files (not directories) of a remote path.
+///
+/// 远端目录里只有包，所以 `lsf` 就够了：不需要递归，也不需要传输大小。
+pub fn list_files_args(remote: &str) -> Vec<String> {
     vec![
         "lsf".to_string(),
-        "--dirs-only".to_string(),
+        "--files-only".to_string(),
         remote.to_string(),
     ]
 }
 
-/// Arguments for removing one remote directory (a version snapshot).
-pub fn purge_args(remote: &str) -> Vec<String> {
-    vec!["purge".to_string(), remote.to_string()]
+/// Arguments for removing one remote object (an expired version package).
+pub fn deletefile_args(remote: &str) -> Vec<String> {
+    vec!["deletefile".to_string(), remote.to_string()]
 }
 
 /// Arguments that turn a plain password into the form rclone stores.
@@ -106,27 +58,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn upload_uses_copy_and_moves_replaced_files_aside() {
-        let args = copy_args(
-            "/saves/3days",
-            "kotori:prefix/games/3days/current/win-appdata",
-            Some("kotori:prefix/games/3days/versions/20260911T101500Z"),
-            Merge::Replace,
-        );
-        assert_eq!(args[0], "copy", "never sync: it could delete remote data");
-        assert!(args.contains(&"--backup-dir".to_string()));
-        assert!(args.contains(&"kotori:prefix/games/3days/versions/20260911T101500Z".to_string()));
+    fn a_transfer_is_one_object_each_way() {
+        let args = copyto_args("/tmp/kotori-3days.zip", "kotori:prefix/games/3days/v.zip");
+        assert_eq!(args[0], "copyto", "源是文件、目的地是确切的对象名");
+        assert_eq!(args.len(), 3);
+        // 目录式的合并已经不存在了：它正是"快照只是差量"那套东西的入口。
+        for forbidden in ["copy", "sync", "--backup-dir", "--update"] {
+            assert!(!args.iter().any(|a| a == forbidden), "{args:?}");
+        }
     }
 
     #[test]
-    fn restore_never_deletes_local_saves() {
-        let args = restore_args("kotori:prefix/games/3days/current", "/saves/3days");
-        assert_eq!(args[0], "copy");
-        assert!(
-            !args.iter().any(|a| a == "sync"),
-            "a broken backup must not be able to wipe local saves"
+    fn listing_asks_for_files_only_and_deleting_names_one_object() {
+        assert_eq!(
+            list_files_args("kotori:prefix/games/3days"),
+            vec![
+                "lsf".to_string(),
+                "--files-only".to_string(),
+                "kotori:prefix/games/3days".to_string()
+            ]
         );
-        assert!(!args.iter().any(|a| a == "--delete" || a == "--backup-dir"));
+        assert_eq!(
+            deletefile_args("kotori:prefix/games/3days/v.zip"),
+            vec![
+                "deletefile".to_string(),
+                "kotori:prefix/games/3days/v.zip".to_string()
+            ]
+        );
     }
 
     #[test]
