@@ -137,6 +137,7 @@ mod test_support {
             name: "Demo Game".into(),
             game_dir: "/games/demo".into(),
             exe: "/games/demo/game.exe".into(),
+            launch_args: Vec::new(),
             save_paths: Vec::new(),
             watch_only: false,
             process_name: String::new(),
@@ -148,6 +149,7 @@ mod test_support {
             scale_ratio: None,
             fullscreen: true,
             framerate: None,
+            gamescope_args: Vec::new(),
         }
     }
 }

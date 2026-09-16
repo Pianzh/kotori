@@ -95,18 +95,40 @@ export component GameScaleAdvancedGroup inherits Rectangle {
     in-out property <string> ratio: "";
     in-out property <string> output-w: "";
     in-out property <string> output-h: "";
+    // 手写的 gamescope 参数,空 = 由 kotori 按上面那几项拼。
+    in-out property <string> gamescope-args: "";
 
     callback internal-w-changed(string);
     callback internal-h-changed(string);
     callback ratio-changed(string);
     callback output-w-changed(string);
     callback output-h-changed(string);
+    callback gamescope-args-changed(string);
+
+    // 自由参数填了,下面三项当前就不生效了。**只是变淡,不禁用**:它们仍然是
+    // 档案的一部分 —— 把上面那一行清空,用户之前调好的尺寸立刻回来。
+    private property <bool> overridden: root.gamescope-args != "";
 
     height: group.height;
     group := Group {
                     CardRow {
+                        title: "gamescope 参数（自定义）";
+                        description: "填了它，下面三项以及上面的缩放算法、锐度、全屏、帧率就全部让位：kotori 一个参数都不发，只用你写的这一行（游戏命令仍由 kotori 接在后面）。参数之间用空格分隔，写法请对着 gamescope --help 自己核对。这一模式下运行时缩放（快捷键那套）不生效。";
+                        TextField {
+                            field-width: 300px;
+                            text <=> root.gamescope-args;
+                            edited(text) => { root.gamescope-args-changed(text); }
+                            placeholder: "例如 -f -W 1920 -H 1080";
+                        }
+                    }
+                    Divider { }
+                    VerticalLayout {
+                    opacity: root.overridden ? 0.45 : 1;
+                    CardRow {
                         title: "游戏分辨率";
-                        description: "游戏自己渲染的尺寸(传给 gamescope 的 -w/-h)。留空＝不传,由 gamescope 用它自己的默认值(1280×720)—— 下面「缩放倍数」的除数就是它。";
+                        description: root.overridden
+                            ? "当前不生效（上面填了自定义参数）。"
+                            : "游戏自己渲染的尺寸(传给 gamescope 的 -w/-h)。留空＝不传,由 gamescope 用它自己的默认值(1280×720)—— 下面「缩放倍数」的除数就是它。";
                         HorizontalLayout {
                             spacing: 6px;
                             alignment: center;
@@ -128,7 +150,9 @@ export component GameScaleAdvancedGroup inherits Rectangle {
                     Divider { }
                     CardRow {
                         title: "缩放倍数";
-                        description: "留空＝自动(按屏幕开满)。填了就按它开窗:输出像素 ÷ 游戏分辨率。";
+                        description: root.overridden
+                            ? "当前不生效（上面填了自定义参数）。"
+                            : "留空＝自动(按屏幕开满)。填了就按它开窗:输出像素 ÷ 游戏分辨率。";
                         TextField {
                             field-width: 120px;
                             text <=> root.ratio;
@@ -139,7 +163,9 @@ export component GameScaleAdvancedGroup inherits Rectangle {
                     Divider { }
                     CardRow {
                         title: "输出分辨率";
-                        description: "留空＝自动(跟随屏幕,也就是启动即最大化)。填了窗口就开这个尺寸;填了上面的倍数时以倍数优先。";
+                        description: root.overridden
+                            ? "当前不生效（上面填了自定义参数）。"
+                            : "留空＝自动(跟随屏幕,也就是启动即最大化)。填了窗口就开这个尺寸;填了上面的倍数时以倍数优先。";
                         HorizontalLayout {
                             spacing: 6px;
                             alignment: center;
@@ -157,6 +183,7 @@ export component GameScaleAdvancedGroup inherits Rectangle {
                                 placeholder: "自动";
                             }
                         }
+                    }
                     }
     }
 }

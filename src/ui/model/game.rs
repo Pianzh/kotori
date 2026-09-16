@@ -32,6 +32,8 @@ pub struct UiGame {
     pub name: String,
     pub game_dir: String,
     pub exe: String,
+    /// 传给这个 exe 的额外参数(存的是原始 argv,页面里拼成一行显示)。
+    pub launch_args: Vec<String>,
     pub save_paths: Vec<SavePathDraft>,
     /// Watch-only games are started by the user; kotori follows the process.
     pub watch_only: bool,
@@ -53,6 +55,9 @@ pub struct UiGame {
     pub scale_ratio: Option<f32>,
     pub fullscreen: bool,
     pub framerate: Option<u32>,
+    /// 用户手写的 gamescope 参数;非空时它取代档案里的一切(见
+    /// [`ScaleProfile::gamescope_args`])。
+    pub gamescope_args: Vec<String>,
 }
 
 /// Editable copy of a game's scale profile.
@@ -67,6 +72,10 @@ pub(in crate::ui) struct Draft {
     pub(in crate::ui) game_dir_original: String,
     pub(in crate::ui) exe: String,
     pub(in crate::ui) exe_original: String,
+    /// exe 的额外参数。跟 exe 路径一样留着原值:没改就不发,免得打断一次
+    /// 正在跑的游戏(daemon 那边是按字段 patch 的)。
+    pub(in crate::ui) launch_args: String,
+    pub(in crate::ui) launch_args_original: String,
     pub(in crate::ui) save_paths: Vec<SavePathDraft>,
     pub(in crate::ui) save_paths_original: Vec<SavePathDraft>,
     pub(in crate::ui) algo: String,
@@ -81,6 +90,9 @@ pub(in crate::ui) struct Draft {
     pub(in crate::ui) scale_ratio: String,
     pub(in crate::ui) fullscreen: bool,
     pub(in crate::ui) framerate: String,
+    /// gamescope 自由参数,存成**一行文本**:页面上就是这么编辑的,存成 argv
+    /// 每次都要切分再拼回来,而且用户写的原样(多余空格)会丢。
+    pub(in crate::ui) gamescope_args: String,
 }
 
 impl Draft {
@@ -94,6 +106,8 @@ impl Draft {
             game_dir_original: game.game_dir.clone(),
             exe: game.exe.clone(),
             exe_original: game.exe.clone(),
+            launch_args: game.launch_args.join(" "),
+            launch_args_original: game.launch_args.join(" "),
             save_paths: game.save_paths.clone(),
             save_paths_original: game.save_paths.clone(),
             algo: if ScaleAlgorithm::ALL.contains(&game.algo.as_str()) {
@@ -113,6 +127,7 @@ impl Draft {
             scale_ratio: game.scale_ratio.map(|r| r.to_string()).unwrap_or_default(),
             fullscreen: game.fullscreen,
             framerate: game.framerate.map(|f| f.to_string()).unwrap_or_default(),
+            gamescope_args: game.gamescope_args.join(" "),
         }
     }
 
@@ -124,6 +139,11 @@ impl Draft {
     /// Has the user changed the game root?
     pub(in crate::ui) fn game_dir_changed(&self) -> bool {
         self.game_dir.trim() != self.game_dir_original
+    }
+
+    /// Has the user changed the exe's extra arguments?
+    pub(in crate::ui) fn launch_args_changed(&self) -> bool {
+        self.launch_args.trim() != self.launch_args_original.trim()
     }
 
     /// Has the user changed the save locations?
@@ -140,6 +160,7 @@ impl Draft {
         let stored = Draft::from_game(game);
         self.exe.trim() == stored.exe.trim()
             && self.game_dir.trim() == stored.game_dir.trim()
+            && self.launch_args.trim() == stored.launch_args.trim()
             && self.save_paths == stored.save_paths
             && profile_from_draft(self).ok() == profile_from_draft(&stored).ok()
     }

@@ -204,6 +204,18 @@ impl App {
                 }
                 self.schedule_auto_save()
             }
+            Message::LaunchArgsChanged(v) => {
+                if let Some(d) = &mut self.draft {
+                    d.launch_args = v;
+                }
+                self.schedule_auto_save()
+            }
+            Message::GamescopeArgsChanged(v) => {
+                if let Some(d) = &mut self.draft {
+                    d.gamescope_args = v;
+                }
+                self.schedule_auto_save()
+            }
             Message::DeleteRequested => {
                 self.confirm_delete = true;
                 Task::none()

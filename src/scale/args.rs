@@ -41,11 +41,28 @@ pub fn sharpness_to_gamescope(sharpness: u32) -> u32 {
 ///
 /// `screen` is passed in rather than probed here, so this stays a pure function of
 /// its arguments and no test depends on the machine it runs on.
+///
+/// A profile that carries [`ScaleProfile::gamescope_args`] skips everything above:
+/// those arguments are the user's own, kotori adds only the `--` separator and the
+/// game command. Nothing here tries to merge the two — "replace" is the meaning the
+/// user picked (2026-09-16), because a merge would have to parse gamescope's option
+/// grammar and guess which of two `-F` values was meant.
 pub fn build_gamescope_args(
     profile: &ScaleProfile,
     screen: (u32, u32),
     game_cmd: &[String],
 ) -> Vec<String> {
+    // Everything kotori would have worked out is dropped, not merged: the user's
+    // line is the whole command line. `--` is still ours to add (and `validate`
+    // rejects a user-written one — two of them would turn the second into the
+    // command gamescope tries to run).
+    if profile.free_form() {
+        let mut args = profile.gamescope_args.clone();
+        args.push("--".into());
+        args.extend(game_cmd.iter().cloned());
+        return args;
+    }
+
     let mut args: Vec<String> = Vec::new();
 
     if let Some((width, height)) = profile.explicit_internal_size() {
@@ -304,5 +321,66 @@ mod tests {
         assert_eq!(&args[sep + 1..], ["/usr/bin/wine", "/games/x/game.exe"]);
         // Nothing after the separator may look like a gamescope flag.
         assert_eq!(args.len(), sep + 3);
+    }
+
+    /// 自由参数是**完全替换**,不是"追加"也不是"合并":档案里其它每一项都不许漏出来。
+    ///
+    /// 这一条是这套功能的全部语义(用户 2026-09-16 选的)。写成断言清单而不是
+    /// "命令行长这样",是因为真正的失败模式是**多**了一个参数,而多出来的那个
+    /// 恰恰会悄悄赢过用户写的(`-F fsr` 出现在 `-F nearest` 之后)。
+    #[test]
+    fn free_form_arguments_replace_everything_kotori_would_have_built() {
+        let mut p = profile(ScaleAlgorithm::Fsr { sharpness: 5 });
+        p.internal_width = Some(640);
+        p.internal_height = Some(480);
+        p.output_width = Some(1920);
+        p.output_height = Some(1080);
+        p.framerate_limit = Some(60);
+        p.force_fullscreen = true;
+        p.gamescope_args = vec![
+            "-w".into(),
+            "800".into(),
+            "-h".into(),
+            "600".into(),
+            "--backend".into(),
+            "wayland".into(),
+        ];
+
+        let args = build_gamescope_args(&p, SCREEN, &game_cmd());
+
+        assert_eq!(
+            args,
+            [
+                "-w",
+                "800",
+                "-h",
+                "600",
+                "--backend",
+                "wayland",
+                "--",
+                "/usr/bin/wine",
+                "/games/x/game.exe"
+            ]
+            .map(String::from)
+        );
+
+        // 档案里那些值一个都没进去 —— 包括 kotori 自己算出来的屏幕尺寸。
+        for stray in [
+            "640",
+            "480",
+            "1920",
+            "1080",
+            "60",
+            "2560",
+            "1440",
+            "fsr",
+            "fit",
+            "sharpness",
+        ] {
+            assert!(
+                !args.iter().any(|arg| arg == stray),
+                "自由参数模式混进了档案里的值 {stray}:{args:?}"
+            );
+        }
     }
 }

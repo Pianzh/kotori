@@ -111,6 +111,7 @@ export component AppWindow inherits Window {
     callback delete-confirmed();
     callback game-dir-changed(string);
     callback exe-changed(string);
+    callback launch-args-changed(string);
     callback ratio-changed(string);
     callback algo-picked(int);
     callback sharpness-changed(int);
@@ -120,6 +121,7 @@ export component AppWindow inherits Window {
     callback output-h-changed(string);
     callback fullscreen-toggled(bool);
     callback framerate-changed(string);
+    callback gamescope-args-changed(string);
     callback add-save();
     callback remove-save(int);
     callback save-kind-picked(int, int);
@@ -316,6 +318,7 @@ export component AppWindow inherits Window {
                             delete-confirmed => { root.delete-confirmed(); }
                             game-dir-changed(text) => { root.game-dir-changed(text); }
                             exe-changed(text) => { root.exe-changed(text); }
+                            launch-args-changed(text) => { root.launch-args-changed(text); }
                             browse-game-dir => { root.browse-game-dir(); }
                             browse-exe => { root.browse-exe(); }
                             browse-save(index) => { root.browse-save(index); }
@@ -328,6 +331,7 @@ export component AppWindow inherits Window {
                             output-h-changed(text) => { root.output-h-changed(text); }
                             fullscreen-toggled(value) => { root.fullscreen-toggled(value); }
                             framerate-changed(text) => { root.framerate-changed(text); }
+                            gamescope-args-changed(text) => { root.gamescope-args-changed(text); }
                             add-save => { root.add-save(); }
                             remove-save(index) => { root.remove-save(index); }
                             save-kind-picked(index, kind) => { root.save-kind-picked(index, kind); }

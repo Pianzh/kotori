@@ -181,6 +181,11 @@ impl GamescopeScaleEngine {
     /// nothing else changed the filter. Falling back to the profile keeps a fresh
     /// session honest: it was launched with exactly those arguments.
     pub async fn live_settings(&self, session: &ScaleSession) -> Option<Settings> {
+        // 自由参数模式下档案里那个算法**没有**发给 gamescope:回退到它等于报一个
+        // 从来没存在过的状态。`None` 才是实话 —— "这一局不归我们管"。
+        if session.profile.free_form() {
+            return None;
+        }
         let pid = session.gamescope_pid?;
         let display = GamescopeDisplay::discover(pid).ok().flatten()?;
         display
@@ -214,6 +219,16 @@ impl GamescopeScaleEngine {
             let Some(pid) = session.gamescope_pid else {
                 continue;
             };
+            // 用户自己写了 gamescope 参数:运行时动作往 gamescope 的 Xwayland 属性里
+            // 写滤镜与缩放,会当场盖掉他写下的 `-F`/`-S` —— 那正是他明确关掉的东西
+            // (见 `ScaleProfile::free_form`)。如实说"没动",而不是假装成功。
+            if session.profile.free_form() {
+                outcome.failed.push((
+                    session.session_id.clone(),
+                    "这一局用的是自定义 gamescope 参数，kotori 不动它的缩放设置".to_string(),
+                ));
+                continue;
+            }
             let result = if action.is_filter() {
                 self.apply_filter(pid, &session, action)
                     .map(|it| describe(&it))

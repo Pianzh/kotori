@@ -143,6 +143,10 @@ fn game_detail(game: &UiGame) -> GameDetail {
             .map(|f| f.to_string())
             .unwrap_or_default()
             .into(),
+        // 两项都是"一行文本":存的是 argv,"进页面抄一遍"时拼成一行,存回去时
+        // 按空白再切开(见 `parse::scale::split_args`)。
+        launch_args: game.launch_args.join(" ").into(),
+        gamescope_args: game.gamescope_args.join(" ").into(),
     }
 }
 impl App {

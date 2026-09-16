@@ -79,6 +79,18 @@ pub struct ScaleProfile {
     /// `-W/-H` already give, with `-f` nowhere in sight.
     #[serde(default)]
     pub force_fullscreen: bool,
+    /// gamescope 参数,由用户**手写**。
+    ///
+    /// **非空时它取代上面全部**(用户 2026-09-16 定的语义):kotori 一个参数都不发
+    /// —— `-w/-h/-W/-H/-S/-F/--sharpness/-r/-f` 通通让位 —— 只把自己追加的 `--`
+    /// 和游戏命令接在这一串后面。空 = 照常按上面的字段拼。
+    ///
+    /// 切分是**按空白**(见 [`crate::scale::args::build_gamescope_args`]):这是高级
+    /// 选项,写法由用户自己负责,kotori 不去猜引号语义(猜错比不猜更难查)。
+    ///
+    /// 这一模式下**运行时缩放被禁用**(见 [`ScaleProfile::free_form`] 的说明)。
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gamescope_args: Vec<String>,
 }
 
 /// Scaling algorithm bound to a game.
@@ -157,7 +169,19 @@ impl ScaleProfile {
             scale_ratio: None,
             framerate_limit: None,
             force_fullscreen: false,
+            gamescope_args: Vec::new(),
         }
+    }
+
+    /// gamescope 的命令行是不是**完全**由用户手写([`ScaleProfile::gamescope_args`])。
+    ///
+    /// 它不只是"参数怎么拼"的开关,也是**运行时缩放的开关**:那套动作(`ScaleAction`)
+    /// 往 gamescope 的 Xwayland 根窗口写滤镜/缩放属性,会当场盖掉用户亲手写的
+    /// `-F`/`-S` —— 用户既然说了"我说了算",kotori 就不该在游戏跑起来之后再去动它。
+    /// 所以 `apply_action` 会跳过这类会话,`live_settings` 也不回报状态(档案里那个
+    /// 算法根本没发给 gamescope,拿它冒充"现在"是撒谎)。
+    pub fn free_form(&self) -> bool {
+        !self.gamescope_args.is_empty()
     }
 
     /// The game resolution to *launch* with, when the profile names one.
@@ -281,193 +305,20 @@ impl ScaleProfile {
             }
         }
 
+        // 自由参数**不做白名单**(它的卖点就是自由,而且 gamescope 各版本的参数还
+        // 在变),只挡一样东西:用户自己写 `--`。kotori 要在游戏命令前放一个,用户
+        // 再写一个,后面那半截就成了 gamescope 眼里的"命令" —— 报出来的错跟真正
+        // 的原因毫无关系。
+        //
+        // 比的是整段而不是 `contains("--")`:`--sharpness` 这种合法参数里也有两个
+        // 连字符,那样写会把它们一起挡掉。
+        if self.gamescope_args.iter().any(|arg| arg == "--") {
+            return Err("gamescope 参数里不要写 `--`：kotori 自己会在游戏命令前放一个".to_string());
+        }
+
         Ok(())
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sharpness_is_clamped_and_rebuilt() {
-        let algo = ScaleAlgorithm::Fsr { sharpness: 99 };
-        assert_eq!(algo.sharpness(), Some(MAX_SHARPNESS));
-        assert_eq!(
-            ScaleAlgorithm::Integer.with_sharpness(3),
-            ScaleAlgorithm::Integer
-        );
-        assert_eq!(
-            ScaleAlgorithm::Nis { sharpness: 1 }.with_sharpness(5),
-            ScaleAlgorithm::Nis { sharpness: 5 }
-        );
-    }
-
-    #[test]
-    fn algorithm_labels_round_trip() {
-        for label in ScaleAlgorithm::ALL {
-            let algo = ScaleAlgorithm::from_label(label).expect(label);
-            assert_eq!(algo.label(), label);
-        }
-        assert!(ScaleAlgorithm::from_label("Lanczos").is_none());
-    }
-
-    /// 留空＝自动(启动时按屏幕来);填了才覆盖。用户 2026-09-13 定的语义。
-    #[test]
-    fn an_empty_profile_gets_the_screen_and_a_filled_one_overrides_it() {
-        let screen = (2560, 1440);
-        let mut profile = ScaleProfile::default_for();
-
-        // 两样都留空:窗口就开在屏幕上 —— 这就是"启动即最大化"。
-        assert_eq!(profile.explicit_output_size(), None);
-        assert_eq!(profile.output_size_for(screen), screen);
-
-        // 输出分辨率只填一半不算数:半个尺寸不是尺寸,宁可忽略也不要瞎猜另一半。
-        profile.output_width = Some(1600);
-        assert_eq!(profile.explicit_output_size(), None);
-        assert_eq!(profile.output_size_for(screen), screen);
-
-        profile.output_height = Some(900);
-        assert_eq!(profile.explicit_output_size(), Some((1600, 900)));
-        assert_eq!(profile.output_size_for(screen), (1600, 900));
-
-        // 倍数更具体,填了就以它为准。
-        profile.scale_ratio = Some(1.5);
-        assert_eq!(profile.explicit_output_size(), Some((1920, 1080)));
-
-        // 小倍数会取整,但绝不塌成 0 尺寸窗口。
-        profile.internal_width = Some(1000);
-        profile.internal_height = Some(999);
-        profile.scale_ratio = Some(0.25);
-        assert_eq!(profile.explicit_output_size(), Some((250, 250)));
-
-        // 不可用的倍数(0 / NaN)当没填,退回尺寸。
-        profile.scale_ratio = Some(0.0);
-        assert_eq!(profile.explicit_output_size(), Some((1600, 900)));
-        profile.scale_ratio = Some(f32::NAN);
-        assert_eq!(profile.explicit_output_size(), Some((1600, 900)));
-        // ...而离谱的那个是夹取,不是溢出。
-        profile.scale_ratio = Some(1e30);
-        assert_eq!(
-            profile.explicit_output_size(),
-            Some((MAX_RESOLUTION, MAX_RESOLUTION))
-        );
-    }
-
-    #[test]
-    fn profile_validation_bounds_the_scaling_ratio() {
-        let mut profile = ScaleProfile::default_for();
-
-        profile.scale_ratio = Some(MIN_SCALE_RATIO / 2.0);
-        assert!(profile.validate().unwrap_err().contains("缩放比例"));
-        profile.scale_ratio = Some(MAX_SCALE_RATIO + 1.0);
-        assert!(profile.validate().is_err());
-        profile.scale_ratio = Some(f32::NAN);
-        assert!(profile.validate().is_err());
-        profile.scale_ratio = Some(2.0);
-        assert!(profile.validate().is_ok());
-
-        // In range, but the product blows past the resolution ceiling: rejected
-        // here rather than silently clamped by `output_size()`.
-        profile.internal_width = Some(MAX_RESOLUTION);
-        profile.internal_height = Some(MAX_RESOLUTION);
-        profile.scale_ratio = Some(2.0);
-        let err = profile.validate().unwrap_err();
-        assert!(err.contains("输出分辨率"), "{err}");
-    }
-
-    /// 游戏分辨率留空是**正常状态**(用户 2026-09-13:不再让用户填也默认不填)。
-    ///
-    /// 空的时候按 gamescope 自己的默认算数(`-w/-h` 根本不发),而落在配置里的
-    /// 那一对数字必须仍然是 `None` —— 不能偷偷把默认值写回档案。
-    #[test]
-    fn an_empty_game_resolution_leaves_the_size_to_gamescope() {
-        let mut profile = ScaleProfile::default_for();
-        assert_eq!(profile.explicit_internal_size(), None);
-        assert_eq!(
-            profile.internal_size(),
-            (GAMESCOPE_DEFAULT_WIDTH, GAMESCOPE_DEFAULT_HEIGHT)
-        );
-        assert!(profile.validate().is_ok());
-
-        // 只填一半不算数:半个分辨率不是分辨率。
-        profile.internal_width = Some(640);
-        assert_eq!(profile.explicit_internal_size(), None);
-        assert_eq!(
-            profile.internal_size(),
-            (GAMESCOPE_DEFAULT_WIDTH, GAMESCOPE_DEFAULT_HEIGHT)
-        );
-        // 0 也不算数,而且要被拒(它就是"填错了")。
-        profile.internal_width = Some(0);
-        assert_eq!(profile.explicit_internal_size(), None);
-        assert!(profile.validate().unwrap_err().contains("游戏分辨率宽"));
-
-        profile.internal_width = Some(640);
-        profile.internal_height = Some(480);
-        assert_eq!(profile.explicit_internal_size(), Some((640, 480)));
-        assert_eq!(profile.internal_size(), (640, 480));
-
-        // 空着＋填了倍数:倍数按 gamescope 的默认分辨率算,而不是算不出来。
-        let mut ratio = ScaleProfile::default_for();
-        ratio.scale_ratio = Some(1.5);
-        assert_eq!(ratio.explicit_output_size(), Some((1920, 1080)));
-    }
-
-    #[test]
-    fn profile_validation_rejects_impossible_values() {
-        let ok = ScaleProfile::default_for();
-        assert!(ok.validate().is_ok());
-
-        let mut zero = ok.clone();
-        zero.internal_width = Some(0);
-        assert!(zero.validate().unwrap_err().contains("游戏分辨率宽"));
-
-        let mut huge = ok.clone();
-        huge.output_height = Some(MAX_RESOLUTION + 1);
-        assert!(huge.validate().unwrap_err().contains("输出分辨率高"));
-
-        // 留空是正常状态(＝自动),0 才是错的。
-        let mut empty = ok.clone();
-        empty.output_width = None;
-        empty.output_height = None;
-        assert!(empty.validate().is_ok());
-        let mut zero_out = ok.clone();
-        zero_out.output_width = Some(0);
-        assert!(zero_out.validate().unwrap_err().contains("输出分辨率宽"));
-
-        let mut fps = ok.clone();
-        fps.framerate_limit = Some(0);
-        assert!(fps.validate().unwrap_err().contains("帧率限制"));
-
-        let mut fps_high = ok.clone();
-        fps_high.framerate_limit = Some(MAX_FRAMERATE + 1);
-        assert!(fps_high.validate().is_err());
-
-        assert!(
-            ok.validate().is_ok(),
-            "validation must not mutate the profile"
-        );
-    }
-
-    #[test]
-    fn normalize_clamps_sharpness_only() {
-        let mut profile = ScaleProfile {
-            algorithm: ScaleAlgorithm::Nis { sharpness: 99 },
-            ..ScaleProfile::default_for()
-        };
-        profile.normalize();
-        assert_eq!(
-            profile.algorithm,
-            ScaleAlgorithm::Nis {
-                sharpness: MAX_SHARPNESS
-            }
-        );
-
-        let mut unit = ScaleProfile {
-            algorithm: ScaleAlgorithm::Integer,
-            ..ScaleProfile::default_for()
-        };
-        unit.normalize();
-        assert_eq!(unit.algorithm, ScaleAlgorithm::Integer);
-    }
-}
+mod tests;

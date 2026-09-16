@@ -60,6 +60,12 @@ pub enum Message {
     FullscreenToggled(bool),
     FramerateChanged(String),
     ExePathChanged(String),
+    /// exe 的额外参数。页面上是一行文本,存的时候按空白切成 argv
+    /// (见 `parse::scale::split_args`)。
+    LaunchArgsChanged(String),
+    /// 手写的 gamescope 参数(切分规则同上)。它非空时档案里其它缩放设置**全部
+    /// 让位**,运行时缩放也一并停用,见 `ScaleProfile::gamescope_args`。
+    GamescopeArgsChanged(String),
     GameDirChanged(String),
     SavePathKindChanged(usize, String),
     SavePathChanged(usize, String),

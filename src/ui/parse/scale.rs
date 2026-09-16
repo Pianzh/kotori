@@ -34,7 +34,20 @@ pub(in crate::ui) fn profile_from_draft(draft: &Draft) -> Result<ScaleProfile, S
             Some(parse_u32(&draft.framerate, "帧率限制")?)
         },
         force_fullscreen: draft.fullscreen,
+        gamescope_args: split_args(&draft.gamescope_args),
     })
+}
+
+/// 一行文本 → argv。
+///
+/// **按空白切分,没有引号语义** —— 这是高级选项,写法由用户自己负责(用户
+/// 2026-09-16 定的)。kotori 去猜引号的话,猜错的那一次会以"参数莫名多了一段"
+/// 的形式出现,比不猜更难查。
+///
+/// exe 的额外参数与 gamescope 自由参数共用这一条规则,所以"进页面抄进输入框 →
+/// 存回去"是稳定的:切出来的 argv 拼回一行还是原样。
+pub(in crate::ui) fn split_args(text: &str) -> Vec<String> {
+    text.split_whitespace().map(str::to_string).collect()
 }
 
 pub(in crate::ui) fn parse_u32(s: &str, label: &str) -> Result<u32, String> {
@@ -82,6 +95,8 @@ mod tests {
             game_dir_original: "/games/x".into(),
             exe: "/games/x/game.exe".into(),
             exe_original: "/games/x/game.exe".into(),
+            launch_args: String::new(),
+            launch_args_original: String::new(),
             save_paths: Vec::new(),
             save_paths_original: Vec::new(),
             algo: algo.into(),
@@ -93,6 +108,7 @@ mod tests {
             scale_ratio: String::new(),
             fullscreen: true,
             framerate: String::new(),
+            gamescope_args: String::new(),
         }
     }
 

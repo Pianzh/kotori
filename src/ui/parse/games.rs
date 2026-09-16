@@ -60,6 +60,7 @@ pub(in crate::ui) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
+                launch_args: string_list(g.get("launch_args")),
                 profile_name: scale
                     .and_then(|s| s.get("name"))
                     .and_then(|v| v.as_str())
@@ -90,9 +91,26 @@ pub(in crate::ui) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                 framerate: scale
                     .and_then(|s| s.get("framerate_limit"))
                     .and_then(|v| v.as_u64().map(|f| f as u32)),
+                // 手写的 gamescope 参数:空数组＝照常由 kotori 拼(见
+                // `ScaleProfile::gamescope_args`)。
+                gamescope_args: string_list(scale.and_then(|s| s.get("gamescope_args"))),
             })
         })
         .collect()
+}
+
+/// JSON 字符串数组 → `Vec<String>`。字段缺失、类型不对都当空 ——
+/// 这两种情况都只可能是老配置或别人写的配置,不值得为此报错。
+fn string_list(value: Option<&Value>) -> Vec<String> {
+    value
+        .and_then(|v| v.as_array())
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

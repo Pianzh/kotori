@@ -314,6 +314,14 @@ pub(super) async fn save_profile(draft: Draft) -> Result<(), String> {
     if draft.exe_changed() {
         params.push(("exe_path", Value::String(draft.exe.trim().to_string())));
     }
+    // 额外参数按空白切成 argv —— 和 gamescope 自由参数同一条规则(见 `split_args`)。
+    if draft.launch_args_changed() {
+        let args = split_args(&draft.launch_args);
+        params.push((
+            "launch_args",
+            serde_json::to_value(args).map_err(|e| e.to_string())?,
+        ));
+    }
     if draft.save_paths_changed() {
         params.push(("save_paths", save_paths_to_json(&draft.save_paths)));
     }

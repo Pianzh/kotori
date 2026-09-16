@@ -73,6 +73,10 @@ pub(super) fn install_callbacks(window: &AppWindow) {
 
     window.on_game_dir_changed(|text| dispatch(Message::GameDirChanged(text.to_string())));
     window.on_exe_changed(|text| dispatch(Message::ExePathChanged(text.to_string())));
+    window.on_launch_args_changed(|text| dispatch(Message::LaunchArgsChanged(text.to_string())));
+    window.on_gamescope_args_changed(|text| {
+        dispatch(Message::GamescopeArgsChanged(text.to_string()))
+    });
     window.on_browse_game_dir(|| dispatch(Message::PickPath(PathTarget::GameDir)));
     window.on_browse_exe(|| dispatch(Message::PickPath(PathTarget::Exe)));
     window.on_browse_save(|index| {

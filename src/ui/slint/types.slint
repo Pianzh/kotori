@@ -34,6 +34,11 @@ export struct GameDetail {
     output-h: string,
     fullscreen: bool,
     framerate: string,
+    // exe 的额外参数;空 = 不带参数。
+    launch-args: string,
+    // 用户手写的 gamescope 参数;空 = 由 kotori 按上面那些字段拼。非空时它**取代**
+    // 上面全部(包括算法/锐度/全屏/帧率),见 `ScaleProfile::gamescope_args`。
+    gamescope-args: string,
 }
 
 // 一行存档位置。`kind` 是下标:`0 = windows`、`1 = relative`、`2 = absolute`
