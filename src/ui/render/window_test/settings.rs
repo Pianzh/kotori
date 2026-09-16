@@ -1,20 +1,20 @@
-//! 「设置」那一页的整页测试：Wine、后台服务、快捷键、环境检查。
+//! 「设置」那一页的整页测试：Wine、后台服务、快捷键、环境检查，以及
+//! "回调真的落到了 `App` 上"那一段。
 //!
-//! 与 `window_test` 同一个理由（编译期管不到运行时），只是页面不同；
-//! 拆开是因为那边本来是 550 行的单个测试函数。
+//! 从 `window_test/mod.rs` 拆出来（那边本来是 550 行的单个测试函数），但它**不是**
+//! 独立的 `#[test]`：由主测试调用，共用同一个窗口。Slint 的测试后端在同一个进程里
+//! 建第二个窗口，本地能过、CI 上不成立 —— 而这两段本来就是你中有我（回调那一段要
+//! 在渲染过的窗口上 `invoke_*`）。
 
 use super::super::*;
-use super::{fits, show_tab, ui};
+use super::{fits, show_tab};
 use crate::ui::test_support::ui_game;
 
-#[test]
-fn settings_page_renders_without_a_display() {
-    let mut ui = ui();
+/// 渲染设置页的各种状态，然后驱动一遍回调，断言消息真的到了消息循环里。
+///
+/// ⚠ 窗口在调用方那边已经撑到 2600 高：`ElementHandle` 只看得见没被裁掉的部分。
+pub(super) fn settings_page(mut ui: Ui) {
     let handle = ui.window.as_weak();
-    // ElementHandle 只看得见没被裁掉的部分，所以先撑高（见 `fits` 的说明）。
-    ui.window
-        .window()
-        .set_size(slint::LogicalSize::new(1120.0, 2600.0));
     render(&mut ui);
 
     // 设置:Wine 状态没到 / 到了 / 有回话,快捷键没问到 / 问到了(含"授权了但没绑键"),

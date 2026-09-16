@@ -17,13 +17,13 @@ use crate::ui::test_support::{sync_payload, sync_status_fixture, ui_game};
 mod settings;
 
 /// 建一个带测试后端的窗口。
-///
-/// 两个渲染测试各建各的：共享一个 `Ui` 就等于共享全部页面状态，
-/// 那边改一点这边就跟着变，"这一页能不能画出来"就不再有单独答案。
 fn ui() -> Ui {
-    // 测试后端只初始化一次，两个测试都会走到这里。
-    static INIT: std::sync::Once = std::sync::Once::new();
-    INIT.call_once(i_slint_backend_testing::init_no_event_loop);
+    // ⚠ **不能用 `Once` 缓存这一次调用**（2026-09-16 被 CI 咬过一次）：测试后端是按
+    // 线程注册的，缓存会让第二个测试线程拿不到它而回退到 winit —— 本地有 DISPLAY 时
+    // winit 照样能建窗口（**假绿**），CI 上没有 DISPLAY 就直接炸在
+    // "neither WAYLAND_DISPLAY nor WAYLAND_SOCKET nor DISPLAY is set"。
+    // `hit_test` / `scroll_test` 也都是各自无条件调一次，照它们来。
+    i_slint_backend_testing::init_no_event_loop();
 
     let window = AppWindow::new().expect("测试后端应该能建窗口");
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -310,4 +310,7 @@ fn library_and_sync_pages_render_without_a_display() {
     ui.window.set_game_open(false);
     ui.app.selected = None;
     ui.app.draft = None;
+
+    // 设置页那一整段（含"回调 → 消息"）在 `settings` 里，共用这一个窗口。
+    settings::settings_page(ui);
 }
