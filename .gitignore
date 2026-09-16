@@ -21,10 +21,6 @@ ARCHITECTURE.md
 # 多端(ARM / Windows)的测试与开发计划:里面是设备/网络/磁盘这些具体信息,同样不入 git
 PLATFORMS.md
 
-# 已经完成使命的一次性任务书 / 方案:知识都进了 HANDOVER.md,留着只为"万一还想翻原文"
-# (关机卡 90 秒的修复任务书、云同步双引擎改造方案)
-.archive/
-
 # 跑在仓库里那些 agent 工具自己的目录
 .opencode/
 
