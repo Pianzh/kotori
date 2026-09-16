@@ -454,8 +454,8 @@ mod tests {
         assert!(app.sync_form.app_key.is_empty());
         assert_eq!(app.sync_form.bucket, "my-own-bucket");
 
-        // Once the settings are saved, the daemon is the truth again.
-        let _ = app.update(Message::SyncSettingsSaved(Ok(())));
+        // Once saved, the daemon is the truth again. (`Ok(false)` = 没换引擎，没有那条警告。)
+        let _ = app.update(Message::SyncSettingsSaved(Ok(false)));
         assert!(!app.sync_form.settings_dirty);
         app.sync_form.apply(&status, &sync_payload()["settings"]);
         assert_eq!(app.sync_form.bucket, "kotori-saves");

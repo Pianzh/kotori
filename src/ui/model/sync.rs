@@ -167,6 +167,29 @@ pub(in crate::ui) fn engine_field(settings: &Value) -> String {
     }
 }
 
+/// 换引擎之后**必须说出口**的那句话。
+///
+/// 两个引擎在桶里各写各的区域：换过去之后，另一个引擎传的版本**不会**出现在列表里
+/// —— 数据都还在桶里，只是这边读不出来，而这**不会报错**。daemon 专门回了
+/// `engine_changed` 就是为了它（见 `daemon::sync_rpc::rpc_sync_set_settings`）；
+/// 从前的 UI 把这个回包整个丢掉了，于是这条警告一次都没显示过。
+///
+/// 措辞放这里（而不是 `.slint` 里），因为它要被测：两个引擎各自的名字来自
+/// [`SyncEngine::label`] 的同一套说法，不能一处写 "rclone(zip)"、另一处写 "rclone"。
+pub(in crate::ui) fn engine_switched_note(engine: &str) -> String {
+    use crate::config::SyncEngine;
+    let (switched_to, unseen) = if engine == "kopia" {
+        (SyncEngine::Kopia, SyncEngine::Rclone)
+    } else {
+        (SyncEngine::Rclone, SyncEngine::Kopia)
+    };
+    format!(
+        "已改用 {}：{} 传上去的版本不会显示在这里（数据还在 bucket 里，只是这边读不出来）",
+        switched_to.label(),
+        unseen.label()
+    )
+}
+
 /// The editable half of the sync settings.
 #[derive(Debug, Clone, Default)]
 pub(in crate::ui) struct SyncForm {
@@ -264,5 +287,25 @@ mod tests {
             patch.get("key_id").is_none() && patch.get("force").is_none(),
             "settings patches must carry no secrets: {patch}"
         );
+    }
+
+    /// 换引擎那句话必须点名**另一个**引擎 —— 用户要知道自己"看不见"的是什么。
+    ///
+    /// 两个名字都取自 `SyncEngine::label`,和 daemon、环境检查页用的是同一套说法:
+    /// 一处写 "rclone(zip)"、另一处写 "rclone",用户就没法把两句话对上。
+    #[test]
+    fn switching_the_engine_names_the_one_that_becomes_invisible() {
+        let to_kopia = engine_switched_note("kopia");
+        assert!(to_kopia.contains("已改用 kopia"), "{to_kopia}");
+        assert!(to_kopia.contains("rclone(zip)"), "{to_kopia}");
+        assert!(to_kopia.contains("不会显示"), "{to_kopia}");
+
+        let to_rclone = engine_switched_note("rclone");
+        assert!(to_rclone.contains("已改用 rclone(zip)"), "{to_rclone}");
+        assert!(to_rclone.contains("kopia"), "{to_rclone}");
+
+        // 认不出来的值按 rclone 算 —— 与 `engine_field` 同一条规矩（老配置没有这个键）,
+        // 不能在这里玩出第三种说法。
+        assert_eq!(engine_switched_note("???"), to_rclone);
     }
 }

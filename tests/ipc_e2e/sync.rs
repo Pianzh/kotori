@@ -268,3 +268,46 @@ fn save_sync_follows_the_game_lifecycle() {
         "the version uploaded after the exit is the newest one"
     );
 }
+
+/// 引擎是**单独一个字段**提交的：界面上点一下「kopia」发的就是 `{"engine": …}`，
+/// daemon 按字段合并 —— 用户那些还没保存的 bucket/prefix 编辑一个都不该被碰掉。
+///
+/// 这条盯着 UI 那个"点一下就生效"改动的**前提**：`sync.set_settings` 哪天变成整份
+/// 替换，界面上点一次引擎就会静默清掉用户正在填的 bucket。
+///
+/// 从前的问题更基本：点引擎**根本不提交**（只改表单，等「保存设置」），而按钮上已经
+/// 显示成「kopia ✓」了 —— 用户 2026-09-16 报的"每次开 GUI 都回到 rclone"就是这么来的。
+#[test]
+fn setting_only_the_engine_leaves_the_other_settings_alone() {
+    let mut fixture = Fixture::new("engine");
+    fixture.enable_fake_sync(false);
+    fixture.start();
+
+    let seed = fixture.rpc(
+        "sync.set_settings",
+        json!({
+            "enabled": false,
+            "engine": "rclone",
+            "bucket": "my-bucket",
+            "prefix": "kotori",
+            "keep_versions": 7
+        }),
+    );
+    assert_eq!(seed["result"]["engine_changed"], false, "{seed}");
+
+    // 界面上点「kopia」发的就是这个：一个键。
+    let switched = fixture.rpc("sync.set_settings", json!({ "engine": "kopia" }));
+    assert_eq!(switched["result"]["engine_changed"], true, "{switched}");
+    let settings = &switched["result"]["settings"];
+    assert_eq!(settings["engine"], "kopia", "{switched}");
+    assert_eq!(settings["bucket"], "my-bucket", "这次提交不该碰别的字段");
+    assert_eq!(settings["keep_versions"], 7, "{switched}");
+    assert_eq!(settings["enabled"], false, "{switched}");
+
+    // 而且真的落盘了 —— 重开 GUI 读到的就是它，不是 serde 的默认值 rclone。
+    let status = fixture.rpc("sync.status", json!({}));
+    assert_eq!(status["result"]["engine"], "kopia", "{status}");
+    let written = std::fs::read_to_string(fixture.dir.join("config.toml")).unwrap();
+    assert!(written.contains(r#"engine = "kopia""#), "{written}");
+    assert!(written.contains(r#"bucket = "my-bucket""#), "{written}");
+}

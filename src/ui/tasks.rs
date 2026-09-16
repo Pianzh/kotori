@@ -123,13 +123,44 @@ pub(super) async fn load_sync_status() -> Result<SyncStatus, String> {
 
 /// Persist the sync settings. The daemon validates and may refuse (an
 /// impossible prefix, say), so its message is surfaced verbatim.
-pub(super) async fn save_sync_settings(socket: &Path, patch: Value) -> Result<(), String> {
+pub(super) async fn save_sync_settings(socket: &Path, patch: Value) -> Result<bool, String> {
     let params = patch
         .as_object()
         .cloned()
         .ok_or_else(|| "内部错误：设置补丁不是对象".to_string())?;
-    crate::rpc::call(socket, "sync.set_settings", Some(params)).await?;
-    Ok(())
+    let value = crate::rpc::call(socket, "sync.set_settings", Some(params)).await?;
+    Ok(engine_changed(&value))
+}
+
+/// 只提交"用哪个引擎"这一个字段。
+///
+/// 引擎是个二选一的开关，点下去就该生效 —— 不该跟 bucket 那些字段一起等「保存设置」。
+/// `sync.set_settings` 是**按字段合并**的（`SettingsPatch` 全是 `Option`），所以这里
+/// 只发 engine 一个键，用户还没保存的其它编辑一个都不会被带上，也不会被当成已保存。
+pub(super) async fn save_sync_engine(socket: &Path, engine: &str) -> Result<bool, String> {
+    let value = crate::rpc::call(
+        socket,
+        "sync.set_settings",
+        Some(crate::rpc::params([(
+            "engine",
+            Value::String(engine.to_string()),
+        )])),
+    )
+    .await?;
+    Ok(engine_changed(&value))
+}
+
+/// daemon 在 `sync.set_settings` 的回包里说"这次换引擎了"。
+///
+/// 值得单独一个函数，是因为它带的是**一句必须说出口的警告**：换了引擎之后，另一个
+/// 引擎传上去的版本不会显示出来（数据还在桶里，只是这边读不出来），而这件事**不会
+/// 报错**。丢掉它，用户就只能自己发现"我的存档怎么不见了"—— 这一条从前是被
+/// `Ok(())` 整个吞掉的。
+fn engine_changed(value: &Value) -> bool {
+    value
+        .get("engine_changed")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 pub(super) async fn save_sync_credentials(

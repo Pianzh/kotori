@@ -22,4 +22,4 @@ pub use sync::{SyncGameRow, SyncStatus};
 pub(super) use environment::{EnvCheck, Environment};
 pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, SAVE_PATH_KINDS, SaveAttempt};
 pub(super) use session::{MAX_AUTO_RETRIES, STATUS_POLL};
-pub(super) use sync::{CredentialStore, SyncForm};
+pub(super) use sync::{CredentialStore, SyncForm, engine_switched_note};

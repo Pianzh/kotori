@@ -50,9 +50,37 @@ impl App {
                 Task::none()
             }
             Message::SyncEngineSelected(engine) => {
-                self.sync_form.engine = engine;
-                self.sync_form.settings_dirty = true;
-                Task::none()
+                // **点下去就生效**：引擎是二选一的开关，不该还要用户再去找一个「保存设置」
+                // ——从前就是那样，界面上按钮立刻变成「kopia ✓」，而 config 里一个字节都
+                // 没动，重开 GUI 就又回到 rclone（用户 2026-09-16 报的就是这个）。
+                //
+                // 只提交 engine 一个字段：用户手上那些还没保存的编辑（bucket、prefix…）
+                // 一个字都不会被带上去，`settings_dirty` 在这里也**不动**。
+                self.sync_form.engine = engine.clone();
+                self.sync_form.busy = true;
+                self.sync_form.msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { save_sync_engine(&socket, &engine).await },
+                    Message::SyncEngineSaved,
+                )
+            }
+            Message::SyncEngineSaved(result) => {
+                self.sync_form.busy = false;
+                match result {
+                    // daemon 说这一笔真的换了引擎 ⇒ 那条"对面数据看不见"的警告要说出来。
+                    Ok(true) => {
+                        self.sync_form.msg = Some(engine_switched_note(&self.sync_form.engine));
+                    }
+                    Ok(false) => self.sync_form.msg = Some("同步方式已保存".to_string()),
+                    Err(error) => {
+                        self.sync_form.msg = Some(format!("切换同步方式失败: {error}"));
+                        // 没写进去就别让界面继续装着已经换了：清掉 dirty，好让下面这次
+                        // 刷新把配置里那个真正的值拉回来。
+                        self.sync_form.settings_dirty = false;
+                    }
+                }
+                self.reload_sync()
             }
             Message::SyncKopiaPasswordChanged(value) => {
                 self.sync_form.kopia_password = value;
@@ -97,10 +125,13 @@ impl App {
             }
             Message::SyncSettingsSaved(result) => {
                 self.sync_form.busy = false;
-                self.sync_form.msg = Some(match &result {
-                    Ok(()) => "已保存".to_string(),
-                    Err(e) => format!("保存失败: {e}"),
-                });
+                match &result {
+                    Ok(true) => {
+                        self.sync_form.msg = Some(engine_switched_note(&self.sync_form.engine));
+                    }
+                    Ok(false) => self.sync_form.msg = Some("已保存".to_string()),
+                    Err(e) => self.sync_form.msg = Some(format!("保存失败: {e}")),
+                }
                 if result.is_ok() {
                     // The daemon now holds exactly what the form holds, so a
                     // later status reply may refill the form again.

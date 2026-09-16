@@ -126,13 +126,21 @@ pub enum Message {
     SyncField(SyncField, String),
     /// 换引擎（`rclone` / `kopia`）。只改表单，随"保存设置"一起提交。
     SyncEngineSelected(String),
+    /// 引擎那一次提交的回包。`Ok(true)` = 这次**真的换掉了**引擎，界面要把
+    /// daemon 那条警告说出来（换引擎之后另一个引擎传的版本读不出来，且不报错）。
+    ///
+    /// 它和 [`Message::SyncSettingsSaved`] 分开，是因为两者对
+    /// `sync_form.settings_dirty` 的处理相反：换引擎只提交了 engine 一个字段，
+    /// 用户手上那些还没保存的编辑一个字都没动，不能被当成"已保存"。
+    SyncEngineSaved(Result<bool, String>),
     /// kopia 仓库密码：它不是 `[sync]` 里的设置项，所以不走 [`SyncField`]。
     SyncKopiaPasswordChanged(String),
     SyncSaveKopiaPassword,
     /// `Ok(true)` = 清除成功，回到默认密码。
     SyncKopiaPasswordSaved(Result<bool, String>),
     SyncSaveSettings,
-    SyncSettingsSaved(Result<(), String>),
+    /// `Ok(true)` = 这一笔里有引擎变更，那条"对面数据看不见"的警告要说出来。
+    SyncSettingsSaved(Result<bool, String>),
     SyncSaveCredentials,
     SyncCredentialsSaved(Result<(), String>),
     SyncClearCredentials,

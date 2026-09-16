@@ -299,6 +299,7 @@ impl App {
             | Message::SyncToggleEnabled(..)
             | Message::SyncField(..)
             | Message::SyncEngineSelected(..)
+            | Message::SyncEngineSaved(..)
             | Message::SyncKopiaPasswordChanged(..)
             | Message::SyncSaveKopiaPassword
             | Message::SyncKopiaPasswordSaved(..)
