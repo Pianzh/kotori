@@ -1,0 +1,15 @@
+# 超过 500 行的文件。规矩是只减不增：这个列表只允许变短。
+# 由 scripts/check-file-size.sh --update 生成，别手改。
+1332	tests/ipc_e2e.rs
+1030	src/wine.rs
+956	src/ui/app.rs
+887	src/ui/update.rs
+769	src/scale/gamescope.rs
+714	src/daemon/mod.rs
+707	src/platform/mod.rs
+666	src/main.rs
+603	src/secrets/encrypted.rs
+546	src/game/mod.rs
+528	src/ui/render/window_test.rs
+524	src/scale/x11.rs
+521	src/display.rs
