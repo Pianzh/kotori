@@ -36,6 +36,13 @@ pub struct SyncStatus {
     pub settings: Value,
     pub remote: String,
     pub rclone: Option<String>,
+    /// kopia 可执行文件；没有就是没装（那条路走不通，另一条照常）。
+    pub kopia: Option<String>,
+    /// 当前生效的引擎：`rclone` | `kopia`。两个引擎在桶里各写各的区域，所以这一条
+    /// 必须显示出来 —— 选错了不会报错，只会"看不见对面的存档"。
+    pub engine: String,
+    /// kopia 仓库在桶里的前缀（"连接信息"要给用户看的几个值之一）。
+    pub kopia_prefix: String,
     pub keyring: String,
     pub ephemeral: bool,
     /// `system` | `encrypted-file` | `session-only`.
@@ -149,6 +156,17 @@ impl CredentialStore {
     }
 }
 
+/// `[sync] engine` 的取值。
+///
+/// 缺失、认不出来、或者干脆是个空串 —— 一律按 `rclone` 算：这个键是 2026-09-16
+/// 才有的，在那之前写下的每一份配置当年级的都是 rclone。
+pub(in crate::ui) fn engine_field(settings: &Value) -> String {
+    match settings.get("engine").and_then(|v| v.as_str()) {
+        Some("kopia") => "kopia".to_string(),
+        _ => "rclone".to_string(),
+    }
+}
+
 /// The editable half of the sync settings.
 #[derive(Debug, Clone, Default)]
 pub(in crate::ui) struct SyncForm {
@@ -159,6 +177,8 @@ pub(in crate::ui) struct SyncForm {
     /// the user is in the middle of typing. Cleared once a save succeeds.
     pub(in crate::ui) settings_dirty: bool,
     pub(in crate::ui) enabled: bool,
+    /// 选的引擎：`rclone` | `kopia`。空串按 `rclone` 算（老配置没有这个键）。
+    pub(in crate::ui) engine: String,
     pub(in crate::ui) endpoint: String,
     pub(in crate::ui) bucket: String,
     pub(in crate::ui) prefix: String,
@@ -167,8 +187,12 @@ pub(in crate::ui) struct SyncForm {
     pub(in crate::ui) app_key: String,
     /// Master password for the credential file (unlock, or set one up).
     pub(in crate::ui) master_password: String,
+    /// kopia 仓库密码。**可以留空** —— 留空就是用默认的 `kotori`。
+    pub(in crate::ui) kopia_password: String,
     /// 删除主密码凭据文件前的二次确认(里面的凭据会一起消失)。
     pub(in crate::ui) confirm_master_delete: bool,
+    /// kopia 的"连接信息"默认折叠 —— 里面有桶名和密码状态,不该一打开就摊开。
+    pub(in crate::ui) connection_revealed: bool,
     pub(in crate::ui) msg: Option<String>,
     pub(in crate::ui) busy: bool,
 }
@@ -187,6 +211,7 @@ impl SyncForm {
             return;
         }
         self.enabled = settings["enabled"].as_bool().unwrap_or(false);
+        self.engine = engine_field(settings);
         self.endpoint = str_field(settings, "endpoint");
         self.bucket = str_field(settings, "bucket");
         self.prefix = str_field(settings, "prefix");
@@ -198,6 +223,7 @@ impl SyncForm {
         let keep = self.keep_versions.trim().parse::<u32>().unwrap_or(0);
         serde_json::json!({
             "enabled": self.enabled,
+            "engine": if self.engine.trim().is_empty() { "rclone" } else { self.engine.trim() },
             "endpoint": self.endpoint.trim(),
             "bucket": self.bucket.trim(),
             "prefix": self.prefix.trim(),

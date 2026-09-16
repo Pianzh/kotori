@@ -70,6 +70,17 @@ pub(in crate::ui) fn parse_sync_status(value: &Value) -> Result<SyncStatus, Stri
             .get("rclone")
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        kopia: value
+            .get("kopia")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        // 认不出来就按 rclone 算：这个字段是 2026-09-16 才加的，而老配置当年级的
+        // 就是 rclone。页面显示错引擎会让人以为对面没存档。
+        engine: match str_field(value, "engine").as_str() {
+            "kopia" => "kopia".to_string(),
+            _ => "rclone".to_string(),
+        },
+        kopia_prefix: str_field(value, "kopia_prefix"),
         keyring: value
             .get("keyring")
             .map(|keyring| str_field(keyring, "backend"))

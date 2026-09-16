@@ -23,9 +23,11 @@ impl Staging {
         Ok(Self { path })
     }
 
-    /// Where the downloaded package is written.
-    pub(super) fn package_file(&self, stamp: &str) -> PathBuf {
-        self.path.join(format!("{stamp}.zip"))
+    /// Where the engine builds this version's artifact (a zip, or a directory
+    /// tree for kopia). The engine decides the shape; this only hands it a
+    /// fresh empty directory that goes away with the `Staging`.
+    pub(super) fn root(&self) -> &Path {
+        &self.path
     }
 
     /// Where the package is unpacked to.

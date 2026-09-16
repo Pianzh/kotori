@@ -132,9 +132,13 @@ pub(super) fn install_callbacks(window: &AppWindow) {
 
     // ── 云同步 ────────────────────────────────────────────────────────────
     window.on_sync_enabled_toggled(|value| dispatch(Message::SyncToggleEnabled(value)));
+    window.on_sync_engine_selected(|engine| {
+        dispatch(Message::SyncEngineSelected(engine.to_string()));
+    });
     window.on_sync_field(|field, text| {
         let text = text.to_string();
-        // 6 是主密码:它不是 `[sync]` 里的设置项,所以不走 SyncField。
+        // 6 是主密码、7 是 kopia 仓库密码:两个都不是 `[sync]` 里的设置项,
+        // 所以都不走 SyncField(它们进的是凭据库,不是配置文件)。
         match field {
             0 => dispatch(Message::SyncField(SyncField::Endpoint, text)),
             1 => dispatch(Message::SyncField(SyncField::Bucket, text)),
@@ -142,9 +146,11 @@ pub(super) fn install_callbacks(window: &AppWindow) {
             3 => dispatch(Message::SyncField(SyncField::KeepVersions, text)),
             4 => dispatch(Message::SyncField(SyncField::KeyId, text)),
             5 => dispatch(Message::SyncField(SyncField::AppKey, text)),
+            7 => dispatch(Message::SyncKopiaPasswordChanged(text)),
             _ => dispatch(Message::SyncMasterPasswordChanged(text)),
         }
     });
+    window.on_sync_save_kopia_password(|| dispatch(Message::SyncSaveKopiaPassword));
     window.on_sync_save_settings(|| dispatch(Message::SyncSaveSettings));
     window.on_sync_test(|| dispatch(Message::SyncTest));
     window.on_sync_now(|id| {

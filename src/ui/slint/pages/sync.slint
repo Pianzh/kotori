@@ -12,6 +12,7 @@ import { Switch, TextField } from "../widgets/controls.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { SyncCredentialsGroup } from "sync-credentials.slint";
+import { SyncKopiaGroup } from "sync-kopia.slint";
 
 export component SyncPage inherits ScrollView {
     // 见 `games.slint` 里的长注释:fluent 默认关掉拖拽滚动,没有滚轮的机器要靠这一行。
@@ -20,6 +21,14 @@ export component SyncPage inherits ScrollView {
     in property <bool> loaded: false;
     in property <string> remote: "";
     in property <string> rclone: "";
+    /// 当前引擎:`rclone` | `kopia`。两个引擎在桶里各写各的区域,所以这一条必须
+    /// 显示出来 —— 选错了不会报错,只会"看不见对面的存档"。
+    in property <string> engine: "rclone";
+    in property <string> kopia-binary: "";
+    in property <string> kopia-prefix: "";
+    /// 密码状态那句话(「默认 kotori」/「已自己设置」)。
+    in property <string> kopia-password-state: "";
+    in property <bool> kopia-using-default: true;
     in property <string> keyring: "";
     in property <bool> ephemeral: false;
     in property <string> keyring-hint: "";
@@ -46,6 +55,8 @@ export component SyncPage inherits ScrollView {
     in-out property <string> key-id: "";
     in-out property <string> app-key: "";
     in-out property <string> master-password: "";
+    in-out property <string> kopia-password: "";
+    in-out property <bool> connection-revealed: false;
 
     in property <bool> busy: false;
     in property <string> message: "";
@@ -54,8 +65,10 @@ export component SyncPage inherits ScrollView {
     in-out property <bool> revealed: false;
 
     callback enabled-toggled(bool);
+    callback engine-selected(string);
     callback field(int, string);
     callback save-settings();
+    callback save-kopia-password();
     callback test();
     callback sync-now(string);
     callback restore(string);
@@ -198,6 +211,26 @@ export component SyncPage inherits ScrollView {
                 }
                 Divider { }
                 CardRow {
+                    title: "同步方式";
+                    description: "两种方式在桶里各写各的区域,互相看不见对方的数据(数据都还在,只是这边读不出来)。双系统/多机必须选同一种。";
+                    HorizontalLayout {
+                        spacing: 8px;
+                        StdButton {
+                            label: root.engine == "rclone" ? "rclone(zip) ✓" : "rclone(zip)";
+                            button-width: 124px;
+                            button-enabled: !root.busy && root.engine != "rclone";
+                            clicked => { root.engine-selected("rclone"); }
+                        }
+                        StdButton {
+                            label: root.engine == "kopia" ? "kopia ✓" : "kopia";
+                            button-width: 96px;
+                            button-enabled: !root.busy && root.engine != "kopia";
+                            clicked => { root.engine-selected("kopia"); }
+                        }
+                    }
+                }
+                Divider { }
+                CardRow {
                     title: "bucket";
                     description: "B2 上那个 bucket 的名字。";
                     TextField {
@@ -260,6 +293,31 @@ export component SyncPage inherits ScrollView {
                         visible: root.message != "";
                     }
                 }
+            }
+        }
+
+        // ── kopia 仓库(只在 kopia 模式下) ───────────────────────────────
+        if root.engine == "kopia" : RevealItem {
+            revealed: root.revealed;
+            step: 4;
+            bottom: 8px;
+            SectionTitle { text: "kopia 仓库"; }
+        }
+        if root.engine == "kopia" : RevealItem {
+            revealed: root.revealed;
+            step: 5;
+            bottom: 24px;
+            SyncKopiaGroup {
+                binary: root.kopia-binary;
+                bucket: root.bucket;
+                repo-prefix: root.kopia-prefix;
+                password-state: root.kopia-password-state;
+                using-default: root.kopia-using-default;
+                busy: root.busy;
+                password <=> root.kopia-password;
+                revealed <=> root.connection-revealed;
+                field(id, text) => { root.field(id, text); }
+                save-password => { root.save-kopia-password(); }
             }
         }
 

@@ -58,21 +58,18 @@ impl Runner {
             },
         };
 
-        let staging = match Staging::new(&self.work_dir) {
+        let staging = match Staging::new(self.work_dir()) {
             Ok(staging) => staging,
             Err(error) => return GameOutcome::failed(game_id, name, error),
         };
-        let file = staging.package_file(&stamp);
-        if let Err(error) = self
-            .fetch_package(game_id, &stamp, &file, COMMAND_TIMEOUT)
+        let manifest = match self
+            .fetch_version(game_id, &stamp, &staging.unpacked(), COMMAND_TIMEOUT)
             .await
         {
-            return GameOutcome::failed(game_id, name, format!("取不回版本 {stamp}: {error}"));
-        }
-
-        let manifest = match archive::extract(&file, &staging.unpacked()) {
             Ok(manifest) => manifest,
-            Err(error) => return GameOutcome::failed(game_id, name, error),
+            Err(error) => {
+                return GameOutcome::failed(game_id, name, format!("取不回版本 {stamp}: {error}"));
+            }
         };
         // 用户点了"恢复"：以云端为准，本机更新的也盖掉。
         let plan = match archive::plan(&manifest, targets, Merge::Replace) {
@@ -119,7 +116,7 @@ impl Runner {
         let stamps = self.packages(game_id).await?;
         let doomed = prune_plan(&stamps, self.settings.keep_versions);
         for stamp in &doomed {
-            self.remove_package(game_id, stamp).await?;
+            self.remove_version(game_id, stamp).await?;
             tracing::info!("{game_id}: 已删除旧版本 {stamp}");
         }
         Ok(doomed)

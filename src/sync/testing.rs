@@ -12,5 +12,6 @@ pub(super) fn settings() -> SyncConfig {
         bucket: "kotori-saves".to_string(),
         prefix: "prefix".to_string(),
         keep_versions: 0,
+        ..SyncConfig::default()
     }
 }

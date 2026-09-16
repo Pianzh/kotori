@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::Daemon;
-use crate::config::SyncConfig;
+use crate::config::{SyncConfig, SyncEngine};
 use crate::secrets::{Keyring, SecretKey};
 use crate::sync::{
     self, SaveTarget,
@@ -169,6 +169,7 @@ pub struct SyncRecord {
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct SettingsPatch {
     enabled: Option<bool>,
+    engine: Option<SyncEngine>,
     endpoint: Option<String>,
     bucket: Option<String>,
     prefix: Option<String>,
@@ -219,6 +220,13 @@ impl Daemon {
         let config = self.config.read().await;
         let settings = config.sync.clone();
         let rclone = sync::find_rclone().map(|p| p.to_string_lossy().to_string());
+        let kopia = sync::engine::find_kopia().map(|p| p.to_string_lossy().to_string());
+        // 当前生效的引擎要哪个二进制。选中的那个没装 = 没准备好；另一个没有
+        // 不影响什么（用户可以只装一个）。
+        let engine_binary = match settings.engine {
+            SyncEngine::Rclone => rclone.clone(),
+            SyncEngine::Kopia => kopia.clone(),
+        };
         let secrets: Vec<&str> = self
             .sync
             .keyring()
@@ -274,7 +282,10 @@ impl Daemon {
         Ok(json!({
             "settings": settings,
             "enabled": settings.enabled,
+            "engine": settings.engine,
+            "engine_label": settings.engine.label(),
             "rclone": rclone,
+            "kopia": kopia,
             "keyring": {
                 "backend": self.sync.keyring().describe(),
                 "ephemeral": self.sync.keyring().is_ephemeral(),
@@ -286,9 +297,11 @@ impl Daemon {
             },
             // Which entries exist — never what they contain.
             "secrets": secrets,
-            "ready": settings.enabled && problem.is_none() && rclone.is_some(),
+            "ready": settings.enabled && problem.is_none() && engine_binary.is_some(),
             "problem": problem,
+            // rclone 那条路的远端；kopia 整个仓库落在 `kopia_prefix` 下。
             "remote": sync::remote_root(&settings),
+            "kopia_prefix": sync::engine::repo_prefix(&settings),
             "pull_timeout_secs": PULL_TIMEOUT.as_secs(),
             "keep_versions_max": MAX_KEEP_VERSIONS,
             "games": games,
@@ -302,9 +315,13 @@ impl Daemon {
     ) -> Result<Value, String> {
         self.mutate_config(|config| {
             let mut candidate = config.sync.clone();
+            let previous_engine = candidate.engine;
 
             if let Some(enabled) = patch.enabled {
                 candidate.enabled = enabled;
+            }
+            if let Some(engine) = patch.engine {
+                candidate.engine = engine;
             }
             if let Some(value) = &patch.endpoint {
                 candidate.endpoint = clean_endpoint(value)?;
@@ -328,13 +345,42 @@ impl Daemon {
 
             config.sync = candidate.clone();
             tracing::info!(
-                "sync settings updated (enabled={}, keep_versions={})",
+                "sync settings updated (enabled={}, engine={:?}, keep_versions={})",
                 candidate.enabled,
+                candidate.engine,
                 candidate.keep_versions
             );
-            Ok(json!({ "settings": candidate }))
+            // 换引擎要专门告诉 UI：两个引擎在桶里各写各的区域，换了之后对面那些
+            // 版本**不会**被读出来（数据还在桶里，只是看不见），而这件事不会报错。
+            let engine_changed = candidate.engine != previous_engine;
+            Ok(json!({
+                "settings": candidate,
+                "engine_changed": engine_changed,
+            }))
         })
         .await
+    }
+
+    /// 设置（或清除）kopia 仓库密码。
+    ///
+    /// 留空 = 清除 = 回到默认的 `kotori`。默认密码意味着"任何拿到桶的人都能解开"，
+    /// 所以这条 RPC 的回话里带着 [`DEFAULT_PASSWORD_USED`] 让 UI 能如实提醒。
+    pub(super) fn rpc_sync_set_kopia_password(&self, password: Password) -> Result<Value, String> {
+        let value = password.password.trim();
+        if value.is_empty() {
+            self.sync
+                .keyring()
+                .clear(SecretKey::KopiaPassword)
+                .map_err(|e| e.to_string())?;
+            tracing::info!("kopia repository password cleared (back to the default)");
+            return Ok(json!({ "cleared": true, "using_default": true }));
+        }
+        self.sync
+            .keyring()
+            .set(SecretKey::KopiaPassword, value)
+            .map_err(|e| e.to_string())?;
+        tracing::info!("kopia repository password stored in the keyring");
+        Ok(json!({ "stored": true, "using_default": false }))
     }
 
     /// Store (or clear) the B2 credentials.

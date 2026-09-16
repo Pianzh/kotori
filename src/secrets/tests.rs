@@ -47,9 +47,18 @@ fn secrets_are_stored_under_distinct_accounts() {
         Some("appkey")
     );
 
-    // Two entries, two accounts: storing one must never clobber the other.
+    // 三条各占一个 account：存一条绝不能踩掉另一条（kopia 密码与 B2 的 key 是
+    // 互相独立的两件事，前者没有就用默认值，后者必须有）。
     assert_ne!(SecretKey::B2KeyId.account(), SecretKey::B2AppKey.account());
-    assert_eq!(SecretKey::ALL.len(), 2, "只有 B2 的这两条");
+    assert_ne!(
+        SecretKey::B2KeyId.account(),
+        SecretKey::KopiaPassword.account()
+    );
+    assert_ne!(
+        SecretKey::B2AppKey.account(),
+        SecretKey::KopiaPassword.account()
+    );
+    assert_eq!(SecretKey::ALL.len(), 3, "B2 两条加 kopia 密码");
 }
 
 #[test]

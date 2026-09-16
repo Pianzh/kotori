@@ -37,13 +37,17 @@ pub enum SyncError {
     NotEnabled,
     #[error("云同步配置不完整: {0}")]
     Config(String),
-    #[error("rclone 未安装或不可执行: {0}")]
-    RcloneMissing(String),
-    #[error("rclone 执行失败: {0}")]
+    #[error("{engine} 未安装或不可执行: {detail}")]
+    EngineMissing {
+        engine: &'static str,
+        detail: String,
+    },
+    #[error("{0}")]
     Command(String),
 }
 
 pub mod archive;
+pub mod engine;
 pub mod runner;
 
 /// Suffix of a version package in the bucket.

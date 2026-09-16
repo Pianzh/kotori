@@ -59,6 +59,17 @@ pub fn parse_manifest(text: &str) -> Result<Manifest, String> {
     Ok(manifest)
 }
 
+/// 读出一份**目录形态**的清单（kopia 那条路：`materialize` 摆出来的目录）。
+///
+/// 与 [`read_manifest`] 是同一件事的两个入口：zip 把清单塞在包根，目录形态就
+/// 把 `kotori-manifest.json` 摆在目录根，内容一模一样。
+pub fn read_dir_manifest(dir: &Path) -> Result<Manifest, String> {
+    let path = dir.join(MANIFEST);
+    let raw = std::fs::read_to_string(&path)
+        .map_err(|_| format!("{} 里没有 {MANIFEST}，不是 kotori 打的版本", dir.display()))?;
+    parse_manifest(&raw)
+}
+
 /// 把包解到 `into`（一个临时目录），按清单把修改时间盖回每个文件。
 ///
 /// 时间必须自己盖：zip 条目里存的是 2 秒精度的 DOS 时间，直接用它会让"谁新"
@@ -154,7 +165,7 @@ fn extras(manifest: &Manifest, targets: &[SaveTarget]) -> Result<Vec<String>, St
         if !target.local.is_dir() {
             continue;
         }
-        let (found, _) = super::pack::collect_files(&target.local, &target.exclude)?;
+        let (found, _) = super::gather::collect_files(&target.local, &target.exclude)?;
         for (_, relative) in found {
             let name = format!("{}/{relative}", target.key);
             if !known.contains(&name) {

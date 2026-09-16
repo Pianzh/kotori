@@ -5,7 +5,6 @@
 
 use super::staging::Staging;
 use super::{COMMAND_TIMEOUT, GameOutcome, LocationOutcome, Runner};
-use crate::sync::archive;
 
 impl Runner {
     /// Push every location of a game into the cloud as one package.
@@ -22,23 +21,21 @@ impl Runner {
             return GameOutcome::failed(game_id, name, error.to_string());
         }
 
-        let staging = match Staging::new(&self.work_dir) {
+        let staging = match Staging::new(self.work_dir()) {
             Ok(staging) => staging,
             Err(error) => return GameOutcome::failed(game_id, name, error),
         };
         let stamp = crate::sync::version_stamp(chrono::Utc::now());
-        let archive_path = staging.package_file(&stamp);
 
-        let report = match archive::pack(&archive_path, targets, chrono::Utc::now()) {
-            Ok(report) => report,
-            Err(error) => {
-                // 打包失败绝不能动旧包：它们还在，回退能力不受影响。
-                return GameOutcome::failed(game_id, name, format!("打包失败: {error}"));
-            }
-        };
+        let send = self
+            .send_version(game_id, &stamp, targets, staging.root(), COMMAND_TIMEOUT)
+            .await;
 
-        if report.locations.is_empty() {
-            // 本机一个存档目录都没有：上传一个空包只会往版本列表里塞垃圾。
+        // 本机一个存档目录都没有：引擎已经不上传了（两个引擎共用这条判据），
+        // 这里只把"没东西可传"如实说出来。
+        if let Ok(report) = &send
+            && report.locations.is_empty()
+        {
             return GameOutcome::from_locations(
                 game_id,
                 name,
@@ -51,23 +48,22 @@ impl Runner {
             );
         }
 
-        tracing::info!(
-            "{game_id}: 打包完成 {stamp}（{} 个文件，跳过 {} 个被排除的）",
-            report.entries.len(),
-            report.excluded
-        );
-        let send = self
-            .send_package(game_id, &stamp, &archive_path, COMMAND_TIMEOUT)
-            .await;
+        if let Ok(report) = &send {
+            tracing::info!(
+                "{game_id}: 打包完成 {stamp}（{} 个文件，跳过 {} 个被排除的）",
+                report.entries.len(),
+                report.excluded
+            );
+        }
 
         let outcomes = targets
             .iter()
             .map(|target| match &send {
                 Err(error) => LocationOutcome::new(target, "failed", error.to_string()),
-                Ok(()) if report.missing.contains(&target.key) => {
+                Ok(report) if report.missing.contains(&target.key) => {
                     LocationOutcome::new(target, "skipped", "本地没有这个目录，没什么可上传的")
                 }
-                Ok(()) => LocationOutcome::new(target, "uploaded", format!("已上传为 {stamp}")),
+                Ok(_) => LocationOutcome::new(target, "uploaded", format!("已上传为 {stamp}")),
             })
             .collect::<Vec<_>>();
 

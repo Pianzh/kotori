@@ -44,16 +44,22 @@ pub enum SecretKey {
     B2KeyId,
     /// Backblaze application key.
     B2AppKey,
+    /// kopia 仓库密码。
+    ///
+    /// **可以没有**：没有就用默认的 `kotori`（见 `sync::engine::kopia`）。设了它
+    /// 意味着"不想让拿到桶的人解开"，所以要跟着凭据库一起搬家（[`SecretKey::ALL`]）。
+    KopiaPassword,
 }
 
 impl SecretKey {
-    pub const ALL: [SecretKey; 2] = [Self::B2KeyId, Self::B2AppKey];
+    pub const ALL: [SecretKey; 3] = [Self::B2KeyId, Self::B2AppKey, Self::KopiaPassword];
 
     /// Keyring "account" attribute; also what the user types into `secret-tool`.
     pub fn account(self) -> &'static str {
         match self {
             Self::B2KeyId => "b2-key-id",
             Self::B2AppKey => "b2-app-key",
+            Self::KopiaPassword => "kopia-password",
         }
     }
 
@@ -62,6 +68,7 @@ impl SecretKey {
         match self {
             Self::B2KeyId => "kotori: B2 key id",
             Self::B2AppKey => "kotori: B2 application key",
+            Self::KopiaPassword => "kotori: kopia repository password",
         }
     }
 }

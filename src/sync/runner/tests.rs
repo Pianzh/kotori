@@ -10,7 +10,13 @@ use crate::sync::runner::testing::FakeRclone;
 async fn credentials_reach_rclone_through_the_environment_only() {
     let fake = FakeRclone::new("secrets");
     let outcome = fake.runner(0).check().await.unwrap();
-    assert_eq!(outcome, "kotori:bkt/prefix");
+    // 回话里带着"是哪个引擎、哪个二进制":两个引擎在桶里各写各的区域,
+    // 设置页要能把这句话原样显示出来。
+    assert!(
+        outcome.ends_with(" · kotori:bkt/prefix"),
+        "远端要报出来:{outcome}"
+    );
+    assert!(outcome.starts_with("rclone ("), "引擎要报出来:{outcome}");
 
     let calls = fake.calls();
     assert!(calls[0].starts_with("mkdir kotori:bkt/prefix"), "{calls:?}");

@@ -82,6 +82,7 @@ exit 0
             bucket: "bkt".to_string(),
             prefix: "prefix".to_string(),
             keep_versions,
+            ..SyncConfig::default()
         }
     }
 

@@ -27,6 +27,15 @@ pub(super) fn push_sync(ui: &mut Ui) {
     push_str(w.get_sync_master_password(), &form.master_password, |v| {
         w.set_sync_master_password(v)
     });
+    push_str(w.get_sync_engine(), &form.engine, |v| w.set_sync_engine(v));
+    push_str(w.get_sync_kopia_password(), &form.kopia_password, |v| {
+        w.set_sync_kopia_password(v)
+    });
+    push_bool(
+        w.get_sync_connection_revealed(),
+        form.connection_revealed,
+        |v| w.set_sync_connection_revealed(v),
+    );
     push_bool(w.get_sync_busy(), form.busy, |v| w.set_sync_busy(v));
     push_bool(
         w.get_sync_confirm_master_delete(),
@@ -57,6 +66,30 @@ pub(super) fn push_sync(ui: &mut Ui) {
         w.get_sync_rclone(),
         status.rclone.as_deref().unwrap_or_default(),
         |v| w.set_sync_rclone(v),
+    );
+    push_str(
+        w.get_sync_kopia_binary(),
+        status.kopia.as_deref().unwrap_or_default(),
+        |v| w.set_sync_kopia_binary(v),
+    );
+    // 引擎只推一次(上面表单那一处):它既是可编辑项、又是状态显示项,
+    // 推两次会让用户刚点的选择被随后的 status 覆盖。
+    push_str(w.get_sync_kopia_prefix(), &status.kopia_prefix, |v| {
+        w.set_sync_kopia_prefix(v)
+    });
+    // 密码状态只说"是不是默认",绝不说值 —— 值从来没离开过凭据库。
+    let kopia_password_set = status.has_secret("kopia-password");
+    push_bool(w.get_sync_kopia_using_default(), !kopia_password_set, |v| {
+        w.set_sync_kopia_using_default(v)
+    });
+    push_str(
+        w.get_sync_kopia_password_state(),
+        if kopia_password_set {
+            "已自己设置(存在凭据库里)"
+        } else {
+            "默认的 kotori"
+        },
+        |v| w.set_sync_kopia_password_state(v),
     );
     push_str(w.get_sync_keyring(), &status.keyring, |v| {
         w.set_sync_keyring(v)

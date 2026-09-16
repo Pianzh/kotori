@@ -6,7 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::pack::excluded_by;
+use super::gather::excluded_by;
 use super::unpack::{parse_manifest, read_manifest};
 use super::*;
 use crate::sync::SaveTarget;

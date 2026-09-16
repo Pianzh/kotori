@@ -1,40 +1,35 @@
-//! Driving rclone: the orchestration half of cloud sync.
+//! 驱动引擎：云同步的编排那一半。
 //!
-//! [`super`] builds argument lists and `archive` knows what is inside a package;
-//! this module runs rclone, resolves what each save location means on *this*
-//! machine, and reports per-location outcomes that the UI and CLI can show
-//! verbatim.
+//! [`super::engine`] 知道"这一版怎么上云、怎么取回"，`archive` 知道一个包里有什么；
+//! 本模块把两者接起来——解析每个存档位置在**这台机器**上是哪个目录，并把每个位置
+//! 的结果如实报出来，供 UI 与 CLI 原样显示。
 //!
-//! Three rules shape everything here (ADR-010 / ADR-012):
-//!   * **Never destroy local data.** A package is uploaded whole, the automatic
-//!     pre-launch pull only takes files that are newer in the cloud, and pruning
-//!     only ever deletes packages in the cloud.
-//!   * **Secrets never touch a disk or a command line.** They are read from the
-//!     keyring and handed to the child through its environment.
-//!   * **A failure says what failed.** Every location gets its own outcome, so
-//!     "synced" is never reported for something that was skipped.
+//! 三条规则贯穿这里（ADR-010 / ADR-012）：
+//!   * **绝不毁掉本机数据。** 一版整份上传；启动前的自动取回只取云端更新的那些；
+//!     保留窗口只在云上删旧版本。
+//!   * **秘密绝不落盘、绝不进命令行**（kopia 的 B2 key 是上游强制的例外，见
+//!     [`super::engine::kopia`] 的说明）。
+//!   * **失败要说清哪一步失败。** 每个存档位置各有各的结果，绝不用一句"已同步"
+//!     盖过某个被跳过的位置。
 //!
-//! 文件分工：本文件是 [`Runner`] 本身——超时预算、"跑一次 rclone"的传输底座，
-//! 以及"云端有哪些包"这几个查询；`upload.rs` 管上传，`pull.rs` 管启动前取回，
-//! `restore.rs` 管恢复与保留窗口，`staging.rs` 管临时目录与铺文件，
-//! `outcome.rs` 是汇报类型，`diagnostics.rs` 把 rclone 的 stderr 翻成人话，
-//! `testing.rs` 是测试用的假 rclone。
+//! 文件分工：本文件是 [`Runner`] 本身——超时预算与通向引擎的那几个调用；
+//! `upload.rs` 管上传，`pull.rs` 管启动前取回，`restore.rs` 管恢复与保留窗口，
+//! `staging.rs` 管临时目录与铺文件，`outcome.rs` 是汇报类型，
+//! `testing.rs` 是测试用的假引擎。
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
-use super::{
-    SyncError, copyto_args, deletefile_args, game_remote, list_files_args, package_remote,
-    parse_packages, rclone_env, remote_root, validate, validate_secrets,
-};
+use super::SyncError;
+use super::archive::{Manifest, PackReport};
+use super::engine::Backend;
+use super::save_targets::SaveTarget;
+use super::{validate, validate_secrets};
 use crate::config::SyncConfig;
-use crate::secrets::{Keyring, SecretKey};
+use crate::secrets::Keyring;
 
-use self::diagnostics::explain_failure;
 pub use self::outcome::{GameOutcome, LocationOutcome};
 
-mod diagnostics;
 mod outcome;
 mod pull;
 mod restore;
@@ -45,7 +40,7 @@ mod testing;
 mod tests;
 mod upload;
 
-/// Ceiling for one rclone invocation.
+/// Ceiling for one engine invocation.
 pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
 /// Budget for the automatic pull before a launch. Past this the game starts
 /// anyway: a slow network must never keep the user out of their game.
@@ -59,9 +54,9 @@ pub const PULL_TIMEOUT: Duration = Duration::from_secs(30);
 /// would come back on the next launch, so we wait a moment first.
 pub const SETTLE_DELAY: Duration = Duration::from_secs(3);
 
-/// Runs rclone against one sync configuration.
+/// Runs one sync configuration against whichever engine it selects.
 pub struct Runner {
-    rclone: PathBuf,
+    backend: Backend,
     settings: SyncConfig,
     keyring: Keyring,
     /// 打包与解包的落脚点。默认在数据目录下（`~/.local/share/kotori/sync`），
@@ -70,21 +65,25 @@ pub struct Runner {
 }
 
 impl Runner {
-    /// Build a runner if rclone is available, otherwise say what is missing.
+    /// Build a runner for the configured engine, or say what is missing.
     pub fn new(settings: SyncConfig, keyring: Keyring) -> Result<Self, SyncError> {
-        let rclone = super::find_rclone().ok_or_else(|| {
-            SyncError::RcloneMissing(
-                "PATH 里找不到 rclone。Arch: sudo pacman -S rclone".to_string(),
-            )
-        })?;
-        Ok(Self::with_binary(rclone, settings, keyring))
+        let backend = Backend::new(&settings, keyring.clone())?;
+        Ok(Self {
+            backend,
+            settings,
+            keyring,
+            work_dir: crate::config::data_dir().join("sync"),
+        })
     }
 
     /// A runner pinned to one binary. Used by tests, and by users who keep
-    /// rclone somewhere unusual (`KOTORI_RCLONE` is handled by `new`).
-    pub fn with_binary(rclone: impl Into<PathBuf>, settings: SyncConfig, keyring: Keyring) -> Self {
+    /// their tool somewhere unusual (`KOTORI_RCLONE` / `KOTORI_KOPIA` are
+    /// handled by `new`).
+    #[cfg(test)]
+    pub fn with_binary(binary: impl Into<PathBuf>, settings: SyncConfig, keyring: Keyring) -> Self {
+        let backend = Backend::with_binary(binary.into(), settings.clone(), keyring.clone());
         Self {
-            rclone: rclone.into(),
+            backend,
             settings,
             keyring,
             work_dir: crate::config::data_dir().join("sync"),
@@ -107,135 +106,63 @@ impl Runner {
         validate_secrets(&self.keyring)
     }
 
-    /// Credentials, as the child process should see them.
-    ///
-    /// The two B2 values are the only secrets this engine has: no sync password,
-    /// no crypt layer (see `rclone_env`).
-    fn env(&self) -> Result<Vec<(String, String)>, SyncError> {
-        let read = |key: SecretKey| {
-            self.keyring
-                .get(key)
-                .map_err(|e| SyncError::Command(e.to_string()))
-        };
-        let missing = |what: &str| SyncError::Config(format!("密钥环里没有{what}"));
-
-        let key_id = read(SecretKey::B2KeyId)?.ok_or_else(|| missing("B2 key id"))?;
-        let app_key = read(SecretKey::B2AppKey)?.ok_or_else(|| missing("B2 application key"))?;
-        Ok(rclone_env(&self.settings, &key_id, &app_key))
-    }
-
-    /// Run rclone with the credentials in its environment.
-    async fn run(&self, args: &[String], timeout: Duration) -> Result<String, SyncError> {
-        let env = self.env()?;
-        self.run_with(args, timeout, env).await
-    }
-
-    /// The one place an rclone child is spawned.
-    async fn run_with(
-        &self,
-        args: &[String],
-        timeout: Duration,
-        env: Vec<(String, String)>,
-    ) -> Result<String, SyncError> {
-        let mut command = tokio::process::Command::new(&self.rclone);
-        command
-            .args(args)
-            .envs(env)
-            // Even the "no credentials" path must ignore the user's config.
-            .env("RCLONE_CONFIG", super::null_config_path())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            // A timed-out transfer must not keep running in the background.
-            .kill_on_drop(true);
-
-        let child = command
-            .spawn()
-            .map_err(|e| SyncError::Command(format!("无法执行 {}: {e}", self.rclone.display())))?;
-
-        let output = tokio::time::timeout(timeout, child.wait_with_output())
-            .await
-            .map_err(|_| {
-                SyncError::Command(format!("rclone {} 超过 {:?} 未完成", args[0], timeout))
-            })?
-            .map_err(|e| SyncError::Command(format!("无法执行 {}: {e}", self.rclone.display())))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let detail = if stderr.trim().is_empty() {
-                format!("退出码 {:?}", output.status.code())
-            } else {
-                explain_failure(&stderr)
-            };
-            return Err(SyncError::Command(format!(
-                "rclone {} 失败: {detail}",
-                args[0]
-            )));
-        }
-
-        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    /// The temporary work area this runner hands to the engine.
+    pub(super) fn work_dir(&self) -> &Path {
+        &self.work_dir
     }
 
     /// Verify credentials, bucket and write access in one call.
     ///
-    /// `mkdir` on the prefix is the cheapest operation that exercises all three
-    /// and it is idempotent, so a successful "test connection" also means the
-    /// first sync will not fail for a trivial reason.
+    /// 回话里带上**是哪个引擎、哪个二进制**：设置页把它原样显示出来，用户一眼
+    /// 就能看出"我连的到底是 rclone 还是 kopia"——两个引擎在桶里各写各的区域，
+    /// 认错了不会报错，只会看不见对面的存档。
     pub async fn check(&self) -> Result<String, SyncError> {
-        self.ready()?;
-        let root = remote_root(&self.settings);
-        self.run(&["mkdir".to_string(), root.clone()], COMMAND_TIMEOUT)
-            .await?;
-        Ok(root)
+        let target = self.backend.check().await?;
+        Ok(format!("{} · {target}", self.backend.describe()))
     }
 
     /// The version packages the cloud holds for a game, oldest first.
     pub async fn packages(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
-        let remote = game_remote(&self.settings, game_id);
-        let output = self.run(&list_files_args(&remote), COMMAND_TIMEOUT).await?;
-        // Only ever report names that look like our own packages.
-        Ok(parse_packages(&output))
+        self.backend.versions(game_id).await
     }
 
     /// The newest package, or `None` when the cloud has never seen this game.
     ///
-    /// "Newest" is simply the largest name: the stamp starts with second-
-    /// precision UTC, so lexicographic order is chronological order and no
-    /// pointer file has to be kept in sync.
+    /// "Newest" is simply the largest name: the stamp starts with UTC to the
+    /// millisecond, so lexicographic order is chronological order and no
+    /// pointer file has to be kept in sync. kopia 那条路把同一个名字写进快照的
+    /// description，于是这条判据在两个引擎下逐字相同。
     pub async fn latest_package(&self, game_id: &str) -> Result<Option<String>, SyncError> {
-        Ok(self.packages(game_id).await?.pop())
+        self.backend.latest(game_id).await
     }
 
-    /// Download one package to a local file.
-    pub async fn fetch_package(
+    /// Upload this machine's version as one package.
+    pub(super) async fn send_version(
+        &self,
+        game_id: &str,
+        stamp: &str,
+        targets: &[SaveTarget],
+        work_dir: &Path,
+        timeout: Duration,
+    ) -> Result<PackReport, SyncError> {
+        self.backend
+            .send(game_id, stamp, targets, work_dir, timeout)
+            .await
+    }
+
+    /// Fetch one version and unpack it into `into`.
+    pub(super) async fn fetch_version(
         &self,
         game_id: &str,
         stamp: &str,
         into: &Path,
         timeout: Duration,
-    ) -> Result<(), SyncError> {
-        let remote = package_remote(&self.settings, game_id, stamp);
-        let args = copyto_args(&remote, &into.to_string_lossy());
-        self.run(&args, timeout).await.map(|_| ())
-    }
-
-    /// Upload one local file as this game's package.
-    pub async fn send_package(
-        &self,
-        game_id: &str,
-        stamp: &str,
-        from: &Path,
-        timeout: Duration,
-    ) -> Result<(), SyncError> {
-        let remote = package_remote(&self.settings, game_id, stamp);
-        let args = copyto_args(&from.to_string_lossy(), &remote);
-        self.run(&args, timeout).await.map(|_| ())
+    ) -> Result<Manifest, SyncError> {
+        self.backend.fetch(game_id, stamp, into, timeout).await
     }
 
     /// Delete one version package.
-    async fn remove_package(&self, game_id: &str, stamp: &str) -> Result<(), SyncError> {
-        let remote = package_remote(&self.settings, game_id, stamp);
-        let args = deletefile_args(&remote);
-        self.run(&args, COMMAND_TIMEOUT).await.map(|_| ())
+    pub(super) async fn remove_version(&self, game_id: &str, stamp: &str) -> Result<(), SyncError> {
+        self.backend.remove(game_id, stamp).await
     }
 }

@@ -1,0 +1,114 @@
+// 「kopia 仓库」那一组(云同步页在 kopia 模式下用):仓库密码 + 连接信息。
+//
+// 单独一个文件,理由是它只在 kopia 模式下出现,而且"连接信息"那一段默认折叠 ——
+// 里面写着桶名、前缀和密码状态,不该一打开设置页就摊在屏幕上(用户在看屏幕)。
+// 可编辑字段仍然归页面所有(见 render.rs 的规矩)。
+
+import { Tokens } from "../theme.slint";
+import { Divider } from "../widgets/base.slint";
+import { TextField } from "../widgets/controls.slint";
+import { AccentButton, StdButton } from "../widgets/buttons.slint";
+import { CardRow, Group } from "../widgets/card.slint";
+
+export component SyncKopiaGroup inherits Rectangle {
+    /// kopia 可执行文件;空 = 没装(这条引擎走不通,rclone 那条照常)。
+    in property <string> binary: "";
+    in property <string> bucket: "";
+    /// 仓库在桶里的前缀(`<prefix>/kopia`)。
+    in property <string> repo-prefix: "";
+    /// 密码状态那句话:默认密码,还是用户自己设过。
+    in property <string> password-state: "";
+    /// 用的是默认密码吗 —— 默认密码等于"拿到桶的人都能解开",要显眼地说。
+    in property <bool> using-default: true;
+    in property <bool> busy: false;
+
+    /// 仓库密码。**可以留空** —— 留空就是用默认的 `kotori`。
+    in-out property <string> password: "";
+    /// 连接信息默认折叠;点按钮才展开。
+    in-out property <bool> revealed: false;
+
+    callback field(int, string);
+    callback save-password();
+
+    height: group.height;
+    group := Group {
+        VerticalLayout {
+            padding: 16px;
+            spacing: 4px;
+            Text {
+                text: root.binary != ""
+                    ? "kopia:" + root.binary
+                    : "kopia 未安装(Arch:sudo pacman -S archlinuxcn/kopia;Windows 用官方 release)";
+                font-size: 11px;
+                color: root.binary != "" ? Tokens.text-3 : Tokens.warn;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "kopia 把存档存成一个内容寻址的仓库:增量、去重、自带加密。仓库落在 <bucket>/" + root.repo-prefix + " 下,与 rclone 那条路互不干扰,也不会互相读到。";
+                font-size: 11px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+        }
+        Divider { }
+        CardRow {
+            title: "仓库密码";
+            description: root.using-default
+                ? "现在用的是默认密码 kotori —— 任何拿到这个 bucket 的人都能解开仓库。想保护就自己设一个(所有端要一致)。"
+                : "已设自己的密码(存在凭据库里,不进 argv)。留空保存 = 改回默认的 kotori。";
+            TextField {
+                field-width: 220px;
+                text <=> root.password;
+                edited(text) => { root.field(7, text); }
+                placeholder: "留空 = 默认 kotori";
+            }
+        }
+        Divider { }
+        HorizontalLayout {
+            padding: 12px;
+            spacing: 12px;
+            AccentButton {
+                label: "保存密码";
+                button-width: 108px;
+                button-enabled: !root.busy;
+                clicked => { root.save-password(); }
+            }
+            StdButton {
+                label: root.revealed ? "隐藏连接信息" : "显示连接信息";
+                button-width: 132px;
+                clicked => { root.revealed = !root.revealed; }
+            }
+        }
+        // 连接信息:默认隐藏。别人想自己用 kopia 读这个仓库,需要的就这几样 ——
+        // **不需要同一把 B2 key**(key 是连接时参数,不写进仓库)。
+        if root.revealed : VerticalLayout {
+            padding-left: 16px;
+            padding-right: 16px;
+            padding-bottom: 16px;
+            spacing: 3px;
+            Text {
+                text: "让别人自己用 kopia 读这个仓库,需要:";
+                font-size: 11px;
+                color: Tokens.text-2;
+            }
+            Text {
+                text: "① 装 kopia 0.22 或更新  ② bucket:" + root.bucket + "  ③ 前缀:" + root.repo-prefix;
+                font-size: 11px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "④ 密码:" + root.password-state;
+                font-size: 11px;
+                color: root.using-default ? Tokens.warn : Tokens.text-3;
+                wrap: word-wrap;
+            }
+            Text {
+                text: "不需要同一把 B2 key:任何对这个 bucket 有读权限的 key 都能连(kopia repository connect b2 --readonly 还能保证不动仓库)。";
+                font-size: 11px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

@@ -112,9 +112,19 @@ pub enum Message {
     Tick,
 
     // --- cloud sync (settings tab) ---
-    SyncStatusLoaded(Result<SyncStatus, String>),
+    /// Box 起来的：`SyncStatus` 是这里最大的一份状态（三个引擎相关的字符串加上
+    /// 游戏列表），直接塞进枚举会把每一个 `Message` 都撑到几百字节 —— 而消息在
+    /// 每条事件上都要移动一次。
+    SyncStatusLoaded(Box<Result<SyncStatus, String>>),
     SyncToggleEnabled(bool),
     SyncField(SyncField, String),
+    /// 换引擎（`rclone` / `kopia`）。只改表单，随"保存设置"一起提交。
+    SyncEngineSelected(String),
+    /// kopia 仓库密码：它不是 `[sync]` 里的设置项，所以不走 [`SyncField`]。
+    SyncKopiaPasswordChanged(String),
+    SyncSaveKopiaPassword,
+    /// `Ok(true)` = 清除成功，回到默认密码。
+    SyncKopiaPasswordSaved(Result<bool, String>),
     SyncSaveSettings,
     SyncSettingsSaved(Result<(), String>),
     SyncSaveCredentials,

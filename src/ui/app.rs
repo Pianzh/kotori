@@ -126,10 +126,9 @@ impl App {
                     async { load_wine_status().await },
                     Message::WineStatusLoaded,
                 ),
-                Task::perform(
-                    async { load_sync_status().await },
-                    Message::SyncStatusLoaded,
-                ),
+                Task::perform(async { load_sync_status().await }, |result| {
+                    Message::SyncStatusLoaded(Box::new(result))
+                }),
                 // 「浏览…」能不能用,开机就问一次(没有对话框的桌面上按钮要灰着并说明)。
                 Task::perform(
                     async { crate::picker::probe().await },
@@ -173,10 +172,9 @@ impl App {
 
     /// Re-read the sync status after a change.
     pub(super) fn reload_sync(&self) -> Task<Message> {
-        Task::perform(
-            async { load_sync_status().await },
-            Message::SyncStatusLoaded,
-        )
+        Task::perform(async { load_sync_status().await }, |result| {
+            Message::SyncStatusLoaded(Box::new(result))
+        })
     }
 
     // ── 自动保存(没有「保存」按钮了,这一节就是那个按钮) ──────────────────
@@ -426,7 +424,7 @@ mod tests {
         }
 
         // The reply lands about a second later: it must not wipe the form.
-        let _ = app.update(Message::SyncStatusLoaded(Ok(status)));
+        let _ = app.update(Message::SyncStatusLoaded(Box::new(Ok(status))));
 
         assert_eq!(app.sync_form.key_id, "0046b5");
         assert_eq!(app.sync_form.app_key, "K004bk5u");

@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 mod paths;
 mod profile;
+mod sync;
 
 // Only what the rest of the crate actually names. Everything else stays reachable
 // through `config::profile` / `config::paths` — a re-export nobody uses is a
@@ -14,6 +15,7 @@ pub use paths::{
 pub use profile::{
     FALLBACK_OUTPUT_HEIGHT, FALLBACK_OUTPUT_WIDTH, MAX_SHARPNESS, ScaleAlgorithm, ScaleProfile,
 };
+pub use sync::{SyncConfig, SyncEngine};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -78,56 +80,6 @@ pub struct GameConfig {
     pub process_name: Option<String>,
     pub scale_profile: ScaleProfile,
     pub created_at: chrono::DateTime<chrono::Utc>,
-}
-
-/// Cloud save sync settings.
-///
-/// **Nothing secret is stored here.** The B2 credentials and the sync password
-/// live in the OS keyring (see [`crate::secrets`]), which encrypts them at rest
-/// while still letting their owner read them back with standard tooling. This
-/// struct only holds the non-sensitive settings (ADR-010).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SyncConfig {
-    #[serde(default)]
-    pub enabled: bool,
-    /// Optional override for the storage API endpoint.
-    ///
-    /// Normally **empty**: rclone's native `b2` backend discovers the right
-    /// regional API host from the credentials itself, and every B2 account
-    /// works that way. Set it only to pin a specific endpoint, as a full URL
-    /// (`https://api001.backblazeb2.com`) — a bare host does not work.
-    ///
-    /// Note this is *not* the `s3.<region>.backblazeb2.com` value the B2
-    /// console shows: that is the S3-compatible API, a different service this
-    /// backend does not speak. [`crate::sync::validate`] rejects it by name
-    /// rather than letting rclone fail with a confusing 404.
-    #[serde(default)]
-    pub endpoint: String,
-    #[serde(default)]
-    pub bucket: String,
-    /// Folder inside the bucket that kotori owns.
-    #[serde(default = "default_sync_prefix")]
-    pub prefix: String,
-    /// Version packages kept per game; `0` keeps all of them, which is the
-    /// default — silently dropping an old save is worse than using space.
-    #[serde(default)]
-    pub keep_versions: u32,
-}
-
-fn default_sync_prefix() -> String {
-    "kotori".to_string()
-}
-
-impl Default for SyncConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            endpoint: String::new(),
-            bucket: String::new(),
-            prefix: default_sync_prefix(),
-            keep_versions: 0,
-        }
-    }
 }
 
 /// How a save path is interpreted. The three kinds exist so that the same
@@ -474,21 +426,18 @@ follow_window = false
 
     #[test]
     fn a_sync_config_that_still_carries_encryption_still_loads() {
-        // 加密随 crypt 层一起没了（2026-09-16：rclone 这条路一版一个 zip，
-        // 包里就是明文，要加密用 kopia）。磁盘上每一份旧配置都还写着这个键 ——
-        // 加载必须照常，而下一次写回不能再带上它。
+        // 加密随 crypt 层一起没了（2026-09-16）。磁盘上每一份旧配置都还写着
+        // 这个键 —— 整份配置必须照常加载，下一次写回也不能再带上它。
+        // （`SyncConfig` 自己的字段级测试在 `config::sync` 里。）
         let toml = r#"
 [sync]
 enabled = true
 bucket = "kotori-saves"
-prefix = "kotori"
 encryption = true
-keep_versions = 3
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.sync.enabled);
-        assert_eq!(config.sync.bucket, "kotori-saves");
-        assert_eq!(config.sync.keep_versions, 3);
+        assert_eq!(config.sync.engine, SyncEngine::Rclone);
 
         let written = toml::to_string(&config).unwrap();
         assert!(!written.contains("encryption"), "{written}");

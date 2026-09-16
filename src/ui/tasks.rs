@@ -149,6 +149,26 @@ pub(super) async fn save_sync_credentials(
     Ok(())
 }
 
+/// 设置（或清除）kopia 仓库密码。留空 = 清除 = 回到默认的 `kotori`。
+///
+/// 返回 `true` 表示"现在用的是默认密码"——这句话必须让用户看见：默认密码意味着
+/// 任何拿到桶的人都能解开仓库。
+pub(super) async fn save_kopia_password(socket: &Path, password: &str) -> Result<bool, String> {
+    let value = crate::rpc::call(
+        socket,
+        "sync.set_kopia_password",
+        Some(crate::rpc::params([(
+            "password",
+            Value::String(password.to_string()),
+        )])),
+    )
+    .await?;
+    Ok(value
+        .get("using_default")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false))
+}
+
 /// Unlock the master-password file. The password goes over IPC to our own
 /// daemon and is never written anywhere.
 pub(super) async fn unlock_credentials(socket: &Path, password: &str) -> Result<(), String> {

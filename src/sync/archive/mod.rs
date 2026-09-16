@@ -22,13 +22,16 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+mod gather;
+mod materialize;
 mod pack;
 #[cfg(test)]
 mod tests;
 mod unpack;
 
-pub use pack::pack;
-pub use unpack::{MergePlan, extract, plan};
+pub use materialize::materialize;
+pub use pack::{PackReport, pack};
+pub use unpack::{MergePlan, extract, plan, read_dir_manifest};
 
 /// 包根那份清单的文件名。
 pub const MANIFEST: &str = "kotori-manifest.json";

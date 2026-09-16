@@ -47,29 +47,20 @@ impl Runner {
             Err(error) => return GameOutcome::failed(game_id, name, error.to_string()),
         };
 
-        let staging = match Staging::new(&self.work_dir) {
+        let staging = match Staging::new(self.work_dir()) {
             Ok(staging) => staging,
             Err(error) => return GameOutcome::failed(game_id, name, error),
         };
-        let file = staging.package_file(&stamp);
-        if let Err(error) = self
-            .fetch_package(game_id, &stamp, &file, PULL_TIMEOUT)
+        let manifest = match self
+            .fetch_version(game_id, &stamp, &staging.unpacked(), PULL_TIMEOUT)
             .await
         {
-            return GameOutcome::failed(
-                game_id,
-                name,
-                format!("没能取回云端存档 {stamp}（这一局照常启动）: {error}"),
-            );
-        }
-
-        let manifest = match archive::extract(&file, &staging.unpacked()) {
             Ok(manifest) => manifest,
             Err(error) => {
                 return GameOutcome::failed(
                     game_id,
                     name,
-                    format!("云端存档 {stamp} 读不出来（这一局照常启动）: {error}"),
+                    format!("没能取回云端存档 {stamp}（这一局照常启动）: {error}"),
                 );
             }
         };
