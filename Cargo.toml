@@ -45,6 +45,11 @@ uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 glob = "0.3"
 which = "7"
+# 云同步的第一种引擎把一版存档打成一个 zip(见 HANDOVER.md 的同步一节)。
+# 只开 deflate:默认特性会把 aes / bzip2 / zstd / lzma 的解码器全拖进来,而我们
+# 既不加密也不读那些格式。选 zip 而不是 tar.gz 的理由很实在——**不装 kotori 的人
+# 双击就能打开**,而这正是"云端是纯文件"这个承诺的最后一步。
+zip = { version = "8", default-features = false, features = ["deflate"] }
 libc = "0.2"
 nix = { version = "0.29", features = ["signal", "process", "term"] }
 argon2 = "0.6.0"

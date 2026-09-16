@@ -19,6 +19,8 @@ UI_GUIDE.md
 SHUTDOWN_HANG_FIX.md
 # 多端(ARM / Windows)的测试与开发计划:里面是设备/网络/磁盘这些具体信息,同样不入 git
 PLATFORMS.md
+# 云同步双引擎改造方案(rclone-zip / kopia):工作文档,实现完就该删或压缩掉
+SYNC_PLAN.md
 
 # 跑在仓库里那些 agent 工具自己的目录
 .opencode/
