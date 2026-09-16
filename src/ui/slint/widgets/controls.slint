@@ -59,6 +59,33 @@ export component TextField inherits Rectangle {
     border-width: 1px;
     border-color: input.has-focus ? #ffffff00 : #ffffff17;
     animate background { duration: 120ms; }
+    // 文本比框宽时输入框会被拉长并左移（见下），溢出的部分必须裁掉。
+    clip: true;
+
+    // ── 单行水平滚动 ──────────────────────────────────────────────────────
+    // ⚠ **Slint 的 TextInput 自己不做这件事**（2026-09-16 实测）：它的渲染数据
+    // （`items/text.rs` 的 `TextInputVisualRepresentation`）里根本没有水平偏移这个
+    // 字段，渲染器也不看 `single-line` —— 文本一超出宽度就被硬裁在右边缘，**正在打
+    // 的字看不见**（上游 issue #8567）。所以这里自己算：拿 TextInput 报上来的光标 x，
+    // 把整个输入框往左挪，让光标始终留在框里。
+    private property <length> inner-width: root.width - 20px;
+    /// 文本实际占多宽。密码框画的是 `●`，所以按**字符数**乘一个 `●` 的宽度 ——
+    /// 拿原文去量会偏小（applicationKey 那种长串正是密码框）。
+    private property <length> text-width: root.password
+            ? bullet.preferred-width * input.text.character-count
+            : measure.preferred-width;
+    /// 光标在输入框内部的 x。由 `cursor-position-changed` 报上来，是**文本坐标**而不是
+    /// 屏幕坐标，所以挪 x 不会把这条线绕成一个反馈环。
+    ///
+    /// 没有光标信息时（还没点进去、或者文本是程序设的）它就是 0 —— **显示头部**，
+    /// 与没做滚动之前、以及所有正常输入框的失焦表现一致。
+    private property <length> cursor-x: 0px;
+    /// 光标右边留 10px 余量再滚：贴着边打字看着难受。
+    private property <length> cursor-shift: Math.max(0px, root.cursor-x + 10px - root.inner-width);
+    /// 上界：文本比框短就没得滚。
+    private property <length> max-shift: Math.max(0px, root.text-width - root.inner-width);
+    /// 取小的那个：光标在哪就滚到哪，最多滚到末尾。
+    private property <length> shift: Math.min(root.cursor-shift, root.max-shift);
 
     // 聚焦时的 accent 下划线
     Rectangle {
@@ -77,14 +104,29 @@ export component TextField inherits Rectangle {
         clicked => { input.focus(); }
     }
 
+    // 量宽度用的两把「尺子」：不画出来，也不参与布局（这个组件的子元素全是绝对定位）。
+    // ⚠ 用 `opacity: 0` 而不是 `visible: false` —— 后者量出来是 0（实测）。
+    measure := Text {
+        text: input.text;
+        font-size: 14px;
+        opacity: 0;
+    }
+    bullet := Text {
+        text: "●";
+        font-size: 14px;
+        opacity: 0;
+    }
     input := TextInput {
-        x: 10px;
-        y: 0px;
-        width: root.width - 20px;
+        x: 10px - root.shift;
+        // 文本比框宽时把输入框本身也拉长：不然文字会在它自己的右边缘被切掉，
+        // 而不是被外层的 `clip` 切 —— 那样挪 x 也没用。
+        width: Math.max(root.inner-width, root.text-width);
         height: root.height;
         text <=> root.text;
         input-type: root.password ? InputType.password : InputType.text;
         edited => { root.edited(root.text); }
+        // 光标一动就记下它在哪，滚动量靠它算（见上面那一段）。
+        cursor-position-changed(pos) => { root.cursor-x = pos.x; }
         font-size: 14px;
         color: Tokens.text;
         single-line: true;
