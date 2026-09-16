@@ -26,14 +26,15 @@ kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对�
   没有任何一条路径在 UI/CLI 进程里直接 spawn gamescope。
 - **`~/.config/kotori/config.toml` 是用户本地数据**,里面的游戏清单、挂载点、存档路径
   只出现在用户机器上;文档与测试里只用占位路径(`/games/demo/game.exe`)。
-- **凭据绝不进 `config.toml`**,只在 `src/secrets/` 管的四个地方之一(见
+- **凭据绝不进 `config.toml`**,只在 `src/secrets/` 管的几个存储之一(设计四级、实现三级,见
   [architecture-sync.md](architecture-sync.md) §6)。
 - **当前代码只有 Unix 能编译**:`tokio::net::UnixStream`(`src/daemon/mod.rs`、
   `src/rpc.rs`)与 `libc::process_group` / `libc::kill`(`src/scale/teardown.rs`、
   `src/daemon/mod.rs`)没有平台抽象层。Windows 版需要先补这一层。
 
 技术栈:`Rust 2024` + `tokio` + `Slint 1.17`(GUI,`Cargo.toml`)+ 外部工具
-`gamescope` / `wine` / `rclone`(都被包在可注入的查找函数后面,见第 4 节模块地图)。
+`gamescope` / `wine` / `rclone`(默认同步引擎)与可选的 `kopia` 0.22+(加密同步引擎,
+都被包在可注入的查找函数后面,见第 4 节模块地图)。
 
 ---
 
@@ -72,7 +73,7 @@ kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对�
    `src/daemon/mod.rs::run` 里的 `signalled` 分支与 §4 生命周期第 7 步。
 2. **UI 不许"自愈"掉用户按下的「停止服务」**:`App::daemon_paused` 一旦立起,周期刷新与
    失败退避重试都走 `load_without_booting`,`ensure_running` 不再被调用
-   (`src/ui/tasks.rs`、`src/ui/update.rs`)。
+   (`src/ui/tasks.rs`、`src/ui/update/mod.rs`)。
 
 ---
 
@@ -85,20 +86,20 @@ kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对�
    │         │            │              │             │
    │         │            │              │             └─► ⑥UI 每 3s 轮询 daemon.status
    │         │            │              └─► 会话入 sessions 表,CWD=游戏根目录,WINEPREFIX 显式注入
-   │         │            └─► rclone copy --update(上限 30s,失败只报告不拦)
+   │         │            └─► 拉最新一版包,逐文件比较只取新的(上限 30s,失败只报告不拦)
    │         └─► JSON-RPC over Unix socket
    └─► Message::Launch → Task::perform(rpc) → 回包 Message::LaunchDone
 
-⑦游戏结束(三条路,见 scaling 篇 §6) ⑧收尾 ⑨Ended 事件 ⑩等 3s ⑪rclone copy --backup-dir
+⑦游戏结束(三条路,见 scaling 篇 §6) ⑧收尾 ⑨Ended 事件 ⑩等 3s ⑪把整份存档打成一包上传
 ```
 
 分步说明(括号内是代码位置):
 
 | # | 步骤 | 关键点 |
 |---|------|--------|
-| 1 | UI 发 `Message::Launch(id)`,`launching` 置位 | `src/ui/update.rs`;效果由 `src/ui/driver.rs::spawn` 跑在 tokio 上 |
-| 2 | `game.launch` → daemon | `src/ui/update.rs` 直接构造 params;CLI 走 `src/game/mod.rs::launch` |
-| 3 | **启动前自动取回**(同步开启且有存档位置时) | `sync_pull_before_launch`:`copy --update`,预算 `PULL_TIMEOUT` 30s,超时也照常启动 |
+| 1 | UI 发 `Message::Launch(id)`,`launching` 置位 | `src/ui/update/mod.rs`;效果由 `src/ui/driver.rs::spawn` 跑在 tokio 上 |
+| 2 | `game.launch` → daemon | `src/ui/update/mod.rs` 直接构造 params;CLI 走 `src/game/mod.rs::launch` |
+| 3 | **启动前自动取回**(同步开启且有存档位置时) | `sync_pull_before_launch`:取云端最新一版包,按清单只铺比本机新的文件,预算 `PULL_TIMEOUT` 30s,超时也照常启动 |
 | 4 | 解析 prefix → 组 gamescope 命令行 → spawn | `wine::resolve_prefix` → `scale::build_gamescope_args` → `process_group(0)` |
 | 5 | 会话登记 + 广播 `SessionKind::Started` | `sessions` 表是"什么在跑"的唯一真相 |
 | 6 | UI 每 `STATUS_POLL`(3s)拉 `daemon.status` | 列表因此显示"运行中";`watch_only` 会话也在里面 |
@@ -106,7 +107,7 @@ kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对�
 | 8 | 收尾:进程组 + 子进程树,再 `wineserver -k` | `scale::teardown::terminate_session` + `wine::close_prefix` |
 | 9 | watcher 移除会话并广播 `SessionKind::Ended` | `daemon::spawn_sync_events` 只认 `Ended` |
 | 10 | 等 `SETTLE_DELAY`(3s) | 让 `wineserver` 把刚写的存档刷到盘上 |
-| 11 | **退出后自动上传** | `sync_after_game_exit` → `Runner::upload`(`copy` + `--backup-dir` + 空 `--suffix`) |
+| 11 | **退出后自动上传** | `sync_after_game_exit` → `Runner::upload`:收集存档位置 → 打成一版一个的完整 zip → 交给引擎传上云 |
 
 失败面:`game.launch` 在 gamescope 300ms 内立刻退出时返回错误(`try_wait` 判定),UI 落在
 顶部错误条;取回失败只写进回包的 `sync_pull` 字段与日志,**不拦启动**。
@@ -120,21 +121,22 @@ kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对�
 | 入口 / CLI | 子命令分发、日志初始化、`scale`/`sync` 的共用汇报 | `src/main.rs`、`src/cli/mod.rs` |
 | IPC 客户端 | 一行 JSON-RPC 发一条收一条 | `src/rpc.rs` |
 | daemon | 分发请求、**唯一配置写者**、信号处理、会话事件 → 同步钩子 | `src/daemon/mod.rs` |
-| daemon/*_rpc | 按域切开的处理器 + wire 结构 | `daemon/{game,scale,status,sync}_rpc.rs`、`protocol.rs` |
-| 配置 | 类型、读写、路径(全部可注入)、缩放档案 | `src/config/{mod,paths,profile}.rs` |
+| daemon/*_rpc | 按域切开的处理器 + wire 结构 | `daemon/{game,scale,status}_rpc.rs`、`daemon/sync_rpc/{mod,credentials,actions}.rs`、`protocol.rs` |
+| 配置 | 类型、读写、路径(全部可注入)、缩放档案、同步设置 | `src/config/{mod,paths,profile,sync}.rs` |
 | 缩放引擎 | gamescope 命令行、会话、运行时属性、退出看门狗 | `src/scale/{args,gamescope,x11,action,teardown}.rs` |
 | 桌面集成 | 只做一件事:KDE 的 KWin 脚本桥(窗口尺寸/全屏) | `src/desktop/{mod,kde}.rs` |
-| 云同步 | rclone 参数与快照策略 / 真正执行 | `src/sync/{mod,runner}.rs` |
-| 凭据 | 四级存储与挑选顺序;明文文件;主密码加密文件 | `src/secrets/{mod,plain,encrypted}.rs` |
+| 云同步 | 双引擎门面(rclone 一版一 zip / kopia 快照)、打包解包、编排 | `src/sync/`:`mod.rs`、`engine/`、`archive/`、`runner/`、`rclone_args.rs`、`rclone_env.rs`、`remote_paths.rs`、`snapshots.rs`、`validate.rs` |
+| 凭据 | 三级存储(设计四级)与挑选顺序;明文文件;主密码加密文件 | `src/secrets/{mod,plain,encrypted}.rs`、`src/secrets/keyring/` |
 | GUI | Slint 视图 + 状态→属性 + 回调→消息 + 消息循环 | `src/ui/**`(详见 [architecture-gui.md](architecture-gui.md)) |
 | wine | prefix 探测与选择、存档路径解析与反解析、`wineserver -k` | `src/wine.rs` |
+| wine prefix 管理 | 所有已知 prefix 的登记与收尾(信号路径 `close_all`) | `src/wine_prefixes.rs` |
 | 进程探测 | `/proc` 轮询、进程树、`comm` 15 字节截断 | `src/process.rs` |
 | 显示器 | 输出分辨率探测(niri → KDE),`KOTORI_OUTPUT_RESOLUTION` 覆盖 | `src/display.rs` |
 | 文件对话框 | 借系统自己的框(portal / Windows shell)挑一个路径 | `src/picker.rs` |
-| 平台探测 | 「这台机器上有什么」:逐项依赖探测(版本/路径、缺了会怎样、按发行版的安装命令),喂给设置页的「环境检查」 | `src/platform/mod.rs` |
+| 平台探测 | 「这台机器上有什么」:逐项依赖探测(版本/路径、缺了会怎样、按发行版的安装命令),喂给设置页的「环境检查」 | `src/platform/{mod,probes,distro}.rs` |
 | 游戏管理 | 扫描、手动添加、ID 生成、exe 智能挑选 | `src/game/mod.rs` |
 | 工具 | `find_binary`、带超时重试的 `execute_with_timeout` | `src/util/{mod,executor}.rs` |
-| 测试 | 真实 daemon 的端到端测试(假 rclone / 假显示器 / 假 secret-tool) | `tests/ipc_e2e.rs` |
+| 测试 | 真实 daemon 的端到端测试(假 rclone / 假 kopia / 假显示器 / 假 secret-tool) | `tests/ipc_e2e/` |
 
 `build.rs` 只做一件事:用 `slint-build` 把 `src/ui/slint/app.slint`(及其 import)编成
 Rust,风格 `fluent`,并打开 `with_debug_info`(给 UI 的几何断言用)。
@@ -147,12 +149,12 @@ Rust,风格 `fluent`,并打开 `with_debug_info`(给 UI 的几何断言用)。
 |--------|-----|
 | 谁拥有配置/会话/凭据、IPC 长什么样、方法清单、环境变量、退出与信号 | [architecture-process.md](architecture-process.md) |
 | gamescope 参数、启动时怎么算尺寸、运行时三条通道、缩放档、退出看门狗 | [architecture-scaling.md](architecture-scaling.md) |
-| rclone 布局、取回/恢复语义、快照滚动窗口、凭据四级存储 | [architecture-sync.md](architecture-sync.md) |
+| 双引擎(rclone zip / kopia 快照)布局、取回/恢复语义、保留窗口、凭据三级存储 | [architecture-sync.md](architecture-sync.md) |
 | 为什么是 Slint、四层分工、Elm 式 `update`、自动保存三条规矩、没显示器时怎么验证 | [architecture-gui.md](architecture-gui.md) |
 | 第一次上手 B2 的分步操作 | [cloud-sync.md](cloud-sync.md)(面向用户,不是架构文档) |
 
 **建议的读码顺序**:`src/main.rs` → `src/config/mod.rs` → `src/daemon/mod.rs` →
-`src/scale/gamescope.rs` → `src/sync/runner.rs` → `src/ui/update.rs`。这条路径能把
+`src/scale/gamescope.rs` → `src/sync/runner/mod.rs` → `src/ui/update/mod.rs`。这条路径能把
 "一次启动"从头走到尾,其余模块都是它沿途用到的工具。
 
 `TODO(未核对)`:本仓库没有可用的 aarch64 std/rustup,Windows 目标也不在当前工具链里,

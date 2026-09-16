@@ -139,9 +139,9 @@ Wayland 不允许一个客户端改另一个客户端的窗口大小。
 **永远不命中**,而且只有游戏窗口聚焦时它才收得到键。加上 `GlobalShortcuts` 要求调用方有
 app id、KDE 又**不解析** `preferred_trigger`("授权成功" ≠ "按了有用"),这条路被整体删掉。
 
-**剩下的入口只有 CLI**:`kotori scale toggle|up|down|reset|fullscreen|fsr|integer|sharpness`
-→ `scale.action` / `scale.adjust_sharpness` / `scale.toggle_*`。窗口增减交给 KWin 原生
-(拖动、平铺)。
+**剩下的入口只有 CLI**:`kotori scale status|toggle|up|down|reset|fullscreen|fsr|nis|
+integer|linear|sharpness` → `scale.action` / `scale.adjust_sharpness` / `scale.toggle_*`。
+窗口增减交给 KWin 原生(拖动、平铺)。
 
 ---
 

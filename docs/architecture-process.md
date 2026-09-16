@@ -4,8 +4,8 @@
 wire 形状与全部方法、配置写入的并发规矩、路径与外部依赖怎么注入、以及退出与信号。
 **什么时候读它**:要加一个 RPC、要改配置持久化、要排查"界面显示的和实际不一致"的时候。
 
-核对来源:`src/daemon/{mod,protocol,game_rpc,scale_rpc,status_rpc,sync_rpc}.rs`、
-`src/rpc.rs`、`src/config/paths.rs`、`src/main.rs`、`src/ui/{tasks,app,update}.rs`。
+核对来源:`src/daemon/{mod,protocol,game_rpc,scale_rpc,status_rpc}.rs`、`src/daemon/sync_rpc/`、
+`src/rpc.rs`、`src/config/paths.rs`、`src/main.rs`、`src/ui/{tasks,app,update/mod.rs}`。
 
 ---
 
@@ -80,8 +80,8 @@ UI 进程崩溃**不影响**正在跑的游戏与退出后上传 —— 这是�
 
 ## 4. 方法清单
 
-全部方法都在 `src/daemon/mod.rs::handle_request` 的一张大 `match` 里,实现分散在四个
-`*_rpc.rs`。下表按域列出。
+全部方法都在 `src/daemon/mod.rs::handle_request` 的一张大 `match` 里,实现分散在
+`{game,scale,status}_rpc.rs` 与 `sync_rpc/`(目录)。下表按域列出。
 
 ### 守护进程自身 / 配置
 
@@ -128,17 +128,17 @@ UI 进程崩溃**不影响**正在跑的游戏与退出后上传 —— 这是�
 
 | 方法 | 参数 | 说明 |
 |------|------|------|
-| `sync.status` | — | 设置、rclone 路径、**当前生效的凭据级别**、存在的密钥名(**从不回声密钥值**)、每局游戏的存档位置数与上次结果 |
-| `sync.set_settings` | `enabled`/`endpoint`/`bucket`/`prefix`/`encryption`/`keep_versions`/`force` | 改加密开关必须带 `force` |
+| `sync.status` | — | 设置、引擎选择、rclone/kopia 二进制路径、**当前生效的凭据级别**、存在的密钥名(**从不回声密钥值**)、每局游戏的存档位置数与上次结果 |
+| `sync.set_settings` | `enabled`/`engine`/`endpoint`/`bucket`/`prefix`/`keep_versions` | 无 `encryption` 字段——加密是 kopia 引擎自带的;换引擎会返回 `engine_changed` 标志 |
 | `sync.set_credentials` | `key_id`、`app_key` | 两个都空 = 清除;只填一个 = 拒绝 |
-| `sync.set_password` | `password`、`force` | 存两种形态(明文 + rclone obscure 形态) |
+| `sync.set_kopia_password` | `password`(密码框字符串) | 留空 = 清除并回到默认密码 `kotori`;非空则存进凭据库,回 `using_default` 标志给 UI |
 | `sync.unlock` / `sync.lock` | `password` / — | 只对主密码文件后端有意义;别把"锁定"当"没存过" |
 | `sync.set_master_password` | `password`、`force` | 把现有凭据封进主密码文件 |
 | `sync.clear_master_password` | — | **不需要先解锁**(忘了主密码时的唯一出路) |
-| `sync.test` | — | `rclone mkdir <remote_root>`,一次练到凭据+bucket+写权限 |
-| `sync.now` | 可选 `id` | `id` 缺省 = 所有配了存档位置的游戏 |
-| `sync.versions` | `id` | 云端快照名,最旧在前 |
-| `sync.restore` | `id`、可选 `version` | 不带 `version` = 恢复最新;带则叠加那一份快照 |
+| `sync.test` | — | 按所选引擎验证:rclone 跑 `mkdir <remote_root>`,kopia 做一次 `snapshot list`;一次验到凭据+bucket+读写权限 |
+| `sync.now` | 可选 `id` | `id` 缺省 = 所有配了存档位置的游戏;每个位置打成一版一个 zip/kopia 快照 |
+| `sync.versions` | `id` | 云端版本列表(最旧在前),rclone 用包名、kopia 用快照 description |
+| `sync.restore` | `id`、可选 `version` | 不带 `version` = 恢复最新;带则恢复指定版本;**直接覆盖**(Merge::Replace),不先做安全快照——每一版本身就是完整的,回退到上一版就是撤销 |
 
 ---
 
@@ -180,6 +180,8 @@ UI 进程崩溃**不影响**正在跑的游戏与退出后上传 —— 这是�
 | `KOTORI_SECRETS_FILE` | 主密码凭据文件路径;**它的目录同时也是明文凭据文件的目录** | `<config 目录>/secrets.json` 与 `<同目录>/credentials.json` |
 | `KOTORI_SECRET_TOOL` | `secret-tool` 可执行文件 | `which secret-tool`(仍要过"真探一次"的探测) |
 | `KOTORI_RCLONE` | rclone 可执行文件 | `which rclone` |
+| `KOTORI_KOPIA` | kopia 可执行文件(≥0.22) | `which kopia` |
+| `KOTORI_KOPIA_REPOSITORY` | 把 kopia 仓库放到一个**本地目录**(NAS、挂载盘)而不是 B2 | 缺省 = 仓库直接落在 B2 的 `<prefix>/kopia` |
 | `KOTORI_WINESERVER` | `wineserver` 可执行文件 | `wineserver` |
 | `KOTORI_OUTPUT_RESOLUTION` | `WxH`,覆盖显示器探测 | niri → KDE 探测 |
 | `KOTORI_UI_SNAPSHOT` / `_SNAPSHOT_DELAY` / `_SEED_DELAY` / `_TAB` / `_SELECT` / `_SEARCH` / `_PICK` | 无显示器时验证 UI(仅 debug 构建) | 见 GUI 篇 §6 |
@@ -203,15 +205,24 @@ daemon 的主循环(`src/daemon/mod.rs::run`)是一个 `tokio::select!`,四个�
 
 退出时**一定**会做:`drop(listener)` + 删掉 socket 文件。信号路径额外做
 `close_all_sessions()`,它对每个会话调 `engine.stop_session`,而 `stop_session` 本身
-已经覆盖三层收尾(进程组、子进程树、`wineserver -k`)。
+已经覆盖三层收尾(进程组、子进程树、`wineserver -k`);然后**再**调
+`wine_prefixes::close_all()` —— 收掉"没人认领"的残留:上一次 daemon 被 SIGKILL 掉时
+留下的那局,`winedevice.exe` 无视 SIGTERM、又不在任何我们能杀的进程组或进程树里,
+只有 `wineserver -k` 收得掉它(它就是 90s 关机的元凶)。
+
+`wine_prefixes` 在每次会话启动时 `record(prefix)`,记下 kotori 碰过的每个 prefix;
+信号路径用这份记录收尾,不依赖"现在还有没有会话"。
 
 `close_all_sessions` **不动 `watch_only` 的会话的 prefix**:它只丢会话
 (`process_group` 是 `None`),因为那是用户自己起的游戏,不归 kotori 关。
 
-**启动时**:`run()` 在 bind 之前无条件 `remove_file(socket_path)`。这条对正常启动是
-必要的(清理上次崩溃留下的陈旧 socket),但同时意味着**第二个 daemon 会抢走第一个的
-socket 文件** —— 第一个仍在跑、仍有会话,只是再也没有人能找到它。`tests/ipc_e2e.rs`
-里有一条专门覆盖这个行为的测试(`second_daemon_replaces_a_stale_socket_file`)。
+**启动时**:`run()` 先对 `<socket_path>.lock` 取非阻塞 `flock`,拿不到就报
+"已经有一个守护进程"并退出;拿到锁之后再清掉陈旧 socket 文件并 bind。从前是 bind 前
+无条件 `remove_file`—— 那意味着**第二个 daemon 会抢走第一个的 socket 文件**(第一个
+仍在跑、仍有会话,只是没有人再找得到它,而两个写者同时写 `config.toml` 直接违背
+"daemon 是唯一配置写者")。现在两个行为分开:`tests/ipc_e2e/daemon.rs` 里
+`a_second_daemon_refuses_to_steal_a_live_socket`(活着的被挡,第一个毫发无损)与
+`second_daemon_replaces_a_stale_socket_file`(死文件照旧清掉重绑)各有一条测试守着。
 
 **客户端侧**没有任何信号处理:`kotori launch` 收到的 Ctrl-C 只会终止 CLI 自己,
 游戏与 daemon 都留着(这正是双进程想要的)。`src/rpc.rs` 也**不设客户端超时**,因为

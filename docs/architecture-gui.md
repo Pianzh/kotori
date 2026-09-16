@@ -33,7 +33,12 @@ Windows 上默认就是 fluent、可静态链接成单 exe、Linux ARM64 是它�
 
 ---
 
-## 2. 分层:哪些是新的,哪些一行没动
+## 2. 分层:哪些是新的,哪些只是拆了目录
+
+> 搬 Slint 时明确"不改语义"的五层(`message`/`app`/`tasks`/`model`/`parse`)如今只剩
+> `message`/`app`/`tasks` 还是单文件;`model.rs`、`parse.rs`、`update.rs` 已按域拆成
+> `model/`、`parse/`、`update/` 三个目录(**语义一字未动,物理拆分**,见各目录头注释)。
+> 「一行没动」这句话本身已经过时,要说清楚的是:拆的是文件,不是行为。
 
 ```
             .slint  (声明式视图, 页面自己持有输入框内容与下拉状态)
@@ -42,7 +47,7 @@ Windows 上默认就是 fluent、可静态链接成单 exe、Linux ARM64 是它�
    render/  状态 → 属性               wire.rs  回调 → Message
               ▲                                │
               │                                ▼
-              └──────── app.rs / update.rs  (App 状态 + update(Message) -> Task<Message>)
+              └──────── app.rs / update/  (App 状态 + update(Message) -> Task<Message>)
                                  │
                                  ▼
                         tasks.rs  (每个 Task 就是一条 async 的 RPC)
@@ -54,19 +59,20 @@ Windows 上默认就是 fluent、可静态链接成单 exe、Linux ARM64 是它�
 | 层 | 文件 | 职责 | 规矩 |
 |----|------|------|------|
 | 视图 | `src/ui/slint/`(`app.slint` + `app-nav.slint` + `widgets/` + `pages/`) | 摆放与接线;**窗口自己的状态**(页签、输入框内容)由它持有 | 不写 `width`/`height`,不自己定位浮层 |
-| 状态→属性 | `src/ui/render/`(一页一个文件 + `mod.rs`) | 把 `App` 的字段推成窗口属性 | **只做映射,不含判断**;所有 push 都"先比再写" |
-| 回调→消息 | `src/ui/wire.rs` | 每个 `on_*` 回调构造一条 `Message` | **这里不做任何决定**;规则若出现在这个文件里,就该挪去 `update.rs` |
+| 状态→属性 | `src/ui/render/`(一页一个文件 + `mod.rs` + `window_test/`) | 把 `App` 的字段推成窗口属性 | **只做映射,不含判断**;所有 push 都"先比再写" |
+| 回调→消息 | `src/ui/wire.rs` | 每个 `on_*` 回调构造一条 `Message` | **这里不做任何决定**;规则若出现在这个文件里,就该挪去 `update/` |
 | 消息循环 | `src/ui/driver.rs` | `dispatch(Message)` = `update` → `render` → 启动 Task;结果用 `invoke_from_event_loop` 回到 UI 线程 | 只有 `Message` 跨线程 |
 | 副作用 | `src/ui/tasks.rs` | 每条 Task 就是一次 `rpc::call` | 结果一律包成 `Message` 回来 |
 | 状态 | `src/ui/app.rs` | `App` 的全部字段 + 不属消息循环的 `impl` | |
 | 消息 | `src/ui/message.rs` | `Message` / `Tab` / `SyncField` / `PathTarget` | |
-| 数据 | `src/ui/model.rs` | 普通数据类型 + 常量(`STATUS_POLL` 3s、`AUTOSAVE_DEBOUNCE` 700ms) | |
-| 解析 | `src/ui/parse.rs` | `serde_json::Value` ↔ 结构体 | |
+| 数据 | `src/ui/model/` | 普通数据类型 + 常量(`STATUS_POLL` 3s、`AUTOSAVE_DEBOUNCE` 700ms),按域拆成 `{sync,game,session,environment}.rs` | |
+| 解析 | `src/ui/parse/` | `serde_json::Value` ↔ 结构体,按域拆成 `{sync,games,save_paths,scale,wine,environment,reconnect}.rs` | |
 | 崩溃日志 | `src/ui/crash.rs` | panic hook 写 `<data_dir>/logs/ui-crash.log` | |
 | 字体 | `src/ui/font.rs` | 挑一个系统里**确实有**的字体 | 绝不打包微软字体 |
 | 快照 | `src/ui/snapshot.rs` | 调试截图(仅 debug 构建) | 见 §6 |
 
-`model`/`message`/`app`/`update`/`tasks`/`parse` 是搬 Slint 时**有意一行没动**的后端对接层;
+`update/`、`parse/`、`model/` 是把原来三个大文件(`update.rs`、`parse.rs`、`model.rs`)
+按域拆成的目录;
 `task.rs` 取代的是 `iced::Task`(只有 `Task::none` / `Task::perform` / `Task::batch` 与
 `into_effects`)。
 
@@ -95,7 +101,7 @@ pub(super) fn dispatch(message: Message) {
   另一侧重新把状态查出来。
 - **窗口属性与 `App` 字段是两份状态**。页签就是例子:`.slint` 点导航栏时自己改 `tab` 属性
   并补发 `tab-changed`,Rust 侧的 `App::tab` 落一拍。写测试时要**两边都设**
-  (`window_test.rs::show_tab`),否则页面不会实例化,断言会全部空跑。
+  (`window_test/mod.rs::show_tab`),否则页面不会实例化,断言会全部空跑。
 
 ---
 
@@ -103,7 +109,7 @@ pub(super) fn dispatch(message: Message) {
 
 单游戏页**没有「保存」按钮**,改一下就防抖写回,页脚一行小字汇报
 `保存中…` / `已自动保存` / `保存失败: …`。三条规矩缺一不可
-(`app.rs` + `update.rs`,都有单测):
+(`app.rs` + `update/`,都有单测):
 
 ### ① 世代号防抖
 
@@ -146,7 +152,7 @@ pub(super) fn dispatch(message: Message) {
   在消息派发**之后**再 bump,否则抄到的是旧值。
 - **「浏览…」的 `PathPick` 令牌**(`types.slint`):输入框内容归页面所有,Rust 平时不往里
   写;**值一样也要能触发一次**,所以推的是一个递增令牌而不是值本身。⚠ 这一条在
-  `window_test.rs` 里**故意没有断言** —— 测试后端的 `accessible_value()` 读到的是旧值,
+  `window_test/mod.rs` 里**故意没有断言** —— 测试后端的 `accessible_value()` 读到的是旧值,
   写一条会撒谎的断言比不写更糟;只能靠快照看(§6)。
 
 ---
@@ -186,13 +192,14 @@ fontconfig 会回**替代品**,不比对就等于永远成功)。都不在就不
 
 三件工具,前两件是 `cargo test` 的一部分,第三件要手动跑。
 
-### (a) 整页渲染测试 —— `src/ui/render/window_test.rs`
+### (a) 整页渲染测试 —— `src/ui/render/window_test/`
 
 用 `i_slint_backend_testing::init_no_event_loop()` 在**没有显示器**的情况下建出真窗口,
 然后逐页、逐状态 `render()` 一遍:游戏库(空/有/搜索命中/搜索不命中/运行中/仅观测/启动中)、
-单游戏页(含三种存档位置 kind)、添加页、云同步页(未读到/就绪/待确认加密/待确认恢复/
-凭据文件锁着/只有内存/没装 rclone 且有解析不了的存档位置)、设置页(含「环境检查」的三种
-状态各一行:可用 / 有条件 / 缺少,以及结果还没到时的空表)。
+单游戏页(含三种存档位置 kind)、添加页、云同步页(未读到/就绪/待确认恢复/凭据文件锁着与
+解锁后/删除凭据文件前的二次确认条/只有内存/没装 rclone 且有解析不了的存档位置/**kopia
+模式的折叠与展开**/**kopia 没装时那一组变红**)、设置页(含「环境检查」的三种状态各一行:
+可用 / 有条件 / 缺少,以及结果还没到时的空表)。
 
 它顶替的是"翻到那一页才炸"的那类运行时错误:`Select.options[selected]` 越界、`for` 到空
 数组、下标→枚举映射写反、属性忘填。
@@ -237,9 +244,11 @@ PPM 是刻意的:不需要编码器,一行 Python 就能看。状态是通过**�
 
 ## 7. 已知未做
 
-- **后端对接层没拆**:`update.rs`(955 行,一个巨型 `match`)、`parse.rs`(834)、`app.rs`
-  (989,其中一半是测试)都是"单一职责但行数多",下一步按域拆(游戏/同步/设置)。
-- **单游戏页看不到历史快照**:只有「恢复最新」,没有版本选择器。
+- **`update`/`parse`/`model` 已按域拆成目录**(`update/` 3 个文件、`parse/` 7 个、
+  `model/` 4 个),但 `app.rs` 仍是 954 行的单文件,其中**过半是 `mod tests`**(从
+  404 行到文件尾);`update/` 里没有一个文件超过 500 行,总算不再有"巨型 match"。
+- **单游戏页看不到历史快照**:只有「恢复最新」,没有版本选择器(CLI 有 `sync versions` /
+  `sync restore --version`)。
 - **前端细节要重测**:中文输入法打完字、动画手感、缩放/平铺行为,都等用户实测。
 - **毛玻璃最后做**,而且**只做自家半透明质感**,不依赖合成器协议。
 
