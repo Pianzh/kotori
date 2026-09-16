@@ -122,8 +122,7 @@ pub(super) async fn load_sync_status() -> Result<SyncStatus, String> {
 }
 
 /// Persist the sync settings. The daemon validates and may refuse (an
-/// unconfirmed encryption change, an impossible prefix), so its message is
-/// surfaced verbatim.
+/// impossible prefix, say), so its message is surfaced verbatim.
 pub(super) async fn save_sync_settings(socket: &Path, patch: Value) -> Result<(), String> {
     let params = patch
         .as_object()
@@ -144,21 +143,6 @@ pub(super) async fn save_sync_credentials(
         Some(crate::rpc::params([
             ("key_id", Value::String(key_id.to_string())),
             ("app_key", Value::String(app_key.to_string())),
-        ])),
-    )
-    .await?;
-    Ok(())
-}
-
-pub(super) async fn save_sync_password(socket: &Path, password: &str) -> Result<(), String> {
-    crate::rpc::call(
-        socket,
-        "sync.set_password",
-        Some(crate::rpc::params([
-            ("password", Value::String(password.to_string())),
-            // Changing an existing password under encryption is confirmed in
-            // the UI; the daemon only insists on an explicit intent.
-            ("force", Value::Bool(true)),
         ])),
     )
     .await?;

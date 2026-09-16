@@ -129,26 +129,36 @@ mod tests {
     use crate::sync::runner::testing::{FakeRclone, target};
 
     /// 把一个包放到云端：先在本地打一个，再让假 rclone 搬过去。
-    fn publish(fake: &FakeRclone, saves: &std::path::Path, key: &str, stamp: &str, body: &str) {
+    ///
+    /// `mtime_ms` 显式给定，不靠"文件刚写完"——两次写入之间只差几毫秒，而 ms
+    /// 精度下它们可能落在同一刻度上，那这条测试就会时绿时红。
+    fn publish(fake: &FakeRclone, saves: &std::path::Path, stamp: &str, body: &str, mtime_ms: i64) {
         std::fs::create_dir_all(saves).unwrap();
-        std::fs::write(saves.join("save.sav"), body).unwrap();
-        let target = target(saves, "savedata", key);
+        let path = saves.join("save.sav");
+        std::fs::write(&path, body).unwrap();
+        set_mtime_ms(&path, mtime_ms);
+        let target = target(saves, "savedata", "rel-savedata");
         let zip = fake.dir.join("publish.zip");
         archive::pack(&zip, &[target], chrono::Utc::now()).unwrap();
         fake.put_package("demo", stamp, &zip);
+    }
+
+    fn set_mtime_ms(path: &std::path::Path, ms: i64) {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_millis(ms as u64);
+        std::fs::File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
     }
 
     #[tokio::test]
     async fn a_pull_takes_the_newest_package_and_leaves_newer_local_files_alone() {
         let fake = FakeRclone::new("pull");
         let cloud = fake.dir.join("cloud-saves");
-        publish(
-            &fake,
-            &cloud,
-            "rel-savedata",
-            "20260901T000000Z",
-            "from the cloud",
-        );
+        // 云端那一版很旧（1970 年的第 1 秒），本机这一份是刚写的。
+        publish(&fake, &cloud, "20260901T000000Z", "from the cloud", 1_000);
 
         // 本机版本更新：上一次上传失败了，用户的进度只在本机。
         let saves = fake.dir.join("saves");
@@ -156,7 +166,7 @@ mod tests {
         std::fs::write(saves.join("save.sav"), "local and newer").unwrap();
         let target = target(&saves, "savedata", "rel-savedata");
 
-        let outcome = fake.runner(false, 0).pull("demo", "Demo", &[target]).await;
+        let outcome = fake.runner(0).pull("demo", "Demo", &[target]).await;
         assert!(outcome.ok, "{outcome:?}");
         assert_eq!(outcome.locations[0].action, "kept");
         assert!(
@@ -175,28 +185,17 @@ mod tests {
     async fn a_pull_brings_back_files_the_cloud_has_newer_versions_of() {
         let fake = FakeRclone::new("pull-newer");
         let cloud = fake.dir.join("cloud-saves");
-        publish(
-            &fake,
-            &cloud,
-            "rel-savedata",
-            "20260901T000000Z",
-            "from the cloud",
-        );
+        publish(&fake, &cloud, "20260901T000000Z", "from the cloud", 2_000);
 
-        // 本机是旧的（时间戳被推回以前）。
+        // 本机是旧的（时间戳被推回更早）。
         let saves = fake.dir.join("saves");
         std::fs::create_dir_all(&saves).unwrap();
-        std::fs::write(saves.join("save.sav"), "old local").unwrap();
-        let old = std::time::UNIX_EPOCH + std::time::Duration::from_millis(1_000);
-        std::fs::File::options()
-            .write(true)
-            .open(saves.join("save.sav"))
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
+        let local = saves.join("save.sav");
+        std::fs::write(&local, "old local").unwrap();
+        set_mtime_ms(&local, 1_000);
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .pull(
                 "demo",
                 "Demo",
@@ -218,7 +217,7 @@ mod tests {
         std::fs::create_dir_all(&saves).unwrap();
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .pull(
                 "demo",
                 "Demo",
@@ -245,7 +244,7 @@ mod tests {
         std::fs::write(saves.join("save.sav"), "local").unwrap();
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .pull(
                 "demo",
                 "Demo",
@@ -270,12 +269,12 @@ mod tests {
     async fn a_location_the_package_does_not_cover_is_reported_separately() {
         let fake = FakeRclone::new("pull-missing-location");
         let cloud = fake.dir.join("cloud-saves");
-        publish(&fake, &cloud, "rel-savedata", "20260901T000000Z", "cloud");
+        publish(&fake, &cloud, "20260901T000000Z", "cloud", 1_000);
 
         let saves = fake.dir.join("saves");
         std::fs::create_dir_all(&saves).unwrap();
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .pull(
                 "demo",
                 "Demo",

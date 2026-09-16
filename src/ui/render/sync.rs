@@ -1,4 +1,4 @@
-//! 「云同步」页:连接与保留、凭据、同步密码。
+//! 「云同步」页:连接与保留、凭据。
 
 use super::*;
 
@@ -20,27 +20,9 @@ pub(super) fn push_sync(ui: &mut Ui) {
     push_str(w.get_sync_keep_versions(), &form.keep_versions, |v| {
         w.set_sync_keep_versions(v)
     });
-    push_bool(w.get_sync_encryption(), form.encryption, |v| {
-        w.set_sync_encryption(v)
-    });
-    push_int(
-        w.get_sync_confirm_encryption(),
-        match form.confirm_encryption {
-            None => 0,
-            Some(true) => 1,
-            Some(false) => 2,
-        },
-        |v| w.set_sync_confirm_encryption(v),
-    );
     push_str(w.get_sync_key_id(), &form.key_id, |v| w.set_sync_key_id(v));
     push_str(w.get_sync_app_key(), &form.app_key, |v| {
         w.set_sync_app_key(v)
-    });
-    push_str(w.get_sync_password(), &form.password, |v| {
-        w.set_sync_password(v)
-    });
-    push_str(w.get_sync_password_again(), &form.password_again, |v| {
-        w.set_sync_password_again(v)
     });
     push_str(w.get_sync_master_password(), &form.master_password, |v| {
         w.set_sync_master_password(v)
@@ -111,11 +93,6 @@ pub(super) fn push_sync(ui: &mut Ui) {
         w.set_sync_store_locked(v)
     });
     push_bool(
-        w.get_sync_has_password(),
-        status.has_secret("sync-password"),
-        |v| w.set_sync_has_password(v),
-    );
-    push_bool(
         w.get_sync_has_credentials(),
         has_key_id || has_app_key,
         |v| w.set_sync_has_credentials(v),
@@ -125,9 +102,6 @@ pub(super) fn push_sync(ui: &mut Ui) {
         &credentials_label(has_key_id, has_app_key, status.store().name()),
         |v| w.set_sync_credentials_label(v),
     );
-    push_str(w.get_sync_password_hint(), &status.password_hint, |v| {
-        w.set_sync_password_hint(v)
-    });
     push_str(
         w.get_sync_master_hint(),
         &format!("至少 {} 位,自己记得住就行", app.min_master_password()),

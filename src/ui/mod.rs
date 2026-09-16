@@ -88,7 +88,6 @@ mod test_support {
                 "endpoint": "",
                 "bucket": "kotori-saves",
                 "prefix": "kotori",
-                "encryption": false,
                 "keep_versions": 0
             },
             "enabled": true,
@@ -100,11 +99,10 @@ mod test_support {
                 "secrets_file": "/home/user/.config/kotori/secrets.json",
                 "min_master_password": 8
             },
-            "secrets": ["b2-key-id", "b2-app-key", "sync-password"],
+            "secrets": ["b2-key-id", "b2-app-key"],
             "ready": true,
             "problem": null,
             "remote": "kotori:kotori-saves/kotori",
-            "password_hint": "secret-tool lookup service kotori account sync-password",
             "games": [
                 {
                     "id": "demo",

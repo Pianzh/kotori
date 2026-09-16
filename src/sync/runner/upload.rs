@@ -102,7 +102,7 @@ mod tests {
         std::fs::write(saves.join("debug.log"), "noise").unwrap();
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .upload("demo", "Demo", std::slice::from_ref(&target))
             .await;
         assert!(outcome.ok, "{outcome:?}");
@@ -138,7 +138,7 @@ mod tests {
         let fake = FakeRclone::new("missing");
         let absent = fake.dir.join("never-created");
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .upload(
                 "demo",
                 "Demo",
@@ -166,7 +166,7 @@ mod tests {
         std::fs::write(present.join("save.sav"), "one").unwrap();
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .upload(
                 "demo",
                 "Demo",
@@ -203,7 +203,7 @@ mod tests {
         fake.fail_on("copyto ");
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .upload(
                 "demo",
                 "Demo",
@@ -234,7 +234,7 @@ mod tests {
 
         // 上传这一版之后一共四个包，保留两个：最老的两个该走。
         let outcome = fake
-            .runner(false, 2)
+            .runner(2)
             .upload(
                 "demo",
                 "Demo",

@@ -113,7 +113,6 @@ pub(in crate::ui) fn parse_sync_status(value: &Value) -> Result<SyncStatus, Stri
             .get("problem")
             .and_then(|v| v.as_str())
             .map(str::to_string),
-        password_hint: str_field(value, "password_hint"),
         games,
     })
 }
@@ -200,10 +199,6 @@ mod tests {
         assert_eq!(status.rclone.as_deref(), Some("/usr/bin/rclone"));
         assert!(status.problem.is_none());
         assert!(status.keyring.contains("Secret Service"));
-        assert!(
-            status.password_hint.contains("secret-tool"),
-            "the user must be able to read the password back without kotori"
-        );
 
         assert_eq!(status.games.len(), 2);
         assert_eq!(status.games[0].locations, 2);
@@ -232,7 +227,7 @@ mod tests {
         assert!(!memory.contains("密钥环"), "{memory}");
 
         let status = sync_status_fixture();
-        assert!(status.has_secret("b2-key-id") && status.has_secret("sync-password"));
+        assert!(status.has_secret("b2-key-id") && status.has_secret("b2-app-key"));
         assert!(!status.has_secret("b2-app-key-x"));
     }
 

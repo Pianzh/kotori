@@ -112,14 +112,12 @@ printf 'argv:%s\n' "$*" >> "$log"
 remote_path() {{
   case "$1" in
     kotori:*) printf '%s/%s' "$bucket" "${{1#kotori:}}" ;;
-    kotorienc:*) printf '%s/%s' "$bucket" "${{1#kotorienc:}}" ;;
     *) printf '%s' "$1" ;;
   esac
 }}
 
 cmd="$1"; shift
 case "$cmd" in
-  obscure) echo "obscured-blob" ;;
   mkdir) mkdir -p "$(remote_path "$1")" ;;
   # One version is one package: a transfer is a single object each way.
   copyto)

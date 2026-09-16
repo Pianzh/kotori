@@ -1,6 +1,5 @@
 //! 一次 rclone 调用的参数表：一个包上行或下行都用 `copyto`（整份搬一个对象），
-//! 列包用 `lsf --files-only`，删旧包用 `deletefile`，另外把明文密码交给 rclone
-//! 自己 `obscure`。
+//! 列包用 `lsf --files-only`，删旧包用 `deletefile`。
 //!
 //! 单独成文件，是因为"参数长什么样"（这里）、"凭据从哪来"（`rclone_env`）、
 //! "跑起来以后怎么解读结果"（`runner`）是三件事。这里全是纯函数：不碰进程、
@@ -39,20 +38,6 @@ pub fn deletefile_args(remote: &str) -> Vec<String> {
     vec!["deletefile".to_string(), remote.to_string()]
 }
 
-/// Arguments that turn a plain password into the form rclone stores.
-///
-/// rclone insists on an obscured value in its configuration. kotori asks
-/// rclone to do the conversion instead of implementing it: getting that
-/// algorithm subtly wrong would derive a different key and leave the user
-/// unable to open their own backups. This runs once, when the password is set.
-///
-/// ⚠ 密码**不进参数**:`-` 让 rclone 读 stdin 的第一行(`Runner::obscure` 负责喂),
-/// 所以 `ps` 里看不到它 —— 从前写的是 `rclone obscure <密码>`,那一次调用期间
-/// 同机器上任何人 `ps` 都能看见。
-pub fn obscure_args() -> Vec<String> {
-    vec!["obscure".to_string(), "-".to_string()]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -85,14 +70,5 @@ mod tests {
                 "kotori:prefix/games/3days/v.zip".to_string()
             ]
         );
-    }
-
-    #[test]
-    fn obscuring_is_left_to_rclone_and_the_password_stays_out_of_argv() {
-        // kotori must never implement this algorithm itself: a mismatch would
-        // derive a different key and lock the user out of their own backups.
-        // `-` is rclone's "read the password from stdin"; `Runner::obscure`
-        // feeds it there, which is what keeps it out of `ps`.
-        assert_eq!(obscure_args(), vec!["obscure".to_string(), "-".to_string()]);
     }
 }

@@ -171,16 +171,6 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Encryption as last reported by the daemon, used to decide whether a save
-    /// is an encryption *change* (which the daemon will ask about).
-    pub(super) fn stored_encryption(&self) -> bool {
-        self.sync_status
-            .as_ref()
-            .and_then(|status| status.settings.get("encryption"))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false)
-    }
-
     /// Re-read the sync status after a change.
     pub(super) fn reload_sync(&self) -> Task<Message> {
         Task::perform(
@@ -453,23 +443,17 @@ mod tests {
         for message in [
             Message::SyncField(SyncField::KeyId, "0046b5".into()),
             Message::SyncField(SyncField::AppKey, "K004bk5u".into()),
-            Message::SyncField(SyncField::Password, "hunter2hunter2".into()),
             Message::SyncField(SyncField::Bucket, "my-own-bucket".into()),
         ] {
             let _ = app.update(message);
         }
 
-        // A successful save echoes nothing back and clears only what it took.
+        // A successful save echoes nothing back and clears only what it took —
+        // and it leaves the (still unsaved) bucket edit alone even though a
+        // reload follows.
         let _ = app.update(Message::SyncCredentialsSaved(Ok(())));
         assert!(app.sync_form.key_id.is_empty());
         assert!(app.sync_form.app_key.is_empty());
-        assert_eq!(app.sync_form.password, "hunter2hunter2");
-
-        // Saving the sync password clears its pair, and leaves the (still
-        // unsaved) bucket edit alone even though a reload follows.
-        let _ = app.update(Message::SyncPasswordSaved(Ok(())));
-        assert!(app.sync_form.password.is_empty());
-        assert!(app.sync_form.password_again.is_empty());
         assert_eq!(app.sync_form.bucket, "my-own-bucket");
 
         // Once the settings are saved, the daemon is the truth again.
@@ -836,13 +820,11 @@ mod tests {
         );
 
         // A failure keeps what the user typed and names the problem.
-        let _ = app.update(Message::SyncField(
-            SyncField::Password,
-            "hunter2hunter2".into(),
+        let _ = app.update(Message::SyncField(SyncField::KeyId, "0046b5".into()));
+        let _ = app.update(Message::SyncCredentialsCleared(
+            Err("密钥环没在运行".into()),
         ));
-        let _ = app.update(Message::SyncClearPassword);
-        let _ = app.update(Message::SyncPasswordCleared(Err("密钥环没在运行".into())));
-        assert_eq!(app.sync_form.password, "hunter2hunter2");
+        assert_eq!(app.sync_form.key_id, "0046b5");
         assert!(
             app.sync_form
                 .msg
@@ -877,9 +859,7 @@ mod tests {
             ..sync_status_fixture()
         });
         assert_eq!(app.credential_store(), CredentialStore::File);
-        // 表单里要有东西,才走"存了密码"那一支(空 = 清除)。
-        app.sync_form.password = "hunter2hunter2".into();
-        let _ = app.update(Message::SyncPasswordSaved(Ok(())));
+        let _ = app.update(Message::SyncCredentialsSaved(Ok(())));
         let sealed = app.sync_form.msg.clone().unwrap_or_default();
         assert!(sealed.contains("主密码凭据文件"), "{sealed}");
         assert!(!sealed.contains("磁盘上没有明文"), "{sealed}");
@@ -929,26 +909,10 @@ mod tests {
             "{refused}"
         );
 
-        // 同步密码同理(加密密码丢了,连自己上传的存档都解不开)。
-        let _ = app.update(Message::SyncField(
-            SyncField::Password,
-            "hunter2hunter2".into(),
-        ));
-        let _ = app.update(Message::SyncField(
-            SyncField::PasswordAgain,
-            "hunter2hunter2".into(),
-        ));
-        let _ = app.update(Message::SyncSavePassword);
-        assert!(!app.sync_form.busy, "不该发请求");
-        let refused = app.sync_form.msg.clone().unwrap_or_default();
-        assert!(
-            refused.contains("写权限") || refused.contains("内存"),
-            "{refused}"
-        );
-
-        // 清空密码不受影响:那是"删掉",不是"存下来"。
-        let _ = app.update(Message::SyncClearPassword);
-        assert!(app.sync_form.busy, "清密码应该照样发出去");
+        // 删除不受这条限制:那是"删掉",不是"存下来"。
+        app.sync_form.busy = false;
+        let _ = app.update(Message::SyncClearCredentials);
+        assert!(app.sync_form.busy, "删凭据应该照样发出去");
 
         // 有了文件后端(或密钥环)就放行。
         app.sync_form.busy = false;

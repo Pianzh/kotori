@@ -140,7 +140,6 @@ export component AppWindow inherits Window {
     in-out property <string> sync-problem: "";
     in-out property <bool> sync-ready: false;
     in-out property <string> sync-credentials-label: "";
-    in-out property <string> sync-password-hint: "";
     in-out property <string> sync-master-hint: "";
     in-out property <int> sync-store-kind: 0;
     in-out property <bool> sync-store-locked: false;
@@ -148,28 +147,20 @@ export component AppWindow inherits Window {
     in-out property <string> sync-master-file: "";
     in-out property <string> sync-store-name: "";
     in-out property <bool> sync-confirm-master-delete: false;
-    in-out property <bool> sync-has-password: false;
     in-out property <bool> sync-has-credentials: false;
     in-out property <bool> sync-enabled: false;
     in-out property <string> sync-bucket: "";
     in-out property <string> sync-prefix: "";
     in-out property <string> sync-endpoint: "";
     in-out property <string> sync-keep-versions: "";
-    in-out property <bool> sync-encryption: false;
-    in-out property <int> sync-confirm-encryption: 0;
     in-out property <string> sync-key-id: "";
     in-out property <string> sync-app-key: "";
-    in-out property <string> sync-password: "";
-    in-out property <string> sync-password-again: "";
     in-out property <string> sync-master-password: "";
     in-out property <bool> sync-busy: false;
     in-out property <string> sync-message: "";
     in-out property <bool> sync-message-ok: true;
 
     callback sync-enabled-toggled(bool);
-    callback sync-encryption-toggled(bool);
-    callback sync-confirm-encryption-clicked();
-    callback sync-cancel-encryption-clicked();
     callback sync-field(int, string);
     callback sync-save-settings();
     callback sync-test();
@@ -179,8 +170,6 @@ export component AppWindow inherits Window {
     callback sync-restore-cancelled();
     callback sync-save-credentials();
     callback sync-clear-credentials();
-    callback sync-save-password();
-    callback sync-clear-password();
     callback sync-unlock();
     callback sync-set-master-password();
     // 我们自己的那套凭据方案(主密码加密文件)的两个动作,外加删除前的二次确认。
@@ -371,7 +360,6 @@ export component AppWindow inherits Window {
                             problem: root.sync-problem;
                             ready: root.sync-ready;
                             credentials-label: root.sync-credentials-label;
-                            password-hint: root.sync-password-hint;
                             master-hint: root.sync-master-hint;
                             store-kind: root.sync-store-kind;
                             store-locked: root.sync-store-locked;
@@ -379,27 +367,19 @@ export component AppWindow inherits Window {
                             master-file: root.sync-master-file;
                             store-name: root.sync-store-name;
                             confirm-master-delete: root.sync-confirm-master-delete;
-                            has-password: root.sync-has-password;
                             can-delete-credentials: root.sync-has-credentials;
                             sync-enabled <=> root.sync-enabled;
                             bucket <=> root.sync-bucket;
                             prefix <=> root.sync-prefix;
                             endpoint <=> root.sync-endpoint;
                             keep-versions <=> root.sync-keep-versions;
-                            encryption <=> root.sync-encryption;
-                            confirm-encryption: root.sync-confirm-encryption;
                             key-id <=> root.sync-key-id;
                             app-key <=> root.sync-app-key;
-                            password <=> root.sync-password;
-                            password-again <=> root.sync-password-again;
                             master-password <=> root.sync-master-password;
                             busy: root.sync-busy;
                             message: root.sync-message;
                             message-ok: root.sync-message-ok;
                             enabled-toggled(value) => { root.sync-enabled-toggled(value); }
-                            encryption-toggled(value) => { root.sync-encryption-toggled(value); }
-                            confirm-encryption-clicked => { root.sync-confirm-encryption-clicked(); }
-                            cancel-encryption-clicked => { root.sync-cancel-encryption-clicked(); }
                             field(id, text) => { root.sync-field(id, text); }
                             save-settings => { root.sync-save-settings(); }
                             test => { root.sync-test(); }
@@ -409,8 +389,6 @@ export component AppWindow inherits Window {
                             restore-cancelled => { root.sync-restore-cancelled(); }
                             save-credentials => { root.sync-save-credentials(); }
                             clear-credentials => { root.sync-clear-credentials(); }
-                            save-password => { root.sync-save-password(); }
-                            clear-password => { root.sync-clear-password(); }
                             unlock => { root.sync-unlock(); }
                             set-master-password => { root.sync-set-master-password(); }
                             lock-credentials => { root.sync-lock-credentials(); }

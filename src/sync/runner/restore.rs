@@ -164,7 +164,7 @@ mod tests {
         std::fs::write(saves.join("save.sav"), "corrupted").unwrap();
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .restore(
                 "demo",
                 "Demo",
@@ -201,7 +201,7 @@ mod tests {
         std::fs::create_dir_all(&saves).unwrap();
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .restore(
                 "demo",
                 "Demo",
@@ -229,7 +229,7 @@ mod tests {
         std::fs::write(saves.join("only-local.sav"), "keep me").unwrap();
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .restore(
                 "demo",
                 "Demo",
@@ -255,7 +255,7 @@ mod tests {
         std::fs::create_dir_all(&saves).unwrap();
 
         let outcome = fake
-            .runner(false, 0)
+            .runner(0)
             .restore(
                 "demo",
                 "Demo",
@@ -281,7 +281,7 @@ mod tests {
         }
         fake.put("kotori:bkt/prefix/games/demo/notes.txt", "not ours");
 
-        let removed = fake.runner(false, 2).prune("demo").await.unwrap();
+        let removed = fake.runner(2).prune("demo").await.unwrap();
         assert_eq!(removed, vec!["20260901T000000Z".to_string()]);
         assert_eq!(
             fake.package_names("demo"),
@@ -303,22 +303,10 @@ mod tests {
             fake.put(&format!("kotori:bkt/prefix/games/demo/{stamp}.zip"), "old");
         }
 
-        assert!(
-            fake.runner(false, 0)
-                .prune("demo")
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(fake.runner(0).prune("demo").await.unwrap().is_empty());
         assert!(fake.calls_matching("deletefile").is_empty());
         // 保留窗口比版本数大：什么都不该删。
-        assert!(
-            fake.runner(false, 5)
-                .prune("demo")
-                .await
-                .unwrap()
-                .is_empty()
-        );
+        assert!(fake.runner(5).prune("demo").await.unwrap().is_empty());
         assert!(fake.calls_matching("deletefile").is_empty());
     }
 }

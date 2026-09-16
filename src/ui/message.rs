@@ -20,8 +20,6 @@ pub enum SyncField {
     KeepVersions,
     KeyId,
     AppKey,
-    Password,
-    PasswordAgain,
 }
 
 /// 「浏览…」要往哪个输入框里填。
@@ -116,9 +114,6 @@ pub enum Message {
     // --- cloud sync (settings tab) ---
     SyncStatusLoaded(Result<SyncStatus, String>),
     SyncToggleEnabled(bool),
-    SyncEncryptionToggled(bool),
-    SyncConfirmEncryption,
-    SyncCancelEncryption,
     SyncField(SyncField, String),
     SyncSaveSettings,
     SyncSettingsSaved(Result<(), String>),
@@ -126,10 +121,6 @@ pub enum Message {
     SyncCredentialsSaved(Result<(), String>),
     SyncClearCredentials,
     SyncCredentialsCleared(Result<(), String>),
-    SyncSavePassword,
-    SyncPasswordSaved(Result<(), String>),
-    SyncClearPassword,
-    SyncPasswordCleared(Result<(), String>),
     SyncTest,
     SyncTested(Result<String, String>),
     SyncMasterPasswordChanged(String),

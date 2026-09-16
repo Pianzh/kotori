@@ -4,17 +4,8 @@
 //! 与 `snapshots` 分开：这里只回答"东西放在哪"，包的命名、识别与保留策略
 //! 全在那边。
 
-use super::{REMOTE, REMOTE_CRYPT};
+use super::REMOTE;
 use crate::config::SyncConfig;
-
-/// Does the configured remote carry the crypt layer?
-pub fn remote_name(settings: &SyncConfig) -> &'static str {
-    if settings.encryption {
-        REMOTE_CRYPT
-    } else {
-        REMOTE
-    }
-}
 
 /// `kotori:<bucket>/<prefix>` — the bucket is part of the remote path, which
 /// keeps the environment-configured remote minimal.
@@ -27,9 +18,9 @@ pub fn remote_root(settings: &SyncConfig) -> String {
         (false, false) => format!("{bucket}/{prefix}"),
     };
     if path.is_empty() {
-        format!("{}:", remote_name(settings))
+        format!("{REMOTE}:")
     } else {
-        format!("{}:{path}", remote_name(settings))
+        format!("{REMOTE}:{path}")
     }
 }
 
@@ -106,11 +97,6 @@ mod tests {
             package_remote(&config, "3days", "20260915T120000Z-1a2b3c4d"),
             "kotori:kotori-saves/prefix/games/3days/20260915T120000Z-1a2b3c4d.zip"
         );
-
-        // Encrypted setups read through the crypt remote.
-        let mut encrypted = config.clone();
-        encrypted.encryption = true;
-        assert!(game_remote(&encrypted, "3days").starts_with("kotorienc:"));
 
         // An empty prefix stays valid, and so does an unset bucket.
         let mut bare = config.clone();

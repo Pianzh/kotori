@@ -11,7 +11,6 @@ pub(super) fn settings() -> SyncConfig {
         endpoint: String::new(),
         bucket: "kotori-saves".to_string(),
         prefix: "prefix".to_string(),
-        encryption: false,
         keep_versions: 0,
     }
 }

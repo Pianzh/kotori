@@ -577,18 +577,13 @@ fn print_sync_result(method: &str, value: &serde_json::Value) {
             };
             let mark = |account: &str| if saved(account) { "✓" } else { "✗" };
             println!(
-                "凭据: keyID {} applicationKey {} 同步密码 {}",
+                "凭据: keyID {} applicationKey {}",
                 mark("b2-key-id"),
-                mark("b2-app-key"),
-                mark("sync-password")
+                mark("b2-app-key")
             );
             if let Some(problem) = value["problem"].as_str() {
                 println!("待解决: {problem}");
             }
-            println!(
-                "取回密码: {}",
-                value["password_hint"].as_str().unwrap_or("-")
-            );
             if let Some(games) = value["games"].as_array() {
                 println!("游戏（{} 个）:", games.len());
                 for game in games {

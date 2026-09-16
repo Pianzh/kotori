@@ -488,35 +488,6 @@ impl App {
                 self.sync_form.settings_dirty = true;
                 Task::none()
             }
-            // Flipping encryption decides whether data already in the bucket can
-            // be read at all, so it asks once more instead of taking effect.
-            Message::SyncEncryptionToggled(value) => {
-                if value == self.sync_form.encryption {
-                    self.sync_form.confirm_encryption = None;
-                } else {
-                    self.sync_form.confirm_encryption = Some(value);
-                    self.sync_form.msg = Some(if value {
-                        "开启加密后，bucket 里已有的明文存档将读不出来（除非换一个 prefix）。再点一次「确认开启」才会生效。".to_string()
-                    } else {
-                        "关闭加密后，之前加密上传的存档将无法解密。再点一次「确认关闭」才会生效。"
-                            .to_string()
-                    });
-                }
-                Task::none()
-            }
-            Message::SyncConfirmEncryption => {
-                if let Some(value) = self.sync_form.confirm_encryption.take() {
-                    self.sync_form.encryption = value;
-                    self.sync_form.settings_dirty = true;
-                    self.sync_form.msg = Some("已勾选，记得点「保存设置」".to_string());
-                }
-                Task::none()
-            }
-            Message::SyncCancelEncryption => {
-                self.sync_form.confirm_encryption = None;
-                self.sync_form.msg = None;
-                Task::none()
-            }
             Message::SyncField(field, value) => {
                 let form = &mut self.sync_form;
                 match field {
@@ -526,8 +497,6 @@ impl App {
                     SyncField::KeepVersions => form.keep_versions = value,
                     SyncField::KeyId => form.key_id = value,
                     SyncField::AppKey => form.app_key = value,
-                    SyncField::Password => form.password = value,
-                    SyncField::PasswordAgain => form.password_again = value,
                 }
                 if matches!(
                     field,
@@ -541,22 +510,18 @@ impl App {
                 Task::none()
             }
             Message::SyncSaveSettings => {
-                let force = self.sync_form.confirm_encryption.is_some()
-                    || self.sync_form.encryption != self.stored_encryption();
                 let form = self.sync_form.clone();
                 self.sync_form.busy = true;
                 self.sync_form.msg = None;
                 let socket = self.daemon_socket.clone();
                 Task::perform(
-                    async move { save_sync_settings(&socket, form.patch(force)).await },
+                    async move { save_sync_settings(&socket, form.patch()).await },
                     Message::SyncSettingsSaved,
                 )
             }
             Message::SyncSettingsSaved(result) => {
                 self.sync_form.busy = false;
                 self.sync_form.msg = Some(match &result {
-                    // The daemon refuses an encryption flip that is not confirmed;
-                    // show its words rather than a generic failure.
                     Ok(()) => "已保存".to_string(),
                     Err(e) => format!("保存失败: {e}"),
                 });
@@ -564,8 +529,6 @@ impl App {
                     // The daemon now holds exactly what the form holds, so a
                     // later status reply may refill the form again.
                     self.sync_form.settings_dirty = false;
-                } else {
-                    self.sync_form.confirm_encryption = None;
                 }
                 self.reload_sync()
             }
@@ -621,60 +584,6 @@ impl App {
                 if result.is_ok() {
                     self.sync_form.key_id.clear();
                     self.sync_form.app_key.clear();
-                }
-                self.reload_sync()
-            }
-            Message::SyncClearPassword => {
-                self.sync_form.busy = true;
-                self.sync_form.msg = None;
-                let socket = self.daemon_socket.clone();
-                Task::perform(
-                    async move { save_sync_password(&socket, "").await },
-                    Message::SyncPasswordCleared,
-                )
-            }
-            Message::SyncPasswordCleared(result) => {
-                self.sync_form.busy = false;
-                self.sync_form.msg = Some(match &result {
-                    Ok(()) => format!("已从{}里删除同步密码", self.credential_store().name()),
-                    Err(e) => format!("删除密码失败: {e}"),
-                });
-                if result.is_ok() {
-                    self.sync_form.password.clear();
-                    self.sync_form.password_again.clear();
-                }
-                self.reload_sync()
-            }
-            Message::SyncSavePassword => {
-                let password = self.sync_form.password.clone();
-                if !password.is_empty() && password != self.sync_form.password_again {
-                    self.sync_form.msg = Some("两次输入的密码不一样".to_string());
-                    return Task::none();
-                }
-                // 加密密码尤其不能只留在内存里:重启后连自己上传的存档都解不开。
-                // 清空密码走的是 SyncClearPassword,不受这条限制。
-                if !password.is_empty() && self.credential_store() == CredentialStore::Session {
-                    self.sync_form.msg = Some(CredentialStore::needs_master_password().to_string());
-                    return Task::none();
-                }
-                self.sync_form.busy = true;
-                self.sync_form.msg = None;
-                let socket = self.daemon_socket.clone();
-                Task::perform(
-                    async move { save_sync_password(&socket, &password).await },
-                    Message::SyncPasswordSaved,
-                )
-            }
-            Message::SyncPasswordSaved(result) => {
-                self.sync_form.busy = false;
-                self.sync_form.msg = Some(match &result {
-                    Ok(()) if self.sync_form.password.is_empty() => "已清除同步密码".to_string(),
-                    Ok(()) => self.credential_store().saved_note("同步密码"),
-                    Err(e) => format!("保存密码失败: {e}"),
-                });
-                if result.is_ok() {
-                    self.sync_form.password.clear();
-                    self.sync_form.password_again.clear();
                 }
                 self.reload_sync()
             }

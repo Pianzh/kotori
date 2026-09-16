@@ -223,7 +223,7 @@ mod tests {
 
         let path = temp("mode");
         let file = PlainFile::new(&path);
-        file.store(&[(SecretKey::SyncPassword, "hunter2hunter2".to_string())])
+        file.store(&[(SecretKey::B2AppKey, "hunter2hunter2".to_string())])
             .unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "凭据文件必须是 0600，实际 {mode:o}");

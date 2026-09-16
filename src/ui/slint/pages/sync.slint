@@ -1,6 +1,6 @@
 // 「云同步」:本机情况 + 连接与保留设置 + 凭据。
-// 对应后端 `sync status|set_settings|set_credentials|set_password|unlock|set_master_password|test|now|restore`
-// (ADR-012/013:rclone 原生 b2;自动取回只取更新的,手动恢复前先拍快照)。
+// 对应后端 `sync status|set_settings|set_credentials|unlock|set_master_password|test|now|restore`
+// (ADR-012/013:rclone 原生 b2,一版一个 zip;自动取回只取更新的,恢复就是铺一整版)。
 //
 // 可编辑字段的归属与单游戏设置页同一套:页面自己拥有输入框的值,Rust 只在值真的不同时
 // 才写回来(见 render.rs)。凭据永远不回显 —— 保存成功后输入框会被清空,而不是填上星号。
@@ -26,7 +26,6 @@ export component SyncPage inherits ScrollView {
     in property <string> problem: "";
     in property <bool> ready: false;
     in property <string> credentials-label: "";
-    in property <string> password-hint: "";
     in property <string> master-hint: "";
     in property <int> store-kind: 0;          // 0 系统密钥环 / 1 主密码文件 / 2 仅本次会话
     in property <bool> store-locked: false;
@@ -35,7 +34,6 @@ export component SyncPage inherits ScrollView {
     // 三级存储里现在生效的那一级的名字(「系统密钥环」/「主密码凭据文件」/「本次会话的内存」)。
     in property <string> store-name: "";
     in property <bool> confirm-master-delete: false;
-    in property <bool> has-password: false;
     in property <bool> can-delete-credentials: false;
 
     // ── 可编辑 ────────────────────────────────────────────────────────────
@@ -45,12 +43,8 @@ export component SyncPage inherits ScrollView {
     in-out property <string> prefix: "";
     in-out property <string> endpoint: "";
     in-out property <string> keep-versions: "";
-    in-out property <bool> encryption: false;
-    in property <int> confirm-encryption: 0;   // 0 = 没有待确认, 1 = 待确认开启, 2 = 待确认关闭
     in-out property <string> key-id: "";
     in-out property <string> app-key: "";
-    in-out property <string> password: "";
-    in-out property <string> password-again: "";
     in-out property <string> master-password: "";
 
     in property <bool> busy: false;
@@ -60,10 +54,6 @@ export component SyncPage inherits ScrollView {
     in-out property <bool> revealed: false;
 
     callback enabled-toggled(bool);
-    callback encryption-toggled(bool);
-    // 名字里必须带 clicked:上面已经有同名属性 `confirm-encryption`(int)。
-    callback confirm-encryption-clicked();
-    callback cancel-encryption-clicked();
     callback field(int, string);
     callback save-settings();
     callback test();
@@ -73,8 +63,6 @@ export component SyncPage inherits ScrollView {
     callback restore-cancelled();
     callback save-credentials();
     callback clear-credentials();
-    callback save-password();
-    callback clear-password();
     callback unlock();
     callback set-master-password();
     callback lock-credentials();
@@ -244,38 +232,12 @@ export component SyncPage inherits ScrollView {
                 Divider { }
                 CardRow {
                     title: "保留版本数";
-                    description: "0 表示永不删除云端快照;填写后只清理旧快照,绝不动本地存档。";
+                    description: "0 表示永不删除云端版本;填写后只清理旧版本包,绝不动本地存档。";
                     TextField {
                         field-width: 100px;
                         text <=> root.keep-versions;
                         edited(text) => { root.field(3, text); }
                         placeholder: "0";
-                    }
-                }
-                Divider { }
-                CardRow {
-                    title: "加密上传(rclone crypt)";
-                    description: "关闭时存档是明文文件(推荐),任何 S3 工具都能取回;开启后必须记住密码,忘了就打不开自己的备份。";
-                    HorizontalLayout {
-                        spacing: 10px;
-                        alignment: center;
-                        if root.confirm-encryption != 0 : HorizontalLayout {
-                            spacing: 8px;
-                            StdButton {
-                                label: root.confirm-encryption == 1 ? "确认开启" : "确认关闭";
-                                button-width: 96px;
-                                clicked => { root.confirm-encryption-clicked(); }
-                            }
-                            StdButton {
-                                label: "取消";
-                                button-width: 68px;
-                                clicked => { root.cancel-encryption-clicked(); }
-                            }
-                        }
-                        Switch {
-                            checked <=> root.encryption;
-                            toggled => { root.encryption-toggled(root.encryption); }
-                        }
                     }
                 }
                 Divider { }
@@ -320,21 +282,15 @@ export component SyncPage inherits ScrollView {
                     store-name: root.store-name;
                     confirm-master-delete: root.confirm-master-delete;
                     credentials-label: root.credentials-label;
-                    password-hint: root.password-hint;
                     master-hint: root.master-hint;
-                    has-password: root.has-password;
                     can-delete-credentials: root.can-delete-credentials;
                     busy: root.busy;
                     key-id <=> root.key-id;
                     app-key <=> root.app-key;
-                    password <=> root.password;
-                    password-again <=> root.password-again;
                     master-password <=> root.master-password;
                     field(id, text) => { root.field(id, text); }
                     save-credentials => { root.save-credentials(); }
                     clear-credentials => { root.clear-credentials(); }
-                    save-password => { root.save-password(); }
-                    clear-password => { root.clear-password(); }
                     unlock => { root.unlock(); }
                     set-master-password => { root.set-master-password(); }
                     lock-credentials => { root.lock-credentials(); }

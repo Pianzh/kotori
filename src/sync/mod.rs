@@ -30,9 +30,6 @@
 
 /// Remote name synthesised through rclone's environment configuration.
 pub const REMOTE: &str = "kotori";
-/// Remote name carrying the optional `crypt` layer. Kept free of characters
-/// that would break the `RCLONE_CONFIG_<NAME>_<OPTION>` mapping.
-pub const REMOTE_CRYPT: &str = "kotorienc";
 
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
@@ -52,9 +49,6 @@ pub mod runner;
 /// Suffix of a version package in the bucket.
 pub const PACKAGE_SUFFIX: &str = ".zip";
 
-/// The fixed second factor mixed into the crypt key.
-pub const DEFAULT_PASSWORD2: &str = "kotori";
-
 /// Path that makes rclone ignore every config file. Windows spells it `NUL`,
 /// and getting this wrong would silently make rclone read the user's own
 /// `rclone.conf` — on a dual-boot machine with different settings per OS.
@@ -73,12 +67,8 @@ mod validate;
 
 // 对外只做转发：这些名字原来就定义在 `sync` 下，`crate::sync::X` 这个路径
 // （daemon、UI、tests/ipc_e2e.rs 都在用）必须一字不变。
-pub use rclone_args::{copyto_args, deletefile_args, list_files_args, obscure_args};
+pub use rclone_args::{copyto_args, deletefile_args, list_files_args};
 pub use rclone_env::{find_rclone, rclone_env};
-// `remote_name` 只被 `remote_root` 在模块内部使用；它原来就在 `crate::sync` 下，
-// 路径必须保留，所以照旧转发（binary crate 里没有别的引用，需放行这条 lint）。
-#[allow(unused_imports)]
-pub use remote_paths::remote_name;
 pub use remote_paths::{game_remote, package_remote, remote_root, save_key};
 pub use save_targets::{SaveTarget, targets};
 pub use snapshots::{is_snapshot, parse_packages, prune_plan, version_stamp};

@@ -52,7 +52,6 @@ pub struct SyncStatus {
     pub secrets: Vec<String>,
     pub ready: bool,
     pub problem: Option<String>,
-    pub password_hint: String,
     pub games: Vec<SyncGameRow>,
 }
 
@@ -164,16 +163,10 @@ pub(in crate::ui) struct SyncForm {
     pub(in crate::ui) bucket: String,
     pub(in crate::ui) prefix: String,
     pub(in crate::ui) keep_versions: String,
-    pub(in crate::ui) encryption: bool,
     pub(in crate::ui) key_id: String,
     pub(in crate::ui) app_key: String,
-    pub(in crate::ui) password: String,
-    pub(in crate::ui) password_again: String,
     /// Master password for the credential file (unlock, or set one up).
     pub(in crate::ui) master_password: String,
-    /// An encryption change needs one more click: it decides whether existing
-    /// data in the bucket can still be read.
-    pub(in crate::ui) confirm_encryption: Option<bool>,
     /// 删除主密码凭据文件前的二次确认(里面的凭据会一起消失)。
     pub(in crate::ui) confirm_master_delete: bool,
     pub(in crate::ui) msg: Option<String>,
@@ -183,12 +176,11 @@ pub(in crate::ui) struct SyncForm {
 impl SyncForm {
     /// Fill the form from what the daemon reports. Secrets are never echoed, so
     /// their inputs are left alone here: they are only cleared when a save
-    /// actually consumed them (`SyncCredentialsSaved` / `SyncPasswordSaved`).
+    /// actually consumed them (`SyncCredentialsSaved`).
     ///
     /// Everything is skipped while `settings_dirty` is set — see the field.
     pub(in crate::ui) fn apply(&mut self, status: &SyncStatus, settings: &Value) {
         self.loaded = true;
-        self.confirm_encryption = None;
         self.confirm_master_delete = false;
         let _ = status;
         if self.settings_dirty {
@@ -199,11 +191,10 @@ impl SyncForm {
         self.bucket = str_field(settings, "bucket");
         self.prefix = str_field(settings, "prefix");
         self.keep_versions = settings["keep_versions"].as_u64().unwrap_or(0).to_string();
-        self.encryption = settings["encryption"].as_bool().unwrap_or(false);
     }
 
     /// The patch sent to `sync.set_settings`.
-    pub(in crate::ui) fn patch(&self, force: bool) -> Value {
+    pub(in crate::ui) fn patch(&self) -> Value {
         let keep = self.keep_versions.trim().parse::<u32>().unwrap_or(0);
         serde_json::json!({
             "enabled": self.enabled,
@@ -211,8 +202,6 @@ impl SyncForm {
             "bucket": self.bucket.trim(),
             "prefix": self.prefix.trim(),
             "keep_versions": keep,
-            "encryption": self.encryption,
-            "force": force,
         })
     }
 }
@@ -234,24 +223,19 @@ mod tests {
         assert_eq!(form.bucket, "kotori-saves");
         assert_eq!(form.prefix, "kotori");
         assert_eq!(form.keep_versions, "0");
-        assert!(!form.encryption);
 
         // The daemon reports *which* secrets exist, never their values, so the
-        // inputs must start empty even though three are stored.
+        // inputs must start empty even though they are stored.
         assert!(form.key_id.is_empty());
         assert!(form.app_key.is_empty());
-        assert!(form.password.is_empty());
-        assert!(form.password_again.is_empty());
 
         // The patch mirrors the form, trimmed.
         form.bucket = "  spaced  ".into();
-        form.confirm_encryption = Some(true);
-        let patch = form.patch(true);
+        let patch = form.patch();
         assert_eq!(patch["bucket"], "spaced");
-        assert_eq!(patch["force"], true);
         assert_eq!(patch["enabled"], true);
         assert!(
-            patch.get("key_id").is_none() && patch.get("password").is_none(),
+            patch.get("key_id").is_none() && patch.get("force").is_none(),
             "settings patches must carry no secrets: {patch}"
         );
     }

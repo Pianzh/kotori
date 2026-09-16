@@ -108,12 +108,8 @@ pub struct SyncConfig {
     /// Folder inside the bucket that kotori owns.
     #[serde(default = "default_sync_prefix")]
     pub prefix: String,
-    /// Wrap the data in rclone's `crypt` layer. Off by default: without it the
-    /// saves are plain files, readable without kotori *and* without rclone.
-    #[serde(default)]
-    pub encryption: bool,
-    /// Version snapshots kept per save location; `0` keeps all of them, which
-    /// is the default — silently dropping an old save is worse than using space.
+    /// Version packages kept per game; `0` keeps all of them, which is the
+    /// default — silently dropping an old save is worse than using space.
     #[serde(default)]
     pub keep_versions: u32,
 }
@@ -129,7 +125,6 @@ impl Default for SyncConfig {
             endpoint: String::new(),
             bucket: String::new(),
             prefix: default_sync_prefix(),
-            encryption: false,
             keep_versions: 0,
         }
     }
@@ -475,5 +470,27 @@ follow_window = false
 
         let written = toml::to_string(&config).unwrap();
         assert!(!written.contains("follow_window"), "{written}");
+    }
+
+    #[test]
+    fn a_sync_config_that_still_carries_encryption_still_loads() {
+        // 加密随 crypt 层一起没了（2026-09-16：rclone 这条路一版一个 zip，
+        // 包里就是明文，要加密用 kopia）。磁盘上每一份旧配置都还写着这个键 ——
+        // 加载必须照常，而下一次写回不能再带上它。
+        let toml = r#"
+[sync]
+enabled = true
+bucket = "kotori-saves"
+prefix = "kotori"
+encryption = true
+keep_versions = 3
+"#;
+        let config: Config = toml::from_str(toml).unwrap();
+        assert!(config.sync.enabled);
+        assert_eq!(config.sync.bucket, "kotori-saves");
+        assert_eq!(config.sync.keep_versions, 3);
+
+        let written = toml::to_string(&config).unwrap();
+        assert!(!written.contains("encryption"), "{written}");
     }
 }

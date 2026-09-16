@@ -138,7 +138,7 @@ fn every_page_renders_without_a_display() {
     ui.app.create_msg = Some("已添加（ID: demo）".into());
     render(&mut ui);
 
-    // 云同步:还没读到 → 一切就绪 → 待确认加密 → 待确认恢复 → 凭据文件锁着 →
+    // 云同步:还没读到 → 一切就绪 → 待确认恢复 → 凭据文件锁着 →
     // 本机连密钥环都没有 → 没装 rclone 且有个存档位置解析不了。
     show_tab(&mut ui, Tab::Sync);
     render(&mut ui);
@@ -149,9 +149,6 @@ fn every_page_renders_without_a_display() {
     );
     render(&mut ui);
 
-    ui.app.sync_form.confirm_encryption = Some(true);
-    render(&mut ui);
-    ui.app.sync_form.confirm_encryption = None;
     ui.app.sync_restore_pending = Some(("demo".into(), None));
     render(&mut ui);
     ui.app.sync_restore_pending = None;
@@ -443,8 +440,6 @@ fn every_page_renders_without_a_display() {
         (3, "keep_versions"),
         (4, "key_id"),
         (5, "app_key"),
-        (6, "password"),
-        (7, "password_again"),
     ] {
         window.invoke_sync_field(field, format!("v{field}").into());
         let form = with_ui(|ui| ui.app.sync_form.clone());
@@ -454,30 +449,16 @@ fn every_page_renders_without_a_display() {
             "prefix" => form.prefix,
             "keep_versions" => form.keep_versions,
             "key_id" => form.key_id,
-            "app_key" => form.app_key,
-            "password" => form.password,
-            _ => form.password_again,
+            _ => form.app_key,
         };
         assert_eq!(actual, format!("v{field}"), "字段 {field}");
     }
-    window.invoke_sync_field(8, "master".into());
+    // 6 是主密码:它不是 `[sync]` 里的设置项,所以不走 SyncField。
+    window.invoke_sync_field(6, "master".into());
     assert_eq!(
         with_ui(|ui| ui.app.sync_form.master_password.clone()),
         "master"
     );
-
-    // 加密开关要二次确认;确认后落在表单上,取消则什么都不改。
-    window.invoke_sync_encryption_toggled(true);
-    assert_eq!(window.get_sync_confirm_encryption(), 1);
-    window.invoke_sync_confirm_encryption_clicked();
-    assert!(with_ui(|ui| ui.app.sync_form.encryption));
-    assert_eq!(window.get_sync_confirm_encryption(), 0);
-    window.invoke_sync_encryption_toggled(false);
-    assert_eq!(window.get_sync_confirm_encryption(), 2);
-    window.invoke_sync_cancel_encryption_clicked();
-    assert_eq!(window.get_sync_confirm_encryption(), 0);
-    // 取消只是撤掉"待确认",已经确认过的那次改动还在(它要等「保存设置」才落盘)。
-    assert!(with_ui(|ui| ui.app.sync_form.encryption));
 
     // 恢复要二次确认:`restore` 只记下"待确认",`restore_cancelled` 抹掉它。
     window.invoke_sync_restore("demo".into());

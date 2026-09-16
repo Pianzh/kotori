@@ -132,12 +132,9 @@ pub(super) fn install_callbacks(window: &AppWindow) {
 
     // ── 云同步 ────────────────────────────────────────────────────────────
     window.on_sync_enabled_toggled(|value| dispatch(Message::SyncToggleEnabled(value)));
-    window.on_sync_encryption_toggled(|value| dispatch(Message::SyncEncryptionToggled(value)));
-    window.on_sync_confirm_encryption_clicked(|| dispatch(Message::SyncConfirmEncryption));
-    window.on_sync_cancel_encryption_clicked(|| dispatch(Message::SyncCancelEncryption));
     window.on_sync_field(|field, text| {
         let text = text.to_string();
-        // 8 是主密码:它不是 `[sync]` 里的设置项,所以不走 SyncField。
+        // 6 是主密码:它不是 `[sync]` 里的设置项,所以不走 SyncField。
         match field {
             0 => dispatch(Message::SyncField(SyncField::Endpoint, text)),
             1 => dispatch(Message::SyncField(SyncField::Bucket, text)),
@@ -145,8 +142,6 @@ pub(super) fn install_callbacks(window: &AppWindow) {
             3 => dispatch(Message::SyncField(SyncField::KeepVersions, text)),
             4 => dispatch(Message::SyncField(SyncField::KeyId, text)),
             5 => dispatch(Message::SyncField(SyncField::AppKey, text)),
-            6 => dispatch(Message::SyncField(SyncField::Password, text)),
-            7 => dispatch(Message::SyncField(SyncField::PasswordAgain, text)),
             _ => dispatch(Message::SyncMasterPasswordChanged(text)),
         }
     });
@@ -163,8 +158,6 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_sync_restore_cancelled(|| dispatch(Message::SyncRestoreCancelled));
     window.on_sync_save_credentials(|| dispatch(Message::SyncSaveCredentials));
     window.on_sync_clear_credentials(|| dispatch(Message::SyncClearCredentials));
-    window.on_sync_save_password(|| dispatch(Message::SyncSavePassword));
-    window.on_sync_clear_password(|| dispatch(Message::SyncClearPassword));
     window.on_sync_unlock(|| dispatch(Message::SyncUnlock));
     window.on_sync_set_master_password(|| dispatch(Message::SyncSetMasterPassword));
     window.on_sync_lock_credentials(|| dispatch(Message::SyncLockCredentials));

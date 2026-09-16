@@ -9,7 +9,7 @@ use crate::sync::runner::testing::FakeRclone;
 #[tokio::test]
 async fn credentials_reach_rclone_through_the_environment_only() {
     let fake = FakeRclone::new("secrets");
-    let outcome = fake.runner(false, 0).check().await.unwrap();
+    let outcome = fake.runner(0).check().await.unwrap();
     assert_eq!(outcome, "kotori:bkt/prefix");
 
     let calls = fake.calls();
@@ -35,26 +35,9 @@ async fn credentials_reach_rclone_through_the_environment_only() {
 }
 
 #[tokio::test]
-async fn encrypted_setups_hand_over_only_the_obscured_password() {
-    let fake = FakeRclone::new("encrypted");
-    fake.runner(true, 0).check().await.unwrap();
-
-    let env = fake.env_log();
-    assert!(
-        env.contains("env:RCLONE_CONFIG_KOTORIENC_TYPE=crypt"),
-        "{env}"
-    );
-    assert!(
-        env.contains("env:RCLONE_CONFIG_KOTORIENC_PASSWORD=obscured-blob"),
-        "{env}"
-    );
-    assert!(!env.contains("hunter2"), "{env}");
-}
-
-#[tokio::test]
 async fn missing_credentials_stop_the_run_before_rclone_is_started() {
     let fake = FakeRclone::new("no-secrets");
-    let runner = Runner::with_binary(&fake.bin, fake.settings(false, 0), Keyring::memory());
+    let runner = Runner::with_binary(&fake.bin, fake.settings(0), Keyring::memory());
     let outcome = runner.upload("demo", "Demo", &[]).await;
 
     assert!(!outcome.ok);
@@ -68,37 +51,17 @@ fn a_missing_endpoint_means_rclone_picks_one() {
     // normal case; the S3 endpoint the B2 console shows is a different API
     // and is rejected before a run ever starts (see `sync::validate`).
     let fake = FakeRclone::new("no-endpoint");
-    let settings = fake.settings(false, 0);
+    let settings = fake.settings(0);
     assert!(settings.endpoint.is_empty());
     assert!(crate::sync::validate(&settings).is_ok());
 }
 
 #[tokio::test]
-async fn obscuring_is_left_to_rclone_and_stored_in_both_forms() {
-    let fake = FakeRclone::new("obscure");
-    let runner = fake.runner(true, 0);
-    // The fake echoes back what it read on stdin, so this value is proof
-    // that the password travelled there rather than on the command line.
-    assert_eq!(runner.obscure("hunter2").await.unwrap(), "obscured-hunter2");
-
-    let calls = fake.calls();
-    assert!(calls[0].starts_with("obscure -"), "{calls:?}");
-    assert!(
-        !calls[0].contains("hunter2"),
-        "the password must not be on the command line: {calls:?}"
-    );
-    // No credentials are needed to obscure, and the user's own rclone.conf
-    // must not be consulted even here.
-    assert!(!fake.env_log().contains("RCLONE_CONFIG_KOTORI_KEY="));
-    assert!(fake.env_log().contains("env:RCLONE_CONFIG=/dev/null"));
-}
-
-#[tokio::test]
 async fn a_disabled_sync_config_is_refused() {
     let fake = FakeRclone::new("disabled");
-    let mut settings = fake.settings(false, 0);
+    let mut settings = fake.settings(0);
     settings.enabled = false;
-    let runner = Runner::with_binary(&fake.bin, settings, fake.keyring(false));
+    let runner = Runner::with_binary(&fake.bin, settings, fake.keyring());
 
     assert!(matches!(runner.ready(), Err(SyncError::NotEnabled)));
     assert!(fake.calls().is_empty());
@@ -117,7 +80,7 @@ async fn the_newest_package_is_the_largest_name() {
     // 别的对象（不是我们的包）不算版本：保留窗口只认自己认得的名字。
     fake.put("kotori:bkt/prefix/games/demo/notes.txt", "not ours");
 
-    let runner = fake.runner(false, 0);
+    let runner = fake.runner(0);
     let packages = runner.packages("demo").await.unwrap();
     assert_eq!(packages.len(), 3, "{packages:?}");
     assert_eq!(
@@ -144,7 +107,7 @@ async fn the_scratch_directory_is_cleaned_up_even_after_a_failure() {
     std::fs::write(saves.join("save.sav"), "one").unwrap();
     let target = crate::sync::runner::testing::target(&saves, "savedata", "rel-savedata");
 
-    let runner = fake.runner(false, 0);
+    let runner = fake.runner(0);
     runner
         .upload("demo", "Demo", std::slice::from_ref(&target))
         .await;

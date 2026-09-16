@@ -46,12 +46,6 @@ fi
 # 当分隔符。
 resolve() {{ printf '%s' "$1" | tr ':' '/'; }}
 case "$1" in
-  obscure)
-    # `rclone obscure -` reads the password from the first line of stdin; echo it
-    # back "obscured" so a test can prove it travelled that way and not on argv.
-    IFS= read -r line || line=""
-    printf 'obscured-%s\n' "$line"
-    ;;
   mkdir)
     mkdir -p "$bucket/$(resolve "$2")"
     ;;
@@ -81,38 +75,27 @@ exit 0
         Self { dir, bin }
     }
 
-    pub(super) fn settings(&self, encryption: bool, keep_versions: u32) -> SyncConfig {
+    pub(super) fn settings(&self, keep_versions: u32) -> SyncConfig {
         SyncConfig {
             enabled: true,
             endpoint: String::new(),
             bucket: "bkt".to_string(),
             prefix: "prefix".to_string(),
-            encryption,
             keep_versions,
         }
     }
 
-    pub(super) fn keyring(&self, encryption: bool) -> Keyring {
+    pub(super) fn keyring(&self) -> Keyring {
         let keyring = Keyring::memory();
         keyring.set(SecretKey::B2KeyId, "keyid123").unwrap();
         keyring.set(SecretKey::B2AppKey, "appkey456").unwrap();
-        if encryption {
-            keyring.set(SecretKey::SyncPassword, "hunter2").unwrap();
-            keyring
-                .set(SecretKey::SyncPasswordObscured, "obscured-blob")
-                .unwrap();
-        }
         keyring
     }
 
-    pub(super) fn runner(&self, encryption: bool, keep_versions: u32) -> Runner {
-        Runner::with_binary(
-            &self.bin,
-            self.settings(encryption, keep_versions),
-            self.keyring(encryption),
-        )
-        // 临时包绝不能落进真实数据目录（测试不许碰用户的家目录）。
-        .with_work_dir(self.dir.join("work"))
+    pub(super) fn runner(&self, keep_versions: u32) -> Runner {
+        Runner::with_binary(&self.bin, self.settings(keep_versions), self.keyring())
+            // 临时包绝不能落进真实数据目录（测试不许碰用户的家目录）。
+            .with_work_dir(self.dir.join("work"))
     }
 
     /// Where one remote path lives on disk.

@@ -49,10 +49,9 @@ pub fn validate_endpoint(endpoint: &str) -> Result<(), SyncError> {
 
 /// Check the secrets a run needs. Kept separate from [`validate`] so the
 /// structural checks stay pure (and testable without a keyring).
-pub fn validate_secrets(
-    settings: &SyncConfig,
-    keyring: &crate::secrets::Keyring,
-) -> Result<(), SyncError> {
+///
+/// 这里只有 B2 凭据：同步密码随加密一起没了（rclone 这条路不提供加密）。
+pub fn validate_secrets(keyring: &crate::secrets::Keyring) -> Result<(), SyncError> {
     // A locked store is not an empty one. Saying "no credentials yet" here
     // would send the user to re-enter keys that are already on disk.
     if let crate::secrets::StoreKind::EncryptedFile { locked: true, path } = keyring.kind() {
@@ -67,19 +66,6 @@ pub fn validate_secrets(
         return Err(SyncError::Config(
             "密钥环里还没有 B2 凭据，请先在设置页里填写".to_string(),
         ));
-    }
-
-    if settings.encryption {
-        if missing(crate::secrets::SecretKey::SyncPassword) {
-            return Err(SyncError::Config(
-                "开启了加密，但密钥环里还没有同步密码".to_string(),
-            ));
-        }
-        if missing(crate::secrets::SecretKey::SyncPasswordObscured) {
-            return Err(SyncError::Config(
-                "同步密码缺少 rclone 需要的形态，请重新保存一次密码".to_string(),
-            ));
-        }
     }
 
     Ok(())
@@ -132,12 +118,6 @@ mod tests {
         let mut config = settings();
         config.endpoint = "https://api001.backblazeb2.com".to_string();
         assert!(validate(&config).is_ok());
-
-        // Enabling encryption is a structural setting; whether the password
-        // exists is checked against the keyring by `validate_secrets`.
-        let mut config = settings();
-        config.encryption = true;
-        assert!(validate(&config).is_ok());
     }
 
     #[test]
@@ -147,28 +127,13 @@ mod tests {
 
         let fake = FakeTool::new("sync-secrets");
         let keyring: Keyring = fake.keyring();
-        let config = settings();
 
-        let error = validate_secrets(&config, &keyring).unwrap_err();
+        let error = validate_secrets(&keyring).unwrap_err();
         assert!(error.to_string().contains("B2 凭据"), "{error}");
 
         keyring.set(SecretKey::B2KeyId, "id").unwrap();
+        assert!(validate_secrets(&keyring).is_err(), "半个凭据不算有凭据");
         keyring.set(SecretKey::B2AppKey, "key").unwrap();
-        assert!(validate_secrets(&config, &keyring).is_ok());
-
-        // Encryption additionally needs the password, in both forms.
-        let mut encrypted = config;
-        encrypted.encryption = true;
-        let error = validate_secrets(&encrypted, &keyring).unwrap_err();
-        assert!(error.to_string().contains("同步密码"), "{error}");
-
-        keyring.set(SecretKey::SyncPassword, "hunter2").unwrap();
-        let error = validate_secrets(&encrypted, &keyring).unwrap_err();
-        assert!(error.to_string().contains("rclone"), "{error}");
-
-        keyring
-            .set(SecretKey::SyncPasswordObscured, "obscured")
-            .unwrap();
-        assert!(validate_secrets(&encrypted, &keyring).is_ok());
+        assert!(validate_secrets(&keyring).is_ok());
     }
 }

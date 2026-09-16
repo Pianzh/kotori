@@ -402,14 +402,6 @@ impl Daemon {
                     Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
                 }
             }
-            "sync.set_password" => {
-                match serde_json::from_value::<sync_rpc::Password>(Value::Object(
-                    req.params.clone().unwrap_or_default(),
-                )) {
-                    Ok(password) => respond(id, self.rpc_sync_set_password(password).await),
-                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
-                }
-            }
             "sync.unlock" => {
                 match serde_json::from_value::<sync_rpc::Password>(Value::Object(
                     req.params.clone().unwrap_or_default(),
