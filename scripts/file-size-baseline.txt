@@ -7,6 +7,5 @@
 603	src/secrets/encrypted.rs
 563	src/daemon/mod.rs
 546	src/game/mod.rs
-528	src/ui/render/window_test.rs
 524	src/scale/x11.rs
 521	src/display.rs
