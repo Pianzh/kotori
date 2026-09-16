@@ -489,6 +489,46 @@ mod tests {
         assert_eq!(app.sync_form.bucket, "typo");
     }
 
+    /// 点「kopia」必须**当场提交**，而不是只改表单等「保存设置」。
+    ///
+    /// 回归测试：从前 `SyncEngineSelected` 只改 `sync_form.engine`，而按钮上立刻显示成
+    /// 「kopia ✓」—— 用户以为选了，config 里一个字节都没变，重开 GUI 又回到 rclone
+    /// （2026-09-16 报的）。所以这里断言的是"这一次点击**产生了一次提交**"，而不是
+    /// "表单变了" —— 表单变了正是当初唯一发生的事情，它证明不了任何事。
+    #[test]
+    fn picking_an_engine_submits_it_in_the_same_click() {
+        let (mut app, _task) = App::new();
+        let effects = app
+            .update(Message::SyncEngineSelected("kopia".into()))
+            .into_effects();
+        assert_eq!(effects.len(), 1, "点引擎必须当场提交");
+        assert_eq!(app.sync_form.engine, "kopia");
+    }
+
+    /// 换引擎那一笔**只管 engine 一个字段**：用户手上还没保存的编辑不能被当成已保存。
+    ///
+    /// 这是"点一下就生效"赖以成立的前提（daemon 的 `SettingsPatch` 是按字段合并的）。
+    /// 少了这条保护，点一下引擎就会让随后回来的 `sync.status` 把用户正在填的 bucket
+    /// 覆盖掉 —— 那比"点了没反应"更难查。
+    #[test]
+    fn switching_the_engine_leaves_unsaved_edits_alone() {
+        let (mut app, _task) = App::new();
+        app.sync_form.bucket = "typed-but-not-saved".into();
+        app.sync_form.settings_dirty = true;
+
+        let _ = app.update(Message::SyncEngineSelected("kopia".into()));
+        assert!(
+            app.sync_form.settings_dirty,
+            "换引擎不该把别的编辑标成已保存"
+        );
+        assert_eq!(app.sync_form.bucket, "typed-but-not-saved");
+
+        // 提交失败时反过来：别让界面继续装着已经换了 —— 清掉 dirty，好让下面这次
+        // 刷新把配置里真正的值拉回来。
+        let _ = app.update(Message::SyncEngineSaved(Err("daemon 不在了".into())));
+        assert!(!app.sync_form.settings_dirty);
+    }
+
     /// 用户自己按的「停止服务」必须真的停得住 —— 界面的自愈逻辑(轮询后的重连、
     /// 失败退避重试)不能在三秒内把它又拉起来。
     #[test]

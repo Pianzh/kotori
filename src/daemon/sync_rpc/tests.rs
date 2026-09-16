@@ -2,6 +2,8 @@
 //! 各自的行为。
 
 use super::super::*;
+// `SettingsPatch` 住在 `sync_rpc` 自己那一层（`pub(super)`），不随 `daemon::*` 过来。
+use super::SettingsPatch;
 use crate::config::{Config, GameConfig, SavePath, ScaleProfile};
 use crate::secrets::testing::FakeTool;
 use crate::secrets::{Keyring, SecretKey};
@@ -464,4 +466,33 @@ async fn a_launch_never_fails_because_sync_is_broken() {
         .expect("a report");
     assert_eq!(report["ok"], false);
     assert!(report["error"].is_string(), "{report}");
+}
+
+/// `[sync]` 里**每一个**键，`SettingsPatch` 都必须收得下；它不认识的键必须当场报错。
+///
+/// 这条盯着"界面加了新设置、daemon 忘了跟上"。少了 `deny_unknown_fields`，serde 对不
+/// 认识的键**默认不吭声** —— 调用方发了等于没发，还拿到 `success: true`（写
+/// `kopia_binary` 时真踩过一次）。加上之后"缺字段"就不再是静默的，这条测试于是能把
+/// 它照出来：喂进去的键要么被认下，要么明确报 unknown field。
+///
+/// ⚠ 它管不了"字段收了、却忘了写应用代码"那种：那种 bug 得看值有没有真的变，
+/// 见 `tests/ipc_e2e/sync.rs::every_sync_setting_can_actually_be_changed`。
+#[test]
+fn every_sync_config_key_is_accepted_by_the_settings_patch() {
+    let config = serde_json::to_value(crate::config::SyncConfig::default()).unwrap();
+    let fields = config.as_object().expect("[sync] 该是个表");
+    assert!(!fields.is_empty(), "SyncConfig 不该是空的");
+
+    // 值的类型也一起过：键收了、类型收不下，一样是"改不了"。
+    for (key, sample) in fields {
+        let mut body = serde_json::Map::new();
+        body.insert(key.clone(), sample.clone());
+        serde_json::from_value::<SettingsPatch>(Value::Object(body))
+            .unwrap_or_else(|e| panic!("daemon 收不下 [sync] 的 `{key}`：{e}"));
+    }
+
+    // 反过来那一半：多一个键（界面上拼错一个字母）必须报错，而不是被当成没问题。
+    let err = serde_json::from_value::<SettingsPatch>(serde_json::json!({ "kopia_binry": "/x" }))
+        .unwrap_err();
+    assert!(err.to_string().contains("unknown field"), "{err}");
 }

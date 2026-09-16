@@ -56,7 +56,7 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: 测试
-        run: cargo test --all-targets
+        run: scripts/test.sh
 
   # ── aarch64:同一套测试,跑在真 ARM 上 ───────────────────────────────────
   # ⚠ 这一步只在**公开**仓库里免费(私有用 larger runner 才有 arm64)。
@@ -87,7 +87,7 @@ jobs:
       # 而且下面的 release 构建已经热乎(debug + release 各编一遍依赖是双倍等待;
       # 用户 2026-09-13:"先在 action 编译,节省中间时间")。
       - name: 测试(原生 aarch64,release profile,不是交叉编译)
-        run: cargo test --release --locked --all-targets
+        run: scripts/test.sh --release --locked
 
       # 交付物:ARM64 是主交付目标(见 HANDOVER.md §2.2)。真机那一步(游戏真的在 ARM 上
       # 跑起来)只有设备在手时才算验完 —— 这里只负责"编得出来、测过得去、装得下去"。

@@ -304,6 +304,28 @@ mod tests {
         );
     }
 
+    /// 界面发出去的键，必须与 `[sync]` 里真实存在的键**一模一样**。
+    ///
+    /// 少了 = 用户改不了那一项（界面上有框、存不进去）；多了 = daemon 那边
+    /// `deny_unknown_fields` 会报"参数无效"。
+    ///
+    /// 它和 daemon 侧的 `every_sync_config_key_is_accepted_by_the_settings_patch`
+    /// 是一对：那条保证"收得下"，这条保证"发得全"。两条都绿，这一层才算通 ——
+    /// `kopia_binary` 当初就是漏在中间（界面发了、daemon 没收，谁都没吭声）。
+    #[test]
+    fn the_form_patches_exactly_the_keys_the_config_has() {
+        let mut form = SyncForm::default();
+        form.apply(&sync_status_fixture(), &sync_payload()["settings"]);
+
+        let mut patched: Vec<String> = form.patch().as_object().unwrap().keys().cloned().collect();
+        let config = serde_json::to_value(crate::config::SyncConfig::default()).unwrap();
+        let mut expected: Vec<String> = config.as_object().unwrap().keys().cloned().collect();
+        patched.sort();
+        expected.sort();
+
+        assert_eq!(patched, expected, "界面发的键与 [sync] 的键对不上");
+    }
+
     /// 换引擎那句话必须点名**另一个**引擎 —— 用户要知道自己"看不见"的是什么。
     ///
     /// 两个名字都取自 `SyncEngine::label`,和 daemon、环境检查页用的是同一套说法:

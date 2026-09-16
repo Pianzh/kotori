@@ -370,3 +370,47 @@ fn a_configured_program_directory_is_where_the_daemon_looks() {
         "要说清是哪个位置不对：{problem}"
     );
 }
+
+/// `[sync]` 里**每一个**键，都要能真的改掉。
+///
+/// 单测那边有一条"daemon 收得下每个键"，但它管不了"字段收了、应用那一步忘了写"——
+/// 那种 bug 里 `SettingsPatch` 一切正常，只有 config 没动（用户改了等于没改）。
+/// 所以这里一路走到**值真的变了**，而且样本值必须与当前值**不同**：值一样的话，
+/// "没生效"和"生效了"在断言上分不出来。
+///
+/// 键的清单不写死在这里，而是从 `SyncConfig` 自己取 —— 将来加字段，这条自动覆盖。
+#[test]
+fn every_sync_setting_can_actually_be_changed() {
+    let mut fixture = Fixture::new("patch-keys");
+    fixture.enable_fake_sync(false);
+    fixture.start();
+
+    // 每个键一个"与当前值不同"的样本。与 `SyncConfig::default()` 和
+    // `enable_fake_sync` 写下的值都不能撞上。
+    let samples = [
+        ("enabled", json!(true)),
+        ("engine", json!("kopia")),
+        ("endpoint", json!("https://api001.backblazeb2.com")),
+        ("bucket", json!("other-bucket")),
+        ("prefix", json!("other-prefix")),
+        ("keep_versions", json!(7)),
+        ("rclone_binary", json!("/opt/rclone")),
+        ("kopia_binary", json!("/opt/kopia")),
+    ];
+
+    for (key, sample) in &samples {
+        let mut body = serde_json::Map::new();
+        body.insert(key.to_string(), sample.clone());
+        let response = fixture.rpc("sync.set_settings", serde_json::Value::Object(body));
+        assert_eq!(
+            &response["result"]["settings"][key], sample,
+            "`{key}` 发出去了却没生效：{response}"
+        );
+    }
+
+    // 而且落了盘 —— daemon 是唯一写者，重开一个进程也该读到这些值。
+    let written = std::fs::read_to_string(fixture.dir.join("config.toml")).unwrap();
+    for (key, _) in &samples {
+        assert!(written.contains(key), "`{key}` 没写进 config：{written}");
+    }
+}

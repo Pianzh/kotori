@@ -160,3 +160,53 @@ async fn status_on_unknown_session_lists_nothing_new() {
             .contains("session not found")
     );
 }
+
+/// 同一条规矩用在游戏上：`GameConfig` 的每个键，`GamePatch` 要么收得下、要么在例外
+/// 清单里**写明为什么**。
+///
+/// 和 `sync_rpc::tests` 里那条是一对（那边是 `[sync]`）。为什么要这样测：`GamePatch`
+/// 也是按字段合并的，而 `deny_unknown_fields` 让"缺字段"从静默变成报错 —— 界面新加
+/// 一项而这里没跟上时，这条会红。
+///
+/// ⚠ 它管不了"字段收了、应用那一步忘了写"那种：那得看值有没有真的变（游戏那边由
+/// `tests/ipc_e2e` 的 `library_entries_are_managed_over_ipc` 覆盖，`[sync]` 那边是
+/// `every_sync_setting_can_actually_be_changed`）。
+///
+/// 例外只有两个，都是故意的：
+///   * `created_at` —— daemon 建游戏时自己写的时间戳，没有"让客户端改创建时间"这回事；
+///   * `scale_profile` —— patch 里叫 `profile`（那个键只改缩放档案）。
+#[test]
+fn every_game_config_key_is_either_patchable_or_a_known_exception() {
+    const EXCEPTIONS: [&str; 2] = ["created_at", "scale_profile"];
+    /// config 与 patch 里名字不一样的那几个：`(config 里的, patch 里的)`。
+    const RENAMED: [(&str, &str); 1] = [("scale_profile", "profile")];
+
+    let config = serde_json::to_value(crate::config::GameConfig {
+        name: "x".into(),
+        game_dir: "/g".into(),
+        exe_path: "/g/x.exe".into(),
+        launch_args: Vec::new(),
+        save_paths: Vec::new(),
+        wine_prefix: None,
+        watch_only: false,
+        process_name: None,
+        scale_profile: crate::config::ScaleProfile::default_for(),
+        created_at: chrono::Utc::now(),
+    })
+    .unwrap();
+
+    for (key, sample) in config.as_object().expect("GameConfig 该是个表") {
+        if EXCEPTIONS.contains(&key.as_str()) {
+            continue;
+        }
+        let name = RENAMED
+            .iter()
+            .find(|(from, _)| from == key)
+            .map_or(key.as_str(), |(_, to)| *to);
+        let mut body = serde_json::Map::new();
+        body.insert(name.to_string(), sample.clone());
+        serde_json::from_value::<protocol::GamePatch>(Value::Object(body)).unwrap_or_else(|e| {
+            panic!("daemon 收不下 GameConfig 的 `{key}`（patch 里叫 `{name}`）：{e}")
+        });
+    }
+}
