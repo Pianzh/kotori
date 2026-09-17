@@ -9,8 +9,7 @@ use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, RwLock};
 
 use crate::config::{self, Config};
-use crate::scale::gamescope::GamescopeScaleEngine;
-use crate::scale::{LaunchSpec, ScaleEngine, ScaleSession, SessionKind};
+use crate::scale::{LaunchSpec, PlatformEngine, ScaleEngine, ScaleSession, SessionKind};
 
 mod game_rpc;
 mod protocol;
@@ -31,7 +30,7 @@ pub struct Daemon {
     /// Single source of truth for live sessions. There is deliberately no
     /// second session list here: a duplicate copy used to go stale and report
     /// already-exited games as running.
-    engine: Arc<GamescopeScaleEngine>,
+    engine: Arc<PlatformEngine>,
     shutdown: Arc<Notify>,
     /// Keyring handle and the last sync result per game.
     sync: Arc<SyncState>,
@@ -71,7 +70,7 @@ impl Daemon {
         Self {
             config: Arc::new(RwLock::new(config)),
             config_path: Arc::new(config::config_path()),
-            engine: Arc::new(GamescopeScaleEngine::new()),
+            engine: Arc::new(PlatformEngine::new()),
             shutdown: Arc::new(Notify::new()),
             sync: Arc::new(sync),
         }

@@ -13,11 +13,28 @@
 //! The types below are what those modules share; everything else is re-exported
 //! so the rest of the crate keeps naming them `scale::…`.
 
+/// 「缩放的阶梯与目标比例」这点算术。
+///
+/// ⚠ **刻意不在下面那条 cfg 线里**：它只依赖 `config::ScaleProfile`，没有一处碰
+/// gamescope / X11 / libc，所以两端都能用（界面读的也是它）。把它一起 cfg 掉会
+/// 连带 UI 一起断。
 pub mod action;
+
+// Linux 的全部实现:gamescope 的命令行、X11 上那些运行时旋钮、收尾用的进程组
+// 看门狗。Windows 上一个都不存在 —— 那边是下面的 `unsupported`。
+#[cfg(unix)]
 pub mod args;
+#[cfg(unix)]
 pub mod gamescope;
+#[cfg(unix)]
 pub mod teardown;
+#[cfg(unix)]
 pub mod x11;
+
+// Windows 那一侧:一个什么都不做的后端。它为什么是空的（而不是"还没写"）见
+// `unsupported` 开头的说明。
+#[cfg(windows)]
+pub mod unsupported;
 
 use std::path::{Path, PathBuf};
 
@@ -27,7 +44,19 @@ pub use action::{
     SCALE_LADDER, ScaleAction, ladder_index_for, ladder_step, profile_ratio, toggle_target,
     toggled_ratio,
 };
+
+#[cfg(unix)]
 pub use args::{build_gamescope_args, sharpness_to_gamescope};
+
+/// 这台机器上真正持有的那个缩放后端。
+///
+/// 上层（`daemon`）只认这个名字：**后端的差别到这里为止**，再往上就是同一套代码。
+/// 从前它直接叫 `GamescopeScaleEngine`，那个名字在 Windows 上会变成一个谎
+/// —— 那里根本没有 gamescope。
+#[cfg(unix)]
+pub use gamescope::GamescopeScaleEngine as PlatformEngine;
+#[cfg(windows)]
+pub use unsupported::UnsupportedScaleEngine as PlatformEngine;
 
 /// Everything needed to start (or start watching) one game.
 #[derive(Debug, Clone)]
@@ -185,4 +214,17 @@ pub enum ScaleError {
 
     #[error("protocol error: {0}")]
     ProtocolError(String),
+
+    /// 这台机器上没有可用的缩放后端。
+    ///
+    /// 目前只有 Windows 走到这里：缩放归外部工具（Magpie）管，而它只让观察、
+    /// 不让下命令，所以 kotori 没有可做的动作。**它不是"出错了"，而是"这件事
+    /// 在这里不归我们"** —— 界面该据此把缩放相关的编辑禁掉，而不是显示成失败。
+    ///
+    /// ⚠ `allow(dead_code)` 是必要的：Linux 上有真的 gamescope 后端，永远不会构造
+    /// 这个变体，而 CI 的 lint 把 warning 当错误（`clippy -- -D warnings`）。它在这里
+    /// 不是死代码，是**另一个平台的出口**。
+    #[allow(dead_code)]
+    #[error("this platform has no scaling backend: scaling belongs to an external tool here")]
+    Unsupported,
 }

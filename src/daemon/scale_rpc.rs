@@ -15,23 +15,35 @@ impl Daemon {
             .get_status(&session)
             .await
             .map_err(|e| e.to_string())?;
-        let mut value = serde_json::to_value(status).map_err(|e| e.to_string())?;
+        let value = serde_json::to_value(status).map_err(|e| e.to_string())?;
+
         // `status` describes the profile the game was launched with. What gamescope
         // is running *now* is readable too — it is our own last command, kept on the
         // root window of its Xwayland — so report both and let the caller spot when
         // they have drifted apart (gamescope's own shortcuts can change it too).
-        if let Some(object) = value.as_object_mut()
-            && let Some(live) = self.engine.live_settings(&session).await
-        {
-            object.insert(
-                "live".to_string(),
-                json!({
-                    "filter": format!("{:?}", live.filter),
-                    "scaler": format!("{:?}", live.scaler),
-                    "sharpness": live.sharpness,
-                }),
-            );
-        }
+        //
+        // ⚠ 这一段**只存在于有 gamescope 的机器上**,不是"为了编译而 cfg":Windows 上
+        // 没有一个"外部工具此刻在用什么滤镜"的可读状态(Magpie 那套只暴露窗口属性,
+        // 见 PLATFORMS.md §2.3),所以这里本来就没有东西可报告。`live_settings` 也
+        // 因此不必进 trait —— 它是 gamescope 后端专有的读法。
+        #[cfg(unix)]
+        let value = {
+            let mut value = value;
+            if let Some(object) = value.as_object_mut()
+                && let Some(live) = self.engine.live_settings(&session).await
+            {
+                object.insert(
+                    "live".to_string(),
+                    json!({
+                        "filter": format!("{:?}", live.filter),
+                        "scaler": format!("{:?}", live.scaler),
+                        "sharpness": live.sharpness,
+                    }),
+                );
+            }
+            value
+        };
+
         Ok(value)
     }
 
