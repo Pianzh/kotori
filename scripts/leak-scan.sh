@@ -284,13 +284,16 @@ EOF
 
 # ── 钩子 ────────────────────────────────────────────────────────────────────
 install_hook() {   # $1=钩子名 $2=内容
-    local f="$GITDIR/hooks/$1"
+    local f="$GITDIR/hooks/$1" tmp="$GITDIR/hooks/.$1.tmp.$$"
     if [ -e "$f" ] && ! grep -q 'leak-scan.sh' "$f" 2>/dev/null; then
         echo "✗ $f 已经存在,而且不是我们装的 —— 先自己看一眼,别盖掉" >&2
         return 1
     fi
-    printf '%s' "$2" > "$f"
-    chmod +x "$f"
+    # 写临时文件再 `mv`(原子替换)。直接 `> $f` 是"截断 + 写":另一个 agent 正好在这时
+    # push/commit,会读到被截断甚至空的钩子 —— 空脚本以 0 退出,等于闸门**静默失效**。
+    printf '%s' "$2" > "$tmp"
+    chmod +x "$tmp"
+    mv -f "$tmp" "$f"
     echo "✓ $f"
 }
 
