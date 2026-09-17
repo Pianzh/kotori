@@ -26,6 +26,10 @@ STRUCTURE.md
 DISCIPLINE.md
 PITFALLS.md
 
+# 每个副 agent 的一次性工作文件:任务交接单 + 它自己的纪律(合并后都删掉,见 DISCIPLINE §8)
+TASK-*.md
+DISCIPLINE-*.md
+
 # 跑在仓库里那些 agent 工具自己的目录
 .opencode/
 
