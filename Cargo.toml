@@ -54,13 +54,22 @@ libc = "0.2"
 nix = { version = "0.29", features = ["signal", "process", "term"] }
 argon2 = "0.6.0"
 chacha20poly1305 = "0.11.0"
-ashpd = { version = "0.13.13", features = ["file_chooser", "tokio"] }
 futures-util = "0.3.34"
 
 # Runtime scaling goes through the properties gamescope watches on the root window
 # of its own Xwayland (see `src/scale/x11.rs`). Already in the tree as a transitive
 # dependency of winit, so this adds nothing to build time.
 x11rb = "0.13.2"
+
+# 「浏览…」在 Linux 上的那一半:走桌面 portal(xdg-desktop-portal)。Windows 那边是
+# 下面那个 rfd,二者由 `src/picker.rs` 的两个 `mod platform` 按平台分开。
+#
+# ⚠ 它**必须**待在 `cfg(unix)` 里,这不是洁癖:依赖写在通用段时,Windows 仍会去编
+# ashpd **本身** —— 而它内部用了 `std::os::unix::ffi` 的 `OsStrExt`,于是 kotori
+# 自己的代码**一行都没编到**就被它挡住了。2026-09-17 CI 首次实测:整个 job 报的
+# 3 个错误全在 ashpd 里,一个都不在我们自己的代码里。
+[target.'cfg(unix)'.dependencies]
+ashpd = { version = "0.13.13", features = ["file_chooser", "tokio"] }
 
 # 「浏览…」在 Windows 上的那一半:系统自己的「打开 / 选择文件夹」对话框 —— 就是资源
 # 管理器弹出来的那个(shell 的 IFileOpenDialog)。**只在 Windows 上编译**,所以它不会

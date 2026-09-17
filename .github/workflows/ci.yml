@@ -78,6 +78,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          # 还编不过的那些轮,每一轮都要从零下载+编译(实测 10 分 25 秒)。默认失败
+          # 不存缓存,而这个 job 存在的意义恰恰是"失败也要有产出",所以打开它:
+          # 之后的迭代能降到几分钟。
+          cache-on-failure: true
 
       - name: 编译(含测试代码)
         run: cargo check --all-targets --locked
