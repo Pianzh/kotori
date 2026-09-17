@@ -516,6 +516,7 @@ fn sync_cli(rt: &tokio::runtime::Runtime, action: cli::SyncCommand) -> anyhow::R
 ///
 /// It never becomes a command-line argument: `ps` is world-readable, and the
 /// shell history outlives the session.
+#[cfg(unix)]
 fn prompt_password(prompt: &str) -> anyhow::Result<String> {
     use nix::sys::termios::{self, LocalFlags, SetArg};
     use std::io::{BufRead, Write};
@@ -539,6 +540,24 @@ fn prompt_password(prompt: &str) -> anyhow::Result<String> {
     }
     eprintln!();
     read?;
+
+    Ok(line.trim_end_matches(['\n', '\r']).to_string())
+}
+
+/// Windows 上没有 termios 可以关回显。
+///
+/// ⚠ 这是**已知的削弱**:这里的密码会原样显示在屏幕上。CLI 这个入口在 Windows 上
+/// 本来就很少用(桌面用户走 GUI),为它引一个新依赖不划算 —— 真需要时再换
+/// `rpassword`(它在 Windows 上走 SetConsoleMode)。
+#[cfg(not(unix))]
+fn prompt_password(prompt: &str) -> anyhow::Result<String> {
+    use std::io::{BufRead, Write};
+
+    eprint!("{prompt}");
+    std::io::stderr().flush().ok();
+
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
 
     Ok(line.trim_end_matches(['\n', '\r']).to_string())
 }
