@@ -58,6 +58,30 @@ jobs:
       - name: 测试
         run: scripts/test.sh
 
+  # ── Windows:当前只求"编得过" ────────────────────────────────────────────
+  # 为什么先有这一步:这个仓库从来没有在 Windows 上编译过一次(此前 CI 里只有两个
+  # ubuntu job),而代码里已经躺着若干 `#[cfg(windows)]` 分支 —— 从 picker 的
+  # 文件对话框到 `NUL` 那个空设备。它们是否还编得过,没有任何人知道;而没有东西
+  # 定期编译它们时,腐烂只是时间问题。
+  #
+  # ⚠ **首次运行预期是红的,红了才是它的价值** —— 失败清单就是待办清单。
+  #   刻意不加 continue-on-error:那等于把这个 job 唯一的信号关掉。
+  #
+  # windows-latest 是原生 Windows,自带 Rust 与 MSVC,不需要装任何系统依赖。
+  # 这一步只 check 不 test:`scripts/test.sh` 是 bash + `env -u DISPLAY` 那套
+  # Linux 形状,等编得过之后再单独谈测试怎么跑。
+  test-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 编译(含测试代码)
+        run: cargo check --all-targets --locked
+
   # ── aarch64:同一套测试,跑在真 ARM 上 ───────────────────────────────────
   # ⚠ 这一步只在**公开**仓库里免费(私有用 larger runner 才有 arm64)。
   #
