@@ -20,6 +20,11 @@ UI_GUIDE.md
 ARCHITECTURE.md
 # 多端(ARM / Windows)的测试与开发计划:里面是设备/网络/磁盘这些具体信息,同样不入 git
 PLATFORMS.md
+# 2026-09-17 按用途拆出来的三份:目录与文件指南 / 工程纪律 / 踩坑记录。
+# 拆的理由见它们各自的文件头"契约";和上面那批同样只给 agent 看,不是项目产物。
+STRUCTURE.md
+DISCIPLINE.md
+PITFALLS.md
 
 # 跑在仓库里那些 agent 工具自己的目录
 .opencode/
