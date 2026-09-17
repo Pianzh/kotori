@@ -25,6 +25,7 @@ PLATFORMS.md
 STRUCTURE.md
 DISCIPLINE.md
 PITFALLS.md
+SUBAGENT.md
 
 # 每个副 agent 的一次性工作文件:任务交接单 + 它自己的纪律(合并后都删掉,见 DISCIPLINE §8)
 TASK-*.md
