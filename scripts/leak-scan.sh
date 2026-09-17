@@ -1,27 +1,34 @@
 #!/usr/bin/env bash
 #
-# 上传前的扫描器:只扫**这次要送出去的东西**,不扫工作区。
+# 上传前的扫描器:在本机、在最早的时刻、把所有分支都扫一遍。
 #
-# 为什么范围是"要送出去的东西":工作区干净不等于历史干净。2026-09-17 那次泄露的不是
-# 文件本身,是"文件 + 提交说明" —— 它们在 GitHub 上按 commit 取得到,改掉最新一版没用。
-# 所以这里扫三样:
-#   ① 这次要送的每个提交的说明(含正文)
-#   ② 这次要送的每个 blob 的内容(按对象去重,不重复扫)
-#   ③ 送完之后远端那棵树的样子 —— 规则表刚加一条时,老内容照样中招
+# 为什么这么做:
+#   * 推出去的东西 = 永久公开。重写历史只删 ref 不删对象,悬空提交照样能按 SHA 匿名
+#     取到。所以**唯一安全的时刻是推之前**,唯一安全的位置是本机。
+#   * 工作区干净不等于历史干净;本分支干净不等于别的分支干净 —— 泄露会从"另一个分支
+#     将来被合并/误推"这条路走回来。
+#   * 扫的是"对象",不是文件:提交说明(含正文)、每个 blob 的内容。说明是最容易漏的
+#     地方(2026-09-17 有两次就栽在说明和注释里)。
+#
+# 三个钩子(都靠 `--install-hook` 装,钩子文件本身没法进版本库):
+#   commit-msg   写说明的那一刻就扫说明          —— 毫秒级
+#   pre-commit   提交前扫暂存区                  —— 百毫秒级
+#   pre-push     推之前扫**所有可能被推出去的东西** —— 全量十几秒,换"永远真扫"
 #
 # 规则有两个来源:
 #   * 通用密钥样式:写死在下面,不含任何项目私事,所以它可以公开
-#   * 本机规则表 `.leak-rules`(不进 git):组织名/仓名/平台名这类,**必须存在**
+#   * 本机规则表 `.leak-rules`(不进 git):认得出你的字符串,**必须存在**
 # 另可配一份本机密钥清单 `.leak-secrets`:直接搜"那些密钥的值本身"
 #
 # 用法:
-#   scripts/leak-scan.sh                 # pre-push 钩子的用法:从 stdin 读 ref 对
-#   scripts/leak-scan.sh --range A..B    # 手动扫一个区间
-#   scripts/leak-scan.sh --tree [REV]    # 只扫 REV(默认 HEAD)的整棵树
-#   scripts/leak-scan.sh --history       # 扫 HEAD 可达的全部历史(慢,审计用)
-#   scripts/leak-scan.sh --install-hook  # 把 pre-push 钩子装进本仓
+#   scripts/leak-scan.sh --install-hook     # 装/更新三个钩子
+#   scripts/leak-scan.sh --all              # 本机**所有** refs(含挪出 refs/heads 的草稿),审计用
+#   scripts/leak-scan.sh --range A..B       # 只扫一个区间(提交前的预览)
+#   scripts/leak-scan.sh --tree [REV]       # 只扫 REV(默认 HEAD)的整棵树
+#   scripts/leak-scan.sh --staged           # 只扫暂存区
+#   scripts/leak-scan.sh --commit-msg FILE  # 只扫一份提交说明
 #
-# 真要跳过:`git push --no-verify`(明确跳过,别拿它当默认)。
+# 真要跳过:`git push --no-verify` / `git commit --no-verify`(明确跳过,别当默认)。
 set -euo pipefail
 
 SRC="$(cd "$(dirname "$0")/.." && pwd)"
@@ -32,6 +39,10 @@ case "$GITDIR" in /*) ;; *) GITDIR="$SRC/$GITDIR" ;; esac
 TMP="$GITDIR/leak-scan.$$"
 mkdir -p "$TMP"
 trap 'rm -rf "$TMP"' EXIT
+
+# 超过这个大小的对象只查文件名,不读内容(读它没意义,还慢)。跳过的数量会报出来,
+# 不默默略过。
+BIG=8388608
 
 # ── 通用密钥样式 ────────────────────────────────────────────────────────────
 # 名字只用来报错;命中时**不打印内容** —— 免得密钥被复制到别的地方去。
@@ -61,7 +72,7 @@ PATH_RE='^(\.env(\..+)?|.*\.(pem|key|p12|pfx|jks|kdbx|ppk)|id_(rsa|dsa|ecdsa|ed2
 
 # ── 本机规则表 ──────────────────────────────────────────────────────────────
 # 每行一条:普通行按**子串**(大小写不敏感),`re:` 开头当正则。空行与 `#` 忽略。
-# 找不到就**拒绝**:今天这场泄露有一半原因就是"闸门只认两个名字",不能再来一次。
+# 找不到就**拒绝**:闸门失效时放行,正是上一次出事的方式。
 RULES="${KOTORI_LEAK_RULES:-$SRC/.leak-rules}"
 if [ ! -f "$RULES" ]; then
     cat >&2 <<EOF
@@ -137,6 +148,7 @@ leak=0
 n_commits=0
 n_blobs=0
 n_files=0
+n_big=0
 
 # 命中"通用样式/本机正则/密钥值"时报是哪一条 —— 只用于内部判断,不外传内容
 attribution_of() {
@@ -161,6 +173,7 @@ scan_path_rule() {   # $1=标签 $2=显示名
         echo "✗ [$1] $2:这个文件名本身就不该进仓" >&2
         leak=1
     fi
+    return 0
 }
 
 scan_file() {   # $1=标签 $2=显示名(可空) $3=真实路径
@@ -198,76 +211,142 @@ scan_file() {   # $1=标签 $2=显示名(可空) $3=真实路径
     done < <(grep -naF -f "$TMP/secrets" -- "$path" || true)
 
     [ -z "$name" ] || scan_path_rule "$tag" "$name"
+    return 0
 }
 
-scan_range() {   # $1=区间表达式 $2=要顺带扫树的那次提交(可空) 其余=额外 rev-list 参数
-    local range="$1" head="$2" sha otype osha opath size
-    shift 2
+scan_blob() {   # $1=标签 $2=路径(可空) $3=对象 sha
+    local size
+    size="$(g cat-file -s "$3" 2>/dev/null || echo 0)"
+    if [ "$size" -gt "$BIG" ]; then
+        n_big=$((n_big + 1))
+        [ -z "$2" ] || scan_path_rule "$1" "$2"
+        return 0
+    fi
+    g cat-file blob "$3" > "$TMP/blob"
+    if [ -n "$2" ]; then scan_file "$1" "$2" "$TMP/blob"
+    else scan_file "$1" "blob ${3:0:12}" "$TMP/blob"; fi
+}
 
-    # ① 提交说明:一个提交一个临时文件,这样报错能指名道姓
+scan_commits() {   # 其余参数转给 rev-list
+    local sha
     while IFS= read -r sha; do
         n_commits=$((n_commits + 1))
         g log -1 --format='%B' "$sha" > "$TMP/msg"
         scan_file "提交说明" "提交 ${sha:0:7}" "$TMP/msg"
-    done < <(g rev-list "$range" "$@")
+    done < <(g rev-list "$@")
+}
 
-    # ② 要送出去的 blob(`rev-list --objects` 列的就是这次要传的对象)
+scan_blobs() {   # 其余参数转给 rev-list;`--objects` 列的正是这些对象
+    local otype osha opath
     while IFS=' ' read -r otype osha opath; do
         [ "$otype" = "blob" ] || continue
         n_blobs=$((n_blobs + 1))
-        size="$(g cat-file -s "$osha" 2>/dev/null || echo 0)"
-        if [ "$size" -gt 2097152 ]; then
-            [ -z "$opath" ] || scan_path_rule "新增内容" "$opath"
-            continue
-        fi
-        g cat-file blob "$osha" > "$TMP/blob"
-        if [ -n "$opath" ]; then scan_file "新增内容" "$opath" "$TMP/blob"
-        else scan_file "新增内容" "blob ${osha:0:12}" "$TMP/blob"; fi
-    done < <(g rev-list --objects "$range" "$@" \
+        scan_blob "内容" "$opath" "$osha"
+    done < <(g rev-list --objects "$@" \
                 | g cat-file --batch-check='%(objecttype) %(objectname) %(rest)' 2>/dev/null || true)
-
-    # ③ 送完之后远端那棵树
-    [ -n "$head" ] || return 0
-    scan_tree "$head"
 }
 
 scan_tree() {   # $1=提交
-    local rev="$1" f
+    local f
     rm -rf "$TMP/tree"
     mkdir -p "$TMP/tree"
-    g archive "$rev" 2>/dev/null | tar -x -C "$TMP/tree" 2>/dev/null || true
+    g archive "$1" 2>/dev/null | tar -x -C "$TMP/tree" 2>/dev/null || true
     while IFS= read -r f; do
         scan_file "整棵树" "${f#"$TMP/tree/"}" "$f"
     done < <(find "$TMP/tree" -type f)
 }
 
+scan_staged() {   # 暂存区(逐行解析 `diff --cached --raw`,路径在 TAB 之后)
+    local line meta path sha
+    while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        meta="${line%%$'\t'*}"; path="${line#*$'\t'}"
+        sha="$(printf '%s' "$meta" | awk '{print $4}')"
+        case "$sha" in ""|0000000000000000000000000000000000000000) continue ;; esac
+        n_blobs=$((n_blobs + 1))
+        scan_blob "暂存区" "$path" "$sha"
+    done < <(g diff --cached --raw)
+}
+
 report() {
+    local extra=""
+    [ "$n_big" -eq 0 ] || extra="(另有 $n_big 个超过 8MB 的对象只查了文件名)"
     if [ "$leak" -ne 0 ]; then
         cat >&2 <<'EOF'
 
-✗ 拦下了:上面这些命中不许送出去。这次 push 什么都没传。
-  把内容改干净再推;确认是误报再用 `git push --no-verify`。
+✗ 拦下了:上面这些命中不许送出去。
+  把内容改干净再来;确认是误报再用 `--no-verify` 明确跳过。
 EOF
         exit 1
     fi
-    echo "✓ 上传前扫描通过:$n_commits 个提交的说明、$n_blobs 个对象、$n_files 个文件都没命中"
+    echo "✓ 扫描通过:$n_commits 个提交的说明、$n_blobs 个对象、$n_files 个文件都没命中$extra"
 }
 
-mode="${1:-pre-push}"
+# ── 钩子 ────────────────────────────────────────────────────────────────────
+install_hook() {   # $1=钩子名 $2=内容
+    local f="$GITDIR/hooks/$1"
+    if [ -e "$f" ] && ! grep -q 'leak-scan.sh' "$f" 2>/dev/null; then
+        echo "✗ $f 已经存在,而且不是我们装的 —— 先自己看一眼,别盖掉" >&2
+        return 1
+    fi
+    printf '%s' "$2" > "$f"
+    chmod +x "$f"
+    echo "✓ $f"
+}
+
+mode="${1:-all}"
 case "$mode" in --*) mode="${mode#--}" ;; esac
+shift || true
 
 case "$mode" in
+    all)
+        scan_commits --all
+        scan_blobs --all
+        report
+        ;;
     range)
-        r="${2:?用法: leak-scan.sh --range A..B}"
-        scan_range "$r" "$(g rev-parse "${r##*..}")"
+        r="${1:?用法: leak-scan.sh --range A..B}"
+        scan_commits "$r"
+        scan_blobs "$r"
+        scan_tree "$(g rev-parse "${r##*..}")"
         report
         ;;
     tree)
-        scan_tree "$(g rev-parse "${2:-HEAD}")"
+        scan_tree "$(g rev-parse "${1:-HEAD}")"
         report
         ;;
-    history)
-        scan_range "HEAD" "HEAD"
+    staged)
+        scan_staged
+        report
+        ;;
+    commit-msg)
+        f="${1:?用法: leak-scan.sh --commit-msg <文件>}"
+        [ -f "$f" ] || { echo "✗ 没有这个文件:$f" >&2; exit 1; }
+        scan_file "提交说明" "本次提交" "$f"
+        report
+        ;;
+    hook)
+        # pre-push:不只扫这次要推的,而是**所有可能被推出去的东西** —— 别的分支上藏着的,
+        # 将来一样会被合并或误推出去。集合 = 本地分支/标签/远端跟踪 + 这次要推的 SHA
+        # (后者连"拿一个游离对象顶上去"这种歪路也算上)。
+        #
+        # 注意:`--all` 是更宽的审计视角(连 refs/scrap 那种挪出 refs/heads 的草稿都算),
+        # 所以它可能报出你**根本没打算推**的东西 —— 那是有意的,别把两个模式搞混。
+        refs=()
+        while IFS= read -r r; do
+            [ -n "$r" ] && refs+=("$r")
+        done < <(g for-each-ref --format='%(refname)' refs/heads refs/tags refs/remotes)
+        while read -r _lref lsha _rref _rsha; do
+            [ -n "${lsha:-}" ] || continue
+            [ "$lsha" = "0000000000000000000000000000000000000000" ] && continue
+            refs+=("$lsha")
+        done
+        if [ "${#refs[@]}" -eq 0 ]; then
+            echo "✓ 没有可推的东西"
+            exit 0
+        fi
+        scan_commits "${refs[@]}"
+        scan_blobs "${refs[@]}"
         report
         ;;
     install-hook)
@@ -276,31 +355,26 @@ case "$mode" in
             echo "✗ 这个仓设了 core.hooksPath=$hp,钩子要装到那儿去" >&2
             exit 1
         fi
-        hookfile="$GITDIR/hooks/pre-push"
-        cat > "$hookfile" <<EOF
-#!/usr/bin/env bash
-# 由 scripts/leak-scan.sh --install-hook 装的:push 之前先扫要送出去的对象。
+        install_hook pre-push "#!/usr/bin/env bash
+# 由 scripts/leak-scan.sh --install-hook 装的:推之前扫**所有本地分支**的说明与内容。
 # 钩子自己的参数(<远端名> <地址>)这里用不上,要读的是 stdin 上的 ref 对。
-exec "$SRC/scripts/leak-scan.sh" --hook
+exec \"$SRC/scripts/leak-scan.sh\" --hook
+"
+        install_hook commit-msg "#!/usr/bin/env bash
+# 由 scripts/leak-scan.sh --install-hook 装的:写说明的那一刻就扫说明。
+exec \"$SRC/scripts/leak-scan.sh\" --commit-msg \"\$1\"
+"
+        install_hook pre-commit "#!/usr/bin/env bash
+# 由 scripts/leak-scan.sh --install-hook 装的:提交前扫暂存区。
+exec \"$SRC/scripts/leak-scan.sh\" --staged
+"
+        cat <<'EOF'
+
+⚠ 钩子文件没法进版本库(这是 git 的设计):换机器、换克隆要再跑一次 --install-hook。
 EOF
-        chmod +x "$hookfile"
-        echo "✓ 已装:$hookfile"
-        ;;
-    hook|pre-push)
-        # 钩子的输入:每行 `<本地 ref> <本地 sha> <远端 ref> <远端 sha>`
-        while read -r _lref lsha _rref rsha; do
-            [ -n "${lsha:-}" ] || continue
-            [ "$lsha" = "0000000000000000000000000000000000000000" ] && continue   # 删分支
-            if [ "$rsha" = "0000000000000000000000000000000000000000" ] || [ -z "${rsha:-}" ]; then
-                scan_range "$lsha" "$lsha" --not --remotes
-            else
-                scan_range "$rsha..$lsha" "$lsha"
-            fi
-        done
-        report
         ;;
     *)
-        echo "用法: leak-scan.sh [--range A..B | --tree [REV] | --history | --install-hook]" >&2
+        echo "用法: leak-scan.sh [--all | --range A..B | --tree [REV] | --staged | --commit-msg FILE | --install-hook]" >&2
         exit 2
         ;;
 esac
