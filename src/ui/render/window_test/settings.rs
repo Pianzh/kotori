@@ -7,7 +7,7 @@
 //! 在渲染过的窗口上 `invoke_*`）。
 
 use super::super::*;
-use super::{fits, show_tab};
+use super::{count, fits, show_tab};
 use crate::ui::test_support::ui_game;
 
 /// 渲染设置页的各种状态，然后驱动一遍回调，断言消息真的到了消息循环里。
@@ -104,6 +104,26 @@ pub(super) fn settings_page(mut ui: Ui) {
         ui.app.error = Some("boom".into());
         render(&mut ui);
     }
+
+    // Windows 上整节 Wine 必须消失(用户 2026-09-18:「wine 目录多余」)。
+    //
+    // ⚠ 这里直接改窗口属性、**不再 render**:`render` 每次都会把编译期那个常量
+    // 推回去,而这一条要验的恰恰是"那个 `if !root.is-windows` 真的接上了"。
+    // 设置页上 `PathField` 只有 Wine 那一块用(见 `settings.slint`),所以数它。
+    //
+    // 不假设自己跑在哪个平台上:两边各翻一次,只要求"非 Windows 上有、Windows 上没有"。
+    let before = count(&ui, "PathField");
+    ui.window.set_is_windows(!cfg!(windows));
+    let flipped = count(&ui, "PathField");
+    ui.window.set_is_windows(cfg!(windows));
+    let (with_wine, without_wine) = if cfg!(windows) {
+        (flipped, before)
+    } else {
+        (before, flipped)
+    };
+    assert!(with_wine > 0, "非 Windows 上 Wine 目录那一节要在");
+    assert_eq!(without_wine, 0, "Windows 上 Wine 目录那一节不该出现");
+    assert_eq!(count(&ui, "PathField"), before, "切回去要恢复原样");
 
     // ── 回调 → 消息 ────────────────────────────────────────────────────
     // 上面证明"能画出来",这一段证明"点下去真的会到消息循环里":下标 → 枚举的

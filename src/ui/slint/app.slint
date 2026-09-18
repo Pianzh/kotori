@@ -48,6 +48,9 @@ export component AppWindow inherits Window {
     // 一个窗口级开关就够:能不能用是**这台机器**的事,和哪个输入框无关。没探完
     // (`false`)时按钮先灰着,理由在那个灰字 `path-hint` 里(能用时它是空的)。
     in-out property <bool> browse-enabled: false;
+    // 界面跑在哪个平台上(编译期就定下来的,见 `ui::IS_WINDOWS`)。只有一件事用它:
+    // 把**只在一边成立**的整块藏掉 —— Windows 上不做缩放、也不用 wine。
+    in-out property <bool> is-windows: false;
     in-out property <string> path-hint: "";
     // 刚挑回来的那个值,交给单游戏设置页自己去填(页面持有那些输入框的副本)。
     in-out property <PathPick> path-pick: { token: 0, target: -1, value: "" };
@@ -451,6 +454,7 @@ export component AppWindow inherits Window {
                             wine-detected: root.wine-detected;
                             browse-enabled: root.browse-enabled;
                             path-hint: root.path-hint;
+                            is-windows: root.is-windows;
                             env-checks: root.env-checks;
                             env-summary: root.env-summary;
                             env-distro: root.env-distro;

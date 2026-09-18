@@ -24,6 +24,9 @@ export component SettingsPage inherits ScrollView {
     in property <string> service-hint: "";
 
     // ── Wine ──────────────────────────────────────────────────────────────
+    // ⚠ 整块在 Windows 上不显示(见下面 `if !root.is-windows`):那边没有 wine,
+    //    这几个框摆在那儿只会让人以为填错了什么(用户 2026-09-18:「wine 目录多余」)。
+    in property <bool> is-windows: false;
     in-out property <string> wine-prefix: "";
     in property <string> wine-msg: "";
     in property <bool> wine-msg-ok: true;
@@ -144,13 +147,15 @@ export component SettingsPage inherits ScrollView {
         }
 
         // ── Wine ──────────────────────────────────────────────────────────
-        RevealItem {
+        // 两块都带 `if`:Windows 上整节消失。分成两个 `if` 而不是包一层容器,是因为
+        // 外层是 `VerticalLayout` —— 多包一层就得再对齐一次间距,不值得。
+        if !root.is-windows : RevealItem {
             revealed: root.revealed;
             step: 3;
             bottom: 8px;
             SectionTitle { text: "Wine 目录(prefix)"; }
         }
-        RevealItem {
+        if !root.is-windows : RevealItem {
             revealed: root.revealed;
             step: 4;
             bottom: 24px;

@@ -58,6 +58,9 @@ fn push_shell(ui: &mut Ui) {
     let app = &ui.app;
     let w = &ui.window;
 
+    // 编译期的事实,推一次就不会再变(`push_bool` 只在不一样时才写)。
+    push_bool(w.get_is_windows(), IS_WINDOWS, |v| w.set_is_windows(v));
+
     let (label, state) = connection_label(app);
     push_str(w.get_connection_label(), &label, |v| {
         w.set_connection_label(v)

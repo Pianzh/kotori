@@ -47,6 +47,16 @@ pub use app::App;
 pub use message::{Message, PathTarget, SyncField, Tab};
 pub use model::{SavePathDraft, SessionInfo, SyncGameRow, SyncStatus, UiGame, WineStatus};
 
+/// 界面跑在哪个平台上。
+///
+/// **编译期就知道,不用问守护进程** —— 界面和守护进程本来就是同一个可执行文件,
+/// 永远同平台,为这件事跑一趟 RPC 只会多一个"还没问到"的空窗。
+///
+/// 用途只有一个:把**只在一边成立**的整块藏掉。Windows 上不做缩放、也不用 wine,
+/// 那两块的输入框摆在那儿只会让人以为填错了什么(用户 2026-09-18:「wine 目录多余」、
+/// 「windows 的缩放下面带一行字,无效」)。
+pub(super) const IS_WINDOWS: bool = cfg!(windows);
+
 use crash::*;
 use driver::*;
 use model::*;
