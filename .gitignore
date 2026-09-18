@@ -40,6 +40,9 @@ DISCIPLINE-*.md
 config.toml
 *.local.toml
 kotori.sock
+# ⚠ 上面那条 `config.toml` 没有锚点,会把 `.cargo/config.toml` 一起误伤 —— 而那是
+# **构建配置**(Windows 上静态链接 MSVC 运行库就写在里面),必须进仓库。
+!/.cargo/config.toml
 
 # Credentials / secrets (B2 keys, kopia passwords) - NEVER commit
 *.key

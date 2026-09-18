@@ -1,0 +1,14 @@
+# Windows 上把 MSVC 运行库**静态**编进可执行文件。
+#
+# 为什么:kotori 的 Windows 包是"解压就能跑"的绿色包(旁边还躺着一份内置的
+# kopia.exe),而动态链接会让它依赖 `VCRUNTIME140.dll` —— 那个属于 **VC++ 可再发行
+# 组件**,干净的 Windows 上并没有(系统自带的只有 UCRT 那部分:`api-ms-win-crt-*`)。
+# 2026-09-18 用 dumpbin 看过导入表,确实有 `VCRUNTIME140.dll`,而开发用的 VM 里有它
+# 只是因为装了 VS Build Tools —— 用户拿到包的第一眼不该是"找不到 XXX.dll"。
+# 代价是几 MB,换掉一整个失败模式。
+#
+# ⚠ 写在这里、而不是只写进 CI 的 `RUSTFLAGS`:ARM job 里那条"**测过的那份就是要发
+#   的那份**"在这里同样成立 —— 本地 VM 编出来的形状必须和发出去的完全一致,否则
+#   "静态链接的包"从来没被谁运行过。
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

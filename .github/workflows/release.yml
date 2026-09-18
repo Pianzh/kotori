@@ -1,0 +1,213 @@
+# 发布 —— 打 tag 时构建三端产物并创建 GitHub Release。
+#
+# 为什么和 ci.yml 分开:日常 CI 是"守门人"(每次 push 都跑,只求别腐烂),发布是一次性的
+# 交付动作。混在一起早晚会出现"某次 push 意外发了 Release"。
+#
+# ⚠ **只有 Windows 内置 kopia.exe**。Linux / ARM 上它在发行版仓库里(Arch 走 archlinuxcn),
+#   而 Windows 用户不该为了存档同步先去 GitHub 下个 zip、解压、再想办法把它摆进 PATH。
+#   内置的那份就放在 kotori.exe **旁边** —— `sync::executables::beside_kotori` 找的就是
+#   那里,搜索顺序是 设置页 → KOTORI_KOPIA → 同目录 → PATH,所以用户仍能覆盖掉它。
+#
+# 三端各有各的形态,不是同一份东西换个名字:
+#   Linux x86_64 / aarch64 —— tar.zst:二进制 + .desktop + LICENSE + BUILD-INFO
+#   Windows x64            —— zip:kotori.exe + **内置 kopia.exe** + LICENSES/ + README
+
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  # 手动跑一次只为验证打包流程;release job 有 tag 条件,不会凭空建 Release。
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  # 内置的东西必须可复现:版本写死在这里。要升就改这一行(顺便看一眼它的 release notes)。
+  KOPIA_VERSION: "0.23.1"
+
+jobs:
+  # ── Linux:x86_64 与 aarch64 是同一份东西的两个架构 ───────────────────────────
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev \
+            libfontconfig-dev libssl-dev zstd
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 构建 release
+        run: cargo build --release --locked
+
+      - name: 打包
+        run: |
+          set -euo pipefail
+          name="kotori-linux-${{ matrix.arch }}"
+          mkdir -p "dist/$name"
+          strip target/release/kotori -o "dist/$name/kotori"
+          install -m 644 assets/io.github.kotori.desktop "dist/$name/"
+          install -m 644 LICENSE "dist/$name/"
+          # 设备上"跑不起来"的第一个问题永远是依赖和 glibc,让产物自己带着答案。
+          {
+            echo "commit: $(git rev-parse HEAD)"
+            echo "built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)  (${{ matrix.runner }} runner)"
+            echo "rustc:  $(rustc --version)"
+            echo "glibc:  $(ldd --version | head -1)"
+            echo
+            echo "== file dist/$name/kotori =="
+            file "dist/$name/kotori"
+            echo
+            echo "== ldd target/release/kotori =="
+            ldd target/release/kotori
+          } > "dist/$name/BUILD-INFO.txt"
+          tar -C dist -I 'zstd -19 -T0' -cf "dist/$name.tar.zst" "$name"
+          ls -lh "dist/$name.tar.zst"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kotori-linux-${{ matrix.arch }}
+          path: dist/*.tar.zst
+          if-no-files-found: error
+
+  # ── Windows:唯一带内置 kopia 的一端 ─────────────────────────────────────────
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 构建 release
+        run: cargo build --release --locked
+        # MSVC 运行库是**静态**链进去的(见 `.cargo/config.toml`),这里不用设 RUSTFLAGS ——
+        # 那个文件在仓库里,checkout 之后自动生效,本地 VM 编出来的形状和这里一致。
+
+      - name: 取 kopia 并校验 sha256
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base  = "https://github.com/kopia/kopia/releases/download/v$env:KOPIA_VERSION"
+          $asset = "kopia-$env:KOPIA_VERSION-windows-x64.zip"
+          Invoke-WebRequest "$base/$asset"        -OutFile kopia.zip
+          Invoke-WebRequest "$base/checksums.txt" -OutFile kopia-checksums.txt
+          # 一行一个 "<sha256>  <文件名>"(官方可能写成 "sha *name" 的二进制模式,只取第一段)。
+          $line = Select-String -Path kopia-checksums.txt -Pattern ([regex]::Escape($asset)) |
+                  Select-Object -First 1
+          if (-not $line) { throw "checksums.txt 里没有 $asset" }
+          $want = ($line.Line -split '\s+')[0].ToLower()
+          $got  = (Get-FileHash kopia.zip -Algorithm SHA256).Hash.ToLower()
+          if ($got -ne $want) { throw "kopia 校验失败: 期望 $want, 实际 $got" }
+          Write-Host "kopia $asset sha256 校验通过"
+          Expand-Archive kopia.zip -DestinationPath kopia
+
+      - name: 打包
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $name = "kotori-windows-x64"
+          $dir  = "dist/$name"
+          New-Item -ItemType Directory -Path "$dir/LICENSES" -Force | Out-Null
+
+          Copy-Item target/release/kotori.exe "$dir/"
+          # **和 kotori.exe 同一个目录** —— beside_kotori 找的就是这里。
+          # kopia 的 zip 里是一个带版本号的目录,别假设层级,直接找。
+          $kopia = Get-ChildItem kopia -Recurse -Filter kopia.exe | Select-Object -First 1
+          if (-not $kopia) { throw "解压出来的包里没有 kopia.exe" }
+          Copy-Item $kopia.FullName "$dir/"
+
+          # 许可证:Apache-2.0 和 GPL-3.0 都要求随二进制带上原文。
+          # kopia 仓库根目录没有 NOTICE 文件,所以只需 LICENSE(2026-09-18 查过)。
+          $lic = Get-ChildItem kopia -Recurse -Filter LICENSE | Select-Object -First 1
+          Copy-Item $lic.FullName "$dir/LICENSES/kopia-Apache-2.0.txt"
+          Copy-Item LICENSE        "$dir/LICENSES/kotori-GPL-3.0.txt"
+
+          # 让拿到包的人不用猜:哪个是哪个、默认去哪儿找、想换怎么办。
+          @(
+            "kotori (Windows x64)"
+            ""
+            "kotori.exe  —— 主程序(双击直接开界面)"
+            "kopia.exe   —— 云存档同步引擎,随包内置"
+            "               kopia $env:KOPIA_VERSION,Apache-2.0"
+            "               放在 kotori.exe 旁边,kotori 自己会找到它;"
+            "               要换成别处的 kopia:在设置页里指路,或者设 KOTORI_KOPIA。"
+            "LICENSES/   —— 两个程序的许可证原文"
+            ""
+            "MSVC 运行库已经静态链接进 kotori.exe,不需要另外安装 VC++ 可再发行组件。"
+          ) | Set-Content -Encoding UTF8 "$dir/README.txt"
+
+          # 让包自己带着"这是从哪来的"。
+          @(
+            "commit: $(git rev-parse HEAD)"
+            "built:  $((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ'))  (windows-latest runner)"
+            "rustc:  $(rustc --version)"
+            "kopia:  $env:KOPIA_VERSION  (sha256 已按官方 checksums.txt 校验)"
+            ""
+            "kotori.exe sha256: $((Get-FileHash "$dir/kotori.exe" -Algorithm SHA256).Hash.ToLower())"
+            "kopia.exe  sha256: $((Get-FileHash "$dir/kopia.exe"  -Algorithm SHA256).Hash.ToLower())"
+          ) | Set-Content -Encoding UTF8 "$dir/BUILD-INFO.txt"
+
+          Compress-Archive -Path $dir -DestinationPath "dist/$name.zip"
+          Get-ChildItem dist | Format-Table Name,Length
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kotori-windows-x64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  # ── 汇总:把三端产物挂到同一个 Release 上 ────────────────────────────────────
+  release:
+    needs: [linux, windows]
+    # 手动触发时只构建、不发布 —— 免得验证打包流程顺手发出一个 Release。
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: 看看拿到了什么
+        run: ls -lh dist
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes '### 下载哪个
+
+          - `kotori-windows-x64.zip` —— **解压即用**。MSVC 运行库已静态链接进
+            `kotori.exe`,不需要另装 VC++ 可再发行组件;包里内置了 `kopia.exe`
+            (Apache-2.0)做云存档同步,放在 `kotori.exe` 旁边,kotori 自己会找到它。
+          - `kotori-linux-x86_64.tar.zst` / `kotori-linux-aarch64.tar.zst` —— 需要系统里
+            已有 gamescope 与 wine(见 README)。解包后 `kotori` 即是全部。
+
+          ### 源码
+
+          GPL-3.0:https://github.com/Pianzh/kotori —— 本仓库就是这些二进制对应的源码。
+          随包的 kopia 是独立程序(Apache-2.0),取自
+          https://github.com/kopia/kopia/releases 。
+          '

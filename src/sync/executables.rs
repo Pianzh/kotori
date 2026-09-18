@@ -83,8 +83,18 @@ fn locate(path: &Path, name: &str) -> Option<PathBuf> {
 }
 
 /// kotori 自己旁边有没有这个程序（随包内置的落点）。
+///
+/// Windows 的发布包里 `kopia.exe` 就躺在这儿 —— 见 `.github/workflows/release.yml`。
 fn beside_kotori(name: &str) -> Option<PathBuf> {
-    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    beside_in(std::env::current_exe().ok()?.parent()?, name)
+}
+
+/// [`beside_kotori`] 里**与"kotori 自己在哪"无关**的那一半。
+///
+/// 拆出来是为了能测:`current_exe()` 在单测里指向测试二进制,没法假装成安装目录,
+/// 而"内置的那份要被认出来"恰恰是发布包能不能开箱即用的关键一步。
+fn beside_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    // `.exe` 也认:Windows 上内置的那份叫 `kopia.exe`。
     [name.to_string(), format!("{name}.exe")]
         .into_iter()
         .map(|file| dir.join(file))
@@ -177,5 +187,30 @@ mod tests {
         // 常带版本号，用户明确指了谁就信他（见 `locate` 的说明）。
         let renamed = dir.program("rclone-v1.65.2.exe");
         assert_eq!(misconfigured(renamed.to_str().unwrap(), "rclone"), None);
+    }
+
+    /// 随包内置的落点:和 kotori 并排的那份要被认出来。
+    ///
+    /// Windows 包里内置的名字是 `kopia.exe`,Linux 上(如果将来也内置)是 `kopia` —— 两个都认。
+    #[test]
+    fn a_program_beside_kotori_is_found_with_or_without_the_exe_suffix() {
+        let dir = TempDir::new("beside");
+        let exe = dir.program("kopia.exe");
+        assert_eq!(
+            beside_in(&dir.0, "kopia"),
+            Some(exe),
+            "Windows 包里内置的那份就叫 kopia.exe"
+        );
+
+        let plain = TempDir::new("beside-plain");
+        let bare = plain.program("kopia");
+        assert_eq!(beside_in(&plain.0, "kopia"), Some(bare));
+    }
+
+    /// 旁边没有就是没有 —— 这时候才轮到 PATH。
+    #[test]
+    fn nothing_beside_kotori_means_none() {
+        let dir = TempDir::new("beside-empty");
+        assert_eq!(beside_in(&dir.0, "kopia"), None);
     }
 }
