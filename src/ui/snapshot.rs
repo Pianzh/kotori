@@ -19,7 +19,8 @@
 //!   `render/window_test.rs`).
 //!
 //! PPM on purpose: it needs no encoder, and one line of Python turns it into
-//! something viewable.
+//! something viewable. (The `png` entry in `Cargo.toml` has no caller — nothing
+//! ever asked it for a PNG — so that dependency line is dead weight.)
 
 use std::time::Duration;
 
@@ -107,7 +108,10 @@ pub(super) fn install_capture(window: &slint::Weak<AppWindow>) {
     );
 }
 
-/// A release build has no way to ask for one.
+/// A release build has no way to ask for one: `KOTORI_UI_SNAPSHOT` silently
+/// does nothing there (by design — this module is debug-only, see the module
+/// header), because `install_capture` is only implemented under
+/// `#[cfg(debug_assertions)]`.
 #[cfg(not(debug_assertions))]
 pub(super) fn install_capture(_window: &slint::Weak<AppWindow>) {}
 

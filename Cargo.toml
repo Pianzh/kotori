@@ -11,8 +11,12 @@ authors = ["pzh"]
 # Wayland). The `.slint` sources live next to the Rust modules that drive them in
 # `src/ui/slint/`; `build.rs` compiles them with the built-in `fluent` style.
 slint = { version = "1.17", features = ["compat-1-2"] }
-# Only for `KOTORI_UI_SNAPSHOT`: it writes a PNG of the window so the UI can be
-# inspected without a screen (see `ui::snapshot`).
+# ⚠ Dead weight: no code references this crate. The snapshot written by
+# `ui::snapshot` is a hand-rolled PPM (`write_ppm`), not a PNG, so nothing
+# ever needed an encoder — the comment that justified this line was wrong.
+# (`KOTORI_UI_SNAPSHOT` itself only works in debug builds: `install_capture`
+# has no implementation outside `#[cfg(debug_assertions)]`.) Removing it
+# means recomputing `Cargo.lock`.
 png = "0.17"
 
 # Async runtime
