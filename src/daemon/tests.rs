@@ -133,6 +133,46 @@ async fn games_are_sorted_by_name() {
     assert_eq!(names, ["alpha", "mid", "zeta"]);
 }
 
+/// 同名两条也要有**唯一确定**的顺序(用户 2026-09-18:「按 name 排序我认为应该是错的,
+/// 你没有考虑 name 相同的极端状态」)。
+///
+/// 光按 `name` 排时,同名那两条谁在前由 `HashMap` 的遍历顺序决定 —— 它随插入历史与
+/// 每次启动的随机种子变,于是"列表顺序"这件事就没有一个说法。id 是唯一的,拿它当
+/// 第二关键字才得到全序;这条测试把同名的顺序钉在 id 的字母序上。
+#[tokio::test]
+async fn games_with_the_same_name_still_have_one_order() {
+    let mut config = Config::default();
+    for id in ["zzz", "aaa", "mmm"] {
+        config.games.insert(
+            id.into(),
+            crate::config::GameConfig {
+                name: "同名".into(),
+                game_dir: "/g".into(),
+                exe_path: "/g/game.exe".into(),
+                launch_args: Vec::new(),
+                save_paths: Vec::new(),
+                wine_prefix: None,
+                watch_only: false,
+                process_name: None,
+                scale_profile: crate::config::ScaleProfile::default_for(),
+                created_at: chrono::Utc::now(),
+            },
+        );
+    }
+
+    let reply = Daemon::new(config)
+        .handle_request(r#"{"jsonrpc":"2.0","id":1,"method":"game.list"}"#)
+        .await;
+    let value: Value = serde_json::from_str(&reply.body).unwrap();
+    let ids: Vec<&str> = value["result"]["games"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| g["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["aaa", "mmm", "zzz"]);
+}
+
 #[tokio::test]
 async fn status_reports_no_sessions_initially() {
     let reply = daemon()

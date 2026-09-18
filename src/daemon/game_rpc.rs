@@ -31,12 +31,25 @@ impl Daemon {
             })
             .collect();
         // HashMap iteration order is random; keep the library stable.
+        //
+        // ⚠ 排序键必须是**唯一的**,所以用 `(name, id)` 而不是光看 `name`。用户
+        // 2026-09-18 点的就是这个:「按 name 排序我认为应该是错的,你没有考虑 name
+        // 相同的极端状态」。同名两条时,光按 name 排出来的相对顺序由 `HashMap` 的
+        // 遍历顺序决定 —— 它随插入历史与每次启动的随机种子变,于是"列表顺序"这件事
+        // 就没有一个说法。id 生成出来就唯一且不再变,拿它当第二关键字既保住"按名字
+        // 字母序"这个直觉,又给出一个真正的全序。
         games.sort_by(|a, b| {
             let key = |v: &Value| {
-                v.get("name")
-                    .and_then(|n| n.as_str())
-                    .unwrap_or_default()
-                    .to_string()
+                (
+                    v.get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    v.get("id")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                )
             };
             key(a).cmp(&key(b))
         });
