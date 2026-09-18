@@ -100,7 +100,7 @@ impl Daemon {
         // what "the daemon is the only writer" (ADR-002) rules out.
         let _lock = ipc::claim_socket(&ipc::lock_path(&socket_path))?;
 
-        let listener = ipc::Listener::bind(&socket_path).await?;
+        let mut listener = ipc::Listener::bind(&socket_path).await?;
 
         tracing::info!("daemon listening on {}", socket_path.display());
 

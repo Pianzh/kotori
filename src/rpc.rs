@@ -26,16 +26,39 @@ async fn connect(socket_path: &Path) -> Result<IpcStream, String> {
         .map_err(|e| format!("无法连接守护进程（是否已启动？）: {e}"))
 }
 
-/// Windows 上没有 `UnixStream`。`NamedPipeClient::connect` 是同步的,但连一条
-/// 本机管道是即时的,不值得为此再套一层 `spawn_blocking`。
+/// Windows 上没有 `UnixStream`。`ClientOptions::open` 是同步的,但连一条本机管道是
+/// 即时的,不值得为此再套一层 `spawn_blocking`。
+///
+/// 这里要重试的**只有** `ERROR_PIPE_BUSY`(231)。别的错误(最常见的是"系统找不到
+/// 指定的文件",也就是守护进程根本没跑)必须立刻返回 —— 否则该报错的地方会先白等。
 #[cfg(windows)]
 async fn connect(socket_path: &Path) -> Result<IpcStream, String> {
     use tokio::net::windows::named_pipe::ClientOptions;
 
+    /// 所有管道实例都在忙。
+    const ERROR_PIPE_BUSY: i32 = 231;
+
     let name = socket_path.as_os_str().to_string_lossy().into_owned();
-    ClientOptions::new()
-        .open(&*name)
-        .map_err(|e| format!("无法连接守护进程（是否已启动？）: {e}"))
+    let mut busy = None;
+
+    // 服务端会预建下一个空闲实例(见 `daemon::ipc` 里 `Listener::pending` 的注释),
+    // 所以"忙"只可能是极短的瞬间。留一点余量就行,不要无限等。
+    for attempt in 0..20u32 {
+        match ClientOptions::new().open(&*name) {
+            Ok(client) => return Ok(client),
+            Err(e) if e.raw_os_error() == Some(ERROR_PIPE_BUSY) => {
+                busy = Some(e);
+                let backoff = if attempt < 4 { 2 } else { 15 };
+                tokio::time::sleep(std::time::Duration::from_millis(backoff)).await;
+            }
+            Err(e) => return Err(format!("无法连接守护进程（是否已启动？）: {e}")),
+        }
+    }
+
+    Err(format!(
+        "无法连接守护进程（管道的实例一直占着）: {}",
+        busy.map(|e| e.to_string()).unwrap_or_default()
+    ))
 }
 
 /// Send a JSON-RPC request to the daemon and receive a single response.

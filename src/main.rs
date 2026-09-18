@@ -1,3 +1,10 @@
+// 在 Windows 上把 exe 声明成 **windows 子系统**:双击时不会先弹一个控制台黑框
+// (GUI 就该是双击直接出窗口)。代价是 CLI 用法没有现成的 stdout/stderr,所以
+// 启动时要 `attach_parent_console()` 附到终端上 —— 见那个函数的注释。
+//
+// 这个属性**不能**只给 release:开发时用的 debug 构建同样会双击,同样会看到黑框。
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod cli;
 mod config;
 mod daemon;
@@ -72,8 +79,44 @@ fn open_ui_log() -> Option<std::fs::File> {
         .ok()
 }
 
+/// 附到父进程的控制台上,让 CLI 输出还能到达终端。
+///
+/// exe 是 windows 子系统(见文件顶部的 `windows_subsystem`),系统**不会**给它分配
+/// 控制台 —— 这正是双击不弹黑框的原因。但从终端里跑 `kotori status` 时,父进程
+/// (PowerShell / cmd)是有控制台的,附上去 stdout/stderr 就又能用了。
+///
+/// 双击启动时没有父控制台,这个调用会失败 —— 无所谓:GUI 的日志走 `ui.log`。
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{
+        ATTACH_PARENT_PROCESS, AttachConsole, SetConsoleCP, SetConsoleOutputCP,
+    };
+
+    /// 控制台 UTF-8。
+    const CP_UTF8: u32 = 65001;
+
+    // SAFETY: 三个都是一元的 Win32 调用,参数是它们规定的常量。失败也无所谓 ——
+    // 双击启动时没有父控制台,这三个都会失败,而那种情况下本来就不需要控制台。
+    unsafe {
+        if AttachConsole(ATTACH_PARENT_PROCESS) != 0 {
+            // 控制台默认代码页是 437(英文系统)/ 936(中文系统),而 kotori 打的是
+            // UTF-8 字节 —— 实测在 Windows VM 的黑框里就是"一堆方框"。切成 UTF-8。
+            SetConsoleOutputCP(CP_UTF8);
+            SetConsoleCP(CP_UTF8);
+        }
+    }
+}
+
 fn main() -> anyhow::Result<()> {
+    // 得**在日志初始化之前**:tracing 写 stderr,而 stderr 要先有地方可去。
+    #[cfg(windows)]
+    attach_parent_console();
+
     let cli = cli::Cli::parse();
+
+    // 不给子命令就是启动 UI。双击 exe(Windows) / 点桌面图标(Linux)走的都是这条路,
+    // 否则用户拿到的是一段 help,还得自己猜该敲哪个子命令。`--help` 照旧。
+    let command = cli.command.unwrap_or(cli::Command::Ui);
 
     // Initialize logging.
     //
@@ -90,7 +133,7 @@ fn main() -> anyhow::Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG)),
         )
         .with_writer(LogWriter {
-            file: matches!(&cli.command, cli::Command::Ui)
+            file: matches!(&command, cli::Command::Ui)
                 .then(open_ui_log)
                 .flatten()
                 .map(|file| std::sync::Arc::new(std::sync::Mutex::new(file))),
@@ -99,7 +142,7 @@ fn main() -> anyhow::Result<()> {
 
     let rt = tokio::runtime::Runtime::new()?;
 
-    match cli.command {
+    match command {
         cli::Command::Reload => {
             // 配置是 daemon 在内存里持有的,而它也是唯一的写者。手改了
             // `config.toml` 之后不重读,下一次写就会把手改的内容盖掉。

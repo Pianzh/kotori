@@ -39,7 +39,9 @@ impl Listener {
         Ok(Self { inner })
     }
 
-    pub(super) async fn accept(&self) -> std::io::Result<Stream> {
+    /// `&mut self` 只是为了和 Windows 那边的签名一致(那边要换出手里的待命实例),
+    /// 这样调用点不用按平台分叉。
+    pub(super) async fn accept(&mut self) -> std::io::Result<Stream> {
         self.inner.accept().await.map(|(stream, _addr)| stream)
     }
 }
@@ -47,29 +49,41 @@ impl Listener {
 #[cfg(windows)]
 pub(super) struct Listener {
     name: String,
+    /// 已经建好、正等着被连上的那**一个**实例。
+    ///
+    /// 命名管道和 Unix socket 的形状差别就在这儿:监听端必须**预建**实例。如果等到
+    /// `accept` 的时候才 `create`,那么"上一个实例刚被连上"到"下一个实例被创建"
+    /// 之间就有一段**没有任何空闲实例**的窗口,客户端此刻 `open()` 拿到的是
+    /// `ERROR_PIPE_BUSY`(231)—— 这在 Windows VM 上实测撞到了:UI 首次启动时
+    /// 云同步页报连不上守护进程,点一下重试就好了,正是这个窗口。
+    pending: tokio::net::windows::named_pipe::NamedPipeServer,
 }
 
 #[cfg(windows)]
 impl Listener {
     pub(super) async fn bind(path: &Path) -> anyhow::Result<Self> {
+        use tokio::net::windows::named_pipe::ServerOptions;
+
         // 管道名没有父目录要建,也没有残留文件要清:管道由内核持有,最后一个
-        // 实例关掉它就没了。
-        Ok(Self {
-            name: path.as_os_str().to_string_lossy().into_owned(),
-        })
+        // 实例关掉它就没了。一开始就把第一个待命实例建出来。
+        let name = path.as_os_str().to_string_lossy().into_owned();
+        let pending = ServerOptions::new().create(&*name)?;
+        Ok(Self { name, pending })
     }
 
     /// 命名管道的"接受"和 Unix 不是一个形状:每个连接都要**新开一个实例**。
     ///
-    /// 先 `create` 出实例、再 `connect` 等客户端,两步之间有个窗口期,这期间客户端
-    /// 拿到的是 `ERROR_PIPE_BUSY`。本机上 UI/CLI 都是偶发连接,窗口约等于两次
-    /// `accept` 之间的时间,先这样 —— 等 Windows 真机验过再决定要不要预建下一个实例。
-    pub(super) async fn accept(&self) -> std::io::Result<Stream> {
+    /// 关键在于顺序 —— **先把下一个实例建出来,再拿当前这个去等客户端**。反过来写
+    /// 就会重新出现那个"没有空闲实例"的窗口(见 `pending` 的注释)。
+    pub(super) async fn accept(&mut self) -> std::io::Result<Stream> {
         use tokio::net::windows::named_pipe::ServerOptions;
 
-        let server = ServerOptions::new().create(&*self.name)?;
-        server.connect().await?;
-        Ok(server)
+        let next = ServerOptions::new().create(&*self.name)?;
+        let current = std::mem::replace(&mut self.pending, next);
+        // 这一步被取消(daemon 正好在收 shutdown 信号)只会丢掉 `current`,
+        // `pending` 已经是新的了,所以取消之后照样有实例可连。
+        current.connect().await?;
+        Ok(current)
     }
 }
 

@@ -29,6 +29,7 @@ use crate::config::{ScaleAlgorithm, ScaleProfile};
 slint::include_modules!();
 
 mod app;
+mod backend;
 mod crash;
 mod driver;
 mod font;
@@ -73,7 +74,9 @@ pub fn run() -> anyhow::Result<()> {
         tracing::warn!("{e}");
     }
 
-    driver::run()
+    // 没有 GPU 的机器上 femtovg 会在建窗口那一刻失败(见 `backend`),这里负责换软件
+    // 渲染重开一次,而不是让用户对着 "Could not locate glCreateShader symbol" 发呆。
+    backend::finish(driver::run())
 }
 
 #[cfg(test)]

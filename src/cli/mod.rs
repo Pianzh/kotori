@@ -6,8 +6,10 @@ use clap::{Parser, Subcommand};
 #[command(name = "kotori")]
 #[command(about = "Galgame manager with scaling and cloud sync")]
 pub struct Cli {
+    /// 不给子命令时直接启动 UI —— 双击可执行文件 / 点桌面图标的默认行为。
+    /// 要看帮助仍然可以 `kotori --help`。
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 #[derive(Subcommand)]
