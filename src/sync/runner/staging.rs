@@ -77,3 +77,85 @@ impl Drop for Staging {
         let _ = std::fs::remove_dir_all(&self.path);
     }
 }
+
+/// 清掉**上一次**留下的残骸，返回删掉几个。
+///
+/// [`Staging`] 靠 `Drop` 删自己，而 `Drop` 在**进程被杀、崩溃、断电**时不会跑 ——
+/// `stage-*` 于是会一直躺在工作目录里。Linux 上 `/tmp` 有 systemd-tmpfiles 之类帮忙
+/// 收，但这些目录在**数据目录**下，没有谁管；Windows 上 `%TEMP%` 本身也不像 Linux
+/// 那样自动清理。一个包小的几 MB、大的上百 MB，攒着就是白占磁盘。
+///
+/// **只在 daemon 启动时调用**，这一点是安全的：daemon 有单实例锁（见
+/// [`crate::daemon::ipc`]），拿到锁就意味着没有别的实例在跑；而同步只发生在 daemon
+/// 里（CLI 的 `kotori sync` 也是发 RPC 过来的）。删不掉的（Windows 上句柄还没放开、
+/// 权限不对）直接跳过，不纠缠。
+pub(crate) fn sweep_stale(work_dir: &Path) -> usize {
+    let Ok(entries) = std::fs::read_dir(work_dir) else {
+        // 目录还不存在 = 从来没同步过，没什么可清的。
+        return 0;
+    };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        // 只碰我们自己造的那种名字：这个目录里将来可能还有别的东西。
+        if !entry.file_name().to_string_lossy().starts_with("stage-") {
+            continue;
+        }
+        if std::fs::remove_dir_all(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 用完就删的临时目录（单测惯例，同 `executables.rs` 里那个）。
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!(
+                "kotori-staging-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// 上次崩溃留下的 `stage-*` 要被清掉，而**不是我们造的东西一个都不许碰**。
+    #[test]
+    fn stale_stage_directories_are_swept_and_others_are_left_alone() {
+        let dir = TempDir::new("sweep");
+        std::fs::create_dir_all(dir.0.join("stage-11111111")).unwrap();
+        std::fs::create_dir_all(dir.0.join("stage-22222222")).unwrap();
+        // 将来这个目录里可能放别的东西（比如某个引擎自己的缓存）：那不是我们的。
+        std::fs::create_dir_all(dir.0.join("kopia-cache")).unwrap();
+
+        assert_eq!(sweep_stale(&dir.0), 2);
+        assert!(!dir.0.join("stage-11111111").exists());
+        assert!(!dir.0.join("stage-22222222").exists());
+        assert!(dir.0.join("kopia-cache").exists(), "不是我们造的不许碰");
+    }
+
+    /// 从来没同步过的机器：目录都不存在，不该被当成错误。
+    #[test]
+    fn sweeping_a_directory_that_was_never_created_is_not_an_error() {
+        let missing = std::env::temp_dir().join(format!(
+            "kotori-staging-missing-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        assert_eq!(sweep_stale(&missing), 0);
+    }
+}

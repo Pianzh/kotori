@@ -29,6 +29,7 @@ use crate::config::SyncConfig;
 use crate::secrets::Keyring;
 
 pub use self::outcome::{GameOutcome, LocationOutcome};
+pub(crate) use self::staging::sweep_stale;
 
 mod outcome;
 mod pull;
@@ -54,6 +55,14 @@ pub const PULL_TIMEOUT: Duration = Duration::from_secs(30);
 /// would come back on the next launch, so we wait a moment first.
 pub const SETTLE_DELAY: Duration = Duration::from_secs(3);
 
+/// 打包与解包工作区的默认位置（`<数据目录>/sync`）。
+///
+/// 单独一个函数，是因为 **daemon 启动时要按同一个位置去扫上一次的残骸**
+/// （见 [`sweep_stale`]）—— 两处各写各的路径，迟早会分叉。
+pub fn default_work_dir() -> PathBuf {
+    crate::config::data_dir().join("sync")
+}
+
 /// Runs one sync configuration against whichever engine it selects.
 pub struct Runner {
     backend: Backend,
@@ -72,7 +81,7 @@ impl Runner {
             backend,
             settings,
             keyring,
-            work_dir: crate::config::data_dir().join("sync"),
+            work_dir: default_work_dir(),
         })
     }
 
@@ -86,7 +95,7 @@ impl Runner {
             backend,
             settings,
             keyring,
-            work_dir: crate::config::data_dir().join("sync"),
+            work_dir: default_work_dir(),
         }
     }
 

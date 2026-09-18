@@ -104,6 +104,16 @@ impl Daemon {
 
         tracing::info!("daemon listening on {}", socket_path.display());
 
+        // 上一次 daemon 要是被杀或崩了，`stage-*` 会留在工作目录里（`Drop` 跑不到）。
+        // 这在 Windows 上尤其要紧:`%TEMP%` 不像 Linux 那样有人定期扫,而这些目录还在
+        // 数据目录下,更没人管 —— 一个包小的几 MB、大的上百 MB,攒着就是白占磁盘。
+        // **此刻清是安全的**:锁已经在手,没有别的实例;同步也只在 daemon 里做
+        // (CLI 的 `kotori sync` 是发 RPC 过来的)。
+        let swept = crate::sync::runner::sweep_stale(&crate::sync::runner::default_work_dir());
+        if swept > 0 {
+            tracing::info!("清掉了上次留下的 {swept} 个临时包目录");
+        }
+
         self.spawn_sync_events();
 
         // A logout or a shutdown stops this daemon with SIGTERM, and that is the
