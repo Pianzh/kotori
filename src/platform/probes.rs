@@ -12,6 +12,7 @@ use std::process::Stdio;
 use super::MIN_GAMESCOPE;
 use super::distro::{Distro, Package};
 use super::{Check, Level, PROBE_TIMEOUT, State};
+use crate::util::exec::Quiet;
 
 // Linux 专有:这是"kotori 自己把游戏拉起来再缩放"那条路上的东西,Windows 版不走那条路。
 #[cfg(unix)]
@@ -265,7 +266,13 @@ pub(super) enum Ran {
 
 pub(super) async fn run(binary: &str, args: &[&str]) -> Ran {
     let mut command = tokio::process::Command::new(binary);
-    command.args(args).stdin(Stdio::null()).kill_on_drop(true);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .kill_on_drop(true)
+        // 一次环境检查要连跑好几条命令,每条都弹一个控制台的话,「切到设置页」
+        // 就是一串黑框(见 `util::exec`)。
+        .quiet();
     match tokio::time::timeout(PROBE_TIMEOUT, command.output()).await {
         Err(_) => Ran::Timeout,
         Ok(Err(_)) => Ran::Failed,

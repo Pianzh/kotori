@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use super::encrypted::EncryptedFile;
 use super::plain::PlainFile;
 use super::{PROBE_ACCOUNT, SERVICE, SecretError, SecretKey, StoreKind, TOOL_ENV, backend_name};
+use crate::util::exec::Quiet;
 
 /// Where a [`Keyring`] keeps its entries.
 #[derive(Debug, Clone)]
@@ -317,7 +318,9 @@ impl Keyring {
                 Stdio::null()
             })
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // `secret-tool` 也是控制台程序:Windows 上它不该弹窗(见 `util::exec`)。
+            .quiet();
 
         let mut child = command
             .spawn()

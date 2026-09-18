@@ -213,17 +213,40 @@ pub fn ensure_running(socket: &Path) -> anyhow::Result<()> {
     )
 }
 
+/// 管道上现在有没有活着的守护进程在听。
+///
+/// ⚠ **这一处必须走 `std`,不能用 `tokio::net::windows::named_pipe`。** 后者要一个
+/// 正在跑的 reactor,而 `ensure_running` 是**同步**函数,调用点不一定在 runtime 上下文
+/// 里 —— CLI 的 `sync` / `scale` 就不是,于是 `ClientOptions::new().open()` 每次都在
+/// `named_pipe.rs` 里 panic("there is no reactor running, must be called from the
+/// context of a Tokio 1.x runtime")。用户 2026-09-18 在真机上撞到的是整个功能面:
+/// 所有 `sync` / `scale` 子命令退出码 101(见 BUG-REPORT BUG-1)。
+///
+/// 这里只需要"通不通"这一个比特,`std::fs` 那层 `CreateFileW` 就够,而且它对管道名的
+/// 处理和 `ClientOptions` 是同一条路:没有空闲实例时同样拿到 `ERROR_PIPE_BUSY`(231)。
+/// 探针**会真的连上再立刻关掉**,这一点和改动前一致 —— 守护进程那边看到的是"连上又
+/// 断开",`handle_client` 读一次 EOF 就收工;而 [`Listener::accept`] 是**先建下一个
+/// 实例**再等的,所以这一次多余连接不会让紧随其后的真正调用撞上"没有空闲实例"。
+///
+/// 回归闸门见文件末尾的 `pipe_probe_does_not_need_a_runtime`。
+#[cfg(windows)]
+fn pipe_is_up(name: &str) -> bool {
+    // 读写都要:守护进程那边的实例是 `ServerOptions` 默认的双工管道,真正的客户端
+    // (`rpc.rs`)也是按双工打开的 —— 探针照抄这个权限,才代表得了"真连得上"。
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(name)
+        .is_ok()
+}
+
 /// Windows 版:同样的"连不上就起一个,再等它",只是端点是管道。
 #[cfg(windows)]
 pub fn ensure_running(socket: &Path) -> anyhow::Result<()> {
-    use std::os::windows::process::CommandExt;
-    use tokio::net::windows::named_pipe::ClientOptions;
-
-    /// 别给后台的守护进程弹一个控制台窗口。
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    use crate::util::exec::Quiet;
 
     let name = socket.as_os_str().to_string_lossy().into_owned();
-    if ClientOptions::new().open(&*name).is_ok() {
+    if pipe_is_up(&name) {
         return Ok(());
     }
     tracing::info!("daemon 未运行，正在启动...");
@@ -237,12 +260,15 @@ pub fn ensure_running(socket: &Path) -> anyhow::Result<()> {
         .stderr(std::process::Stdio::from(log))
         // 没有 `process_group(0)` 的对等物,也不需要:Windows 这边唯一会来的
         // "会话要结束了"是控制台 Ctrl-C,不会像 Unix 登出那样横扫一整个进程组。
-        .creation_flags(CREATE_NO_WINDOW)
+        //
+        // ⚠ 这个窗口不弹出来还有第二个理由:控制台一旦存在就会陪着守护进程活到它
+        // 退出,而**用户点掉那个窗口等于给它发 Ctrl-C**(见 `util::exec`)。
+        .quiet()
         .spawn()
         .map_err(|e| anyhow::anyhow!("无法启动守护进程: {e}"))?;
 
     for _ in 0..50 {
-        if ClientOptions::new().open(&*name).is_ok() {
+        if pipe_is_up(&name) {
             tracing::info!("daemon 已就绪");
             return Ok(());
         }
@@ -254,4 +280,24 @@ pub fn ensure_running(socket: &Path) -> anyhow::Result<()> {
         name,
         log_path.display()
     )
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::pipe_is_up;
+
+    /// BUG-1 的回归闸门:探针**在没有 runtime 的线程上**也必须能跑。
+    ///
+    /// `#[test]` 的线程不在任何 runtime 里,正是 CLI 的 `sync` / `scale` 所处的处境。
+    /// 改动前这里是 `ClientOptions::new().open(...)`,在这个线程上直接 panic
+    /// ("there is no reactor running"),所以这条测试红;换成 `std::fs` 之后它安静地
+    /// 返回"通不了"。
+    ///
+    /// ⚠ 它只在 Windows 上编译,而 CI 的 `test-windows` 目前只做 `cargo check`
+    /// (不跑测试),所以这条闸门**只在 Windows 上手动 `cargo test` 时真的跑**。
+    /// 别因为它"在 CI 里是绿的"就以为它验过了。
+    #[test]
+    fn pipe_probe_does_not_need_a_runtime() {
+        assert!(!pipe_is_up(r"\\.\pipe\kotori-nonexistent-probe"));
+    }
 }
