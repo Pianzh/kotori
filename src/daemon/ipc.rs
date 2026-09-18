@@ -203,13 +203,13 @@ pub fn ensure_running(socket: &Path) -> anyhow::Result<()> {
 #[cfg(windows)]
 pub fn ensure_running(socket: &Path) -> anyhow::Result<()> {
     use std::os::windows::process::CommandExt;
-    use tokio::net::windows::named_pipe::NamedPipeClient;
+    use tokio::net::windows::named_pipe::ClientOptions;
 
     /// 别给后台的守护进程弹一个控制台窗口。
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
     let name = socket.as_os_str().to_string_lossy().into_owned();
-    if NamedPipeClient::connect(&*name).is_ok() {
+    if ClientOptions::new().open(&*name).is_ok() {
         return Ok(());
     }
     tracing::info!("daemon 未运行，正在启动...");
@@ -228,7 +228,7 @@ pub fn ensure_running(socket: &Path) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("无法启动守护进程: {e}"))?;
 
     for _ in 0..50 {
-        if NamedPipeClient::connect(&*name).is_ok() {
+        if ClientOptions::new().open(&*name).is_ok() {
             tracing::info!("daemon 已就绪");
             return Ok(());
         }

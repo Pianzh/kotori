@@ -30,8 +30,12 @@ async fn connect(socket_path: &Path) -> Result<IpcStream, String> {
 /// 本机管道是即时的,不值得为此再套一层 `spawn_blocking`。
 #[cfg(windows)]
 async fn connect(socket_path: &Path) -> Result<IpcStream, String> {
+    use tokio::net::windows::named_pipe::ClientOptions;
+
     let name = socket_path.as_os_str().to_string_lossy().into_owned();
-    IpcStream::connect(&*name).map_err(|e| format!("无法连接守护进程（是否已启动？）: {e}"))
+    ClientOptions::new()
+        .open(&*name)
+        .map_err(|e| format!("无法连接守护进程（是否已启动？）: {e}"))
 }
 
 /// Send a JSON-RPC request to the daemon and receive a single response.
