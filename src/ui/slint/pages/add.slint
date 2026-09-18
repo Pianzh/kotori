@@ -1,6 +1,6 @@
 // 「添加游戏」:只有手动填写 —— kotori 不做目录扫描(那个只存在于 CLI 的 `kotori scan`,
-// 管理器里没有这个功能,也不打算加)。字段与旧 iced 版的 add.rs 一致:
-// 游戏名 / 游戏根目录 / 可执行文件。
+// 管理器里没有这个功能,也不打算加)。字段顺序照填写流程排:先是可执行文件,然后
+// 游戏根目录,游戏名放最后(调整前是:游戏名 / 游戏根目录 / 可执行文件)。
 
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
@@ -69,13 +69,15 @@ export component AddPage inherits ScrollView {
             bottom: 24px;
             Group {
                 CardRow {
-                    title: "游戏名";
-                    description: "库里显示的名字。";
-                    TextField {
-                        field-width: 300px;
-                        text <=> root.new-name;
-                        edited(text) => { root.name-changed(text); }
-                        placeholder: "例如 3days";
+                    title: "可执行文件";
+                    description: "exe 的完整路径。";
+                    PathField {
+                        field-width: 340px;
+                        text <=> root.new-exe;
+                        edited(text) => { root.exe-changed(text); }
+                        browse-enabled: root.browse-enabled;
+                        browse-clicked => { root.browse-exe(); }
+                        placeholder: "/path/to/game.exe";
                     }
                 }
                 Divider { }
@@ -93,15 +95,13 @@ export component AddPage inherits ScrollView {
                 }
                 Divider { }
                 CardRow {
-                    title: "可执行文件";
-                    description: "exe 的完整路径。";
-                    PathField {
-                        field-width: 340px;
-                        text <=> root.new-exe;
-                        edited(text) => { root.exe-changed(text); }
-                        browse-enabled: root.browse-enabled;
-                        browse-clicked => { root.browse-exe(); }
-                        placeholder: "/path/to/game.exe";
+                    title: "游戏名";
+                    description: "库里显示的名字。";
+                    TextField {
+                        field-width: 300px;
+                        text <=> root.new-name;
+                        edited(text) => { root.name-changed(text); }
+                        placeholder: "例如 3days";
                     }
                 }
                 if root.path-hint != "" : VerticalLayout {
