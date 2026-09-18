@@ -182,6 +182,12 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     steps:
+      # ⚠ `--generate-notes` 要读 git 历史来生成发布说明,所以这里**必须** checkout。
+      # 少了它 gh 会报 "fatal: not a git repository (or any of the parent directories)"
+      # 并让整个 job 失败 —— 2026-09-18 第一次发 v0.0.1 就是这么挂的(三个构建 job 都成功,
+      # 只有这一步红)。
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -194,9 +200,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
-            --title "$GITHUB_REF_NAME" \
-            --generate-notes \
+          # tag 名里带 `-` 的一律当**预发布**(v0.1.0-rc1、v0.0.2-test);纯数字的
+          # (v0.1.0)才是正式版。用数组而不是拼字符串,免得空参数被当成一个空文件名。
+          ARGS=(--title "$GITHUB_REF_NAME" --generate-notes)
+          case "$GITHUB_REF_NAME" in *-*) ARGS+=(--prerelease) ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* "${ARGS[@]}" \
             --notes '### 下载哪个
 
           - `kotori-windows-x64.zip` —— **解压即用**。MSVC 运行库已静态链接进
