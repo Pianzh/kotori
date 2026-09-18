@@ -74,30 +74,34 @@ pub(super) async fn wine(distro: &Distro) -> Check {
     }
 }
 
-pub(super) async fn rclone(distro: &Distro, configured: &str) -> Check {
-    const IMPACT: &str = "没有它就用不了 rclone 那种同步方式(默认就是它);选了 kopia 的机器可以不要";
+/// `level` 由**用户选的引擎**决定,不能写死:引擎是 rclone 时它是必需项,选了 kopia
+/// 就只是个可选项(那条路根本不会用到 rclone)。写死成 Required 会让选了 kopia 的机器
+/// 一直报红 —— Windows 上尤其明显,那边还把 kopia 内置在包里。
+pub(super) async fn rclone(distro: &Distro, configured: &str, level: Level) -> Check {
+    const IMPACT: &str = "没有它就用不了 rclone 那种同步方式;选了 kopia 的机器可以不要";
     let install = distro.install(Package::same("rclone"));
     // 设置页里可以指点位置，之后才是 `KOTORI_RCLONE` 与 PATH（见 `sync::executables`）。
     let Some(binary) = crate::sync::find_rclone(configured) else {
-        return Check::missing("rclone", "rclone", IMPACT, install);
+        return Check::missing_at("rclone", "rclone", level, IMPACT, install);
     };
     let path = binary.display().to_string();
     match run(&path, &["version"]).await {
-        Ran::Out(text) => Check::ready(
+        Ran::Out(text) => Check::ready_at(
             "rclone",
             "rclone",
+            level,
             format!("{}（{path}）", first_line(&text, "已安装")),
             "云存档同步",
         ),
         Ran::Timeout => Check::degraded(
             "rclone",
             "rclone",
-            Level::Required,
+            level,
             format!("找到了 {path},但 `rclone version` 没有在 5 秒内回答"),
             "同步可能会一直卡着,值得先手动跑一次看看",
             String::new(),
         ),
-        Ran::Failed => Check::missing("rclone", "rclone", IMPACT, install),
+        Ran::Failed => Check::missing_at("rclone", "rclone", level, IMPACT, install),
     }
 }
 

@@ -83,7 +83,13 @@ impl Check {
         Self::ready_at(id, title, Level::Optional, detail, impact)
     }
 
-    fn ready_at(id: &'static str, title: &str, level: Level, detail: String, impact: &str) -> Self {
+    pub(super) fn ready_at(
+        id: &'static str,
+        title: &str,
+        level: Level,
+        detail: String,
+        impact: &str,
+    ) -> Self {
         Self {
             id,
             title: title.to_string(),
@@ -130,7 +136,7 @@ impl Check {
         Self::missing_at(id, title, Level::Optional, impact, install)
     }
 
-    fn missing_at(
+    pub(super) fn missing_at(
         id: &'static str,
         title: &str,
         level: Level,
@@ -196,6 +202,13 @@ pub const fn platform() -> &'static str {
 pub async fn report(settings: &crate::config::SyncConfig) -> Report {
     let distro = Distro::detect();
 
+    // rclone 算不算必需项,取决于用户选的引擎:引擎是 kopia 时那条路根本不会走到
+    // rclone,把它报成"缺了就不行"会让报告一直是红的(而 Windows 包里内置的正是 kopia)。
+    let rclone_level = match settings.engine {
+        crate::config::SyncEngine::Rclone => Level::Required,
+        crate::config::SyncEngine::Kopia => Level::Optional,
+    };
+
     // gamescope / wine / 窗口尺寸控制属于 Linux 那条「kotori 自己把游戏拉起来、用
     // gamescope 缩放」的路。Windows 版不走那条路(它借 Magpie,而且只能观察),在这儿报
     // 「缺 wine」「只在 KDE Plasma 上实现」只会让用户以为自己少装了什么 —— 所以是
@@ -204,7 +217,7 @@ pub async fn report(settings: &crate::config::SyncConfig) -> Report {
     let checks = vec![
         probes::gamescope(&distro).await,
         probes::wine(&distro).await,
-        probes::rclone(&distro, &settings.rclone_binary).await,
+        probes::rclone(&distro, &settings.rclone_binary, rclone_level).await,
         probes::kopia(&distro, &settings.kopia_binary).await,
         probes::file_dialog(&distro).await,
         probes::window_control(),
@@ -214,7 +227,7 @@ pub async fn report(settings: &crate::config::SyncConfig) -> Report {
 
     #[cfg(windows)]
     let checks = vec![
-        probes::rclone(&distro, &settings.rclone_binary).await,
+        probes::rclone(&distro, &settings.rclone_binary, rclone_level).await,
         probes::kopia(&distro, &settings.kopia_binary).await,
         probes::file_dialog(&distro).await,
         probes::resolution(),
