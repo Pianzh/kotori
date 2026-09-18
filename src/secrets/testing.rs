@@ -18,23 +18,34 @@ pub(crate) const WARMUP_FLAG: &str = "--kotori-warmup";
 /// the file for writing again — and every fake script exits immediately on
 /// [`WARMUP_FLAG`], so the warm-up has no side effects.
 pub(crate) fn write_executable(path: &Path, body: &str) {
-    use std::os::unix::fs::PermissionsExt;
-
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).unwrap();
     }
     std::fs::write(path, body).unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 
+    // 可执行位是 Unix 的概念。Windows 上这套 fake `secret-tool` 整体不成立
+    // ——那边用的是凭据管理器,还没实现(GOALS §2.3),所以这里只求编得过:
+    // 那几个 keyring 测试要在 Windows 上真跑之前,得先有一个 Windows 后端。
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    #[cfg(not(unix))]
+    return;
+
+    #[cfg(unix)]
     for _ in 0..200 {
         match std::process::Command::new(path).arg(WARMUP_FLAG).output() {
             Ok(_) => return,
+            // ETXTBSY 同样是 Unix 的内核语义:那个 inode 还被写者占着。
             Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             Err(e) => panic!("cannot execute {}: {e}", path.display()),
         }
     }
+    #[cfg(unix)]
     panic!("{} stayed busy", path.display());
 }
 

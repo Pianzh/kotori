@@ -3,8 +3,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+#[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
 use tokio::sync::{Notify, RwLock};
 
@@ -12,12 +12,15 @@ use crate::config::{self, Config};
 use crate::scale::{LaunchSpec, PlatformEngine, ScaleEngine, ScaleSession, SessionKind};
 
 mod game_rpc;
+mod ipc;
 mod protocol;
 mod scale_rpc;
 mod status_rpc;
 mod sync_rpc;
 use protocol::{GamePatch, NewGame, Reply, param_str, respond, rpc_err, rpc_ok};
 use sync_rpc::SyncState;
+
+pub use ipc::ensure_running;
 
 /// Daemon log file name inside [`config::log_dir`].
 pub const DAEMON_LOG: &str = "daemon.log";
@@ -89,24 +92,15 @@ impl Daemon {
             config::resolve_socket(&config)
         };
 
-        if let Some(parent) = socket_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        // One daemon per socket, enforced by a lock rather than by "the path
+        // One daemon per endpoint, enforced by a lock rather than by "the path
         // exists". Removing the file first — which is what this used to do — means
         // a second daemon **silently steals the socket from a live one**: the first
         // keeps running, keeps writing the config and keeps owning its games, but
         // nothing can reach it any more. Two writers on one `config.toml` is exactly
         // what "the daemon is the only writer" (ADR-002) rules out.
-        let lock_path = socket_path.with_extension("lock");
-        let _lock = claim_socket(&lock_path)?;
+        let _lock = ipc::claim_socket(&ipc::lock_path(&socket_path))?;
 
-        // Now a stale socket file is all that can be left over: bind over it.
-        let _ = std::fs::remove_file(&socket_path);
-
-        let listener = UnixListener::bind(&socket_path)
-            .map_err(|e| anyhow::anyhow!("Failed to bind {}: {}", socket_path.display(), e))?;
+        let listener = ipc::Listener::bind(&socket_path).await?;
 
         tracing::info!("daemon listening on {}", socket_path.display());
 
@@ -122,15 +116,13 @@ impl Daemon {
         // `daemon.shutdown` deliberately still does *not* do this: a UI that quits
         // must not kill a running game (ADR-002), so the two exits stay distinct
         // and only the signal path tears games down.
-        let mut sigterm = signal(SignalKind::terminate())?;
-        let mut sigint = signal(SignalKind::interrupt())?;
         let mut signalled = false;
 
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
                     match accepted {
-                        Ok((stream, _addr)) => {
+                        Ok(stream) => {
                             let this = self.clone_shares();
                             tokio::spawn(async move {
                                 if let Err(e) = this.handle_client(stream).await {
@@ -148,13 +140,8 @@ impl Daemon {
                     tracing::info!("shutdown requested, stopping daemon");
                     break;
                 }
-                _ = sigterm.recv() => {
-                    tracing::info!("收到 SIGTERM（会话要结束了），把在跑的游戏一并收尾");
-                    signalled = true;
-                    break;
-                }
-                _ = sigint.recv() => {
-                    tracing::info!("收到 SIGINT，把在跑的游戏一并收尾");
+                how = session_end_signal() => {
+                    tracing::info!("收到 {how}（会话要结束了），把在跑的游戏一并收尾");
                     signalled = true;
                     break;
                 }
@@ -248,8 +235,16 @@ impl Daemon {
         });
     }
 
-    async fn handle_client(&self, stream: UnixStream) -> anyhow::Result<()> {
-        let (reader, mut writer) = stream.into_split();
+    /// 一个客户端连接上的全部往来。
+    ///
+    /// 泛型是刻意的:守护进程这一侧不该知道传输是 Unix socket 还是命名管道
+    /// (见 [`ipc`])。`tokio::io::split` 比 `UnixStream::into_split` 多一层锁,
+    /// 但一条连接上只有一条 JSON-RPC 要读写,这点量级完全可以忽略。
+    async fn handle_client<S>(&self, stream: S) -> anyhow::Result<()>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
+        let (reader, mut writer) = tokio::io::split(stream);
         let mut lines = BufReader::new(reader).lines();
 
         while let Some(line) = lines.next_line().await? {
@@ -474,33 +469,6 @@ impl Daemon {
     }
 }
 
-/// Take the one-daemon-per-socket lock, or say who has it.
-///
-/// `flock` rather than "does the socket file exist": a leftover *file* is exactly
-/// what the remove-then-bind below is for, while a **live** daemon holding this
-/// lock must not be replaced. The kernel drops the lock when the holder goes away —
-/// SIGKILL included — so a crashed daemon never blocks its successor and the lock
-/// file itself can stay behind (it is empty, and it lives in the runtime dir).
-fn claim_socket(lock_path: &Path) -> anyhow::Result<std::fs::File> {
-    use std::os::unix::io::AsRawFd;
-
-    let file = std::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(false)
-        .open(lock_path)
-        .map_err(|e| anyhow::anyhow!("无法创建锁文件 {}: {e}", lock_path.display()))?;
-    let taken = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
-    if !taken {
-        anyhow::bail!(
-            "已经有一个守护进程在跑（它占着 {}）。两个守护进程会同时写同一份配置，\
-             所以这里不去抢它的 socket；要换掉它先跑 `kotori shutdown`。",
-            lock_path.display()
-        );
-    }
-    Ok(file)
-}
-
 pub async fn run() -> anyhow::Result<()> {
     let path = crate::config::config_path();
     let config = crate::config::load_at(&path)?;
@@ -508,53 +476,27 @@ pub async fn run() -> anyhow::Result<()> {
     daemon.run().await
 }
 
-/// Start the daemon in the background if it is not already running, and wait
-/// until its Unix socket is reachable.
+/// 等到"这个会话要结束了"这件事发生。
 ///
-/// Both the GUI and the CLI need this: every game launch has to go through the
-/// daemon, so whoever runs first must be able to boot it.
-pub fn ensure_running(socket: &Path) -> anyhow::Result<()> {
-    use std::os::unix::net::UnixStream;
-    use std::os::unix::process::CommandExt;
-
-    if UnixStream::connect(socket).is_ok() {
-        return Ok(());
+/// Unix 上是 SIGTERM(登出/关机走这条)或 SIGINT;Windows 上没有这两个信号,
+/// 控制台 Ctrl-C 是唯一的对等物。返回值只给日志用 —— 两条路要做的事完全一样,
+/// 所以 `run()` 里只有一个分支,不用往 `select!` 里塞 cfg。
+#[cfg(unix)]
+async fn session_end_signal() -> &'static str {
+    // 注册失败只可能是"不在 tokio runtime 里",而唯一的调用点就在 `run()` 的
+    // 事件循环里。
+    let mut sigterm = signal(SignalKind::terminate()).expect("register SIGTERM");
+    let mut sigint = signal(SignalKind::interrupt()).expect("register SIGINT");
+    tokio::select! {
+        _ = sigterm.recv() => "SIGTERM",
+        _ = sigint.recv() => "SIGINT",
     }
-    tracing::info!("daemon 未运行，正在启动...");
+}
 
-    let log_dir = config::log_dir();
-    std::fs::create_dir_all(&log_dir)?;
-    let log_path = log_dir.join(DAEMON_LOG);
-    let log = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&log_path)?;
-
-    std::process::Command::new(std::env::current_exe()?)
-        .arg("daemon")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::from(log.try_clone()?))
-        .stderr(std::process::Stdio::from(log))
-        // Own process group: the daemon must outlive signals sent to the
-        // UI/CLI process group.
-        .process_group(0)
-        .spawn()
-        .map_err(|e| anyhow::anyhow!("无法启动守护进程: {e}"))?;
-
-    // ~5s budget; this runs before the event loop starts.
-    for _ in 0..50 {
-        if UnixStream::connect(socket).is_ok() {
-            tracing::info!("daemon 已就绪");
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-
-    anyhow::bail!(
-        "守护进程未在 5 秒内就绪（socket: {}，日志: {}）",
-        socket.display(),
-        log_path.display()
-    )
+#[cfg(not(unix))]
+async fn session_end_signal() -> &'static str {
+    let _ = tokio::signal::ctrl_c().await;
+    "Ctrl-C"
 }
 
 /// A JSON-RPC response ready to be written to the wire.

@@ -1,5 +1,11 @@
 //! End-to-end test of the daemon IPC contract.
 //!
+//! ⚠ 整套 e2e 都建立在 Unix socket 上(`fixture` 直接连 `KOTORI_SOCKET`)。
+//! Windows 上传输是 named pipe,这一套要另写一份,所以这里先整体关掉 ——
+//! 留在这里编译不过比"假装跑过了"诚实。
+
+#![cfg(unix)]
+//!
 //! Spawns the real `kotori daemon` binary against a throw-away config/socket in
 //! the temp dir (via `KOTORI_CONFIG` / `KOTORI_SOCKET`) and drives it over the
 //! Unix socket, exactly like the GUI and CLI do.

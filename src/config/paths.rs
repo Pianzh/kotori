@@ -7,10 +7,26 @@ use std::path::{Path, PathBuf};
 
 use super::Config;
 
+/// 守护进程的本机端点。
+///
+/// Linux 上是 `$XDG_RUNTIME_DIR/kotori.sock`(兜底 `/tmp`);Windows 上是命名管道
+/// `\\.\pipe\kotori-<用户>` —— 那边的"socket 路径"装的是管道名,`PathBuf` 只是
+/// 个一路传得下去的字符串容器,还原成名字的地方在 `daemon::ipc`。
+///
+/// 管道名带用户名:Windows 的 `\\.\pipe\` 是**全机器**命名空间,不带后缀的话
+/// 同一台机器上两个用户的 kotori 会互相抢(而 Unix 那边靠 runtime 目录天然隔开)。
 pub fn default_socket_path() -> PathBuf {
-    dirs::runtime_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("kotori.sock")
+    #[cfg(unix)]
+    {
+        dirs::runtime_dir()
+            .unwrap_or_else(|| PathBuf::from("/tmp"))
+            .join("kotori.sock")
+    }
+    #[cfg(windows)]
+    {
+        let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".to_string());
+        PathBuf::from(format!(r"\\.\pipe\kotori-{user}"))
+    }
 }
 
 /// Path of the config file. `KOTORI_CONFIG` overrides it (used by tests and

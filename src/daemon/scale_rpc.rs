@@ -106,6 +106,7 @@ impl Daemon {
     /// "Nothing to do" is an error the caller can act on ("start a game first"),
     /// while a partial success reports both halves — silence about the session that
     /// did *not* change is how a user ends up running the command twice.
+    #[cfg(unix)]
     pub(super) async fn run_action(
         &self,
         session: &ScaleSession,
@@ -151,6 +152,25 @@ impl Daemon {
                 .map(|(session, err)| json!({ "session": session, "error": err }))
                 .collect::<Vec<_>>(),
         }))
+    }
+
+    /// Windows 上没有可调的缩放后端([`crate::scale::unsupported`]),运行时缩放
+    /// 这一整块不存在。答案必须**自己说出来**:不说的话,用户会去找一个根本不存在的
+    /// gamescope,或者以为是自己没启动游戏。
+    ///
+    /// 刻意不给 `UnsupportedScaleEngine` 补一个同名方法去凑合:那样两端签名一样、
+    /// 语义却不同(一边是"没生效",一边是"做不到"),正是 GOALS §3.2 说的
+    /// 「别的后端有自己的 API 时再加自己的方法」要避免的。
+    #[cfg(not(unix))]
+    pub(super) async fn run_action(
+        &self,
+        _session: &ScaleSession,
+        action: crate::scale::ScaleAction,
+    ) -> Result<Value, String> {
+        Err(format!(
+            "{} 在这个平台上做不到：缩放归外部工具（Magpie），kotori 只能观察",
+            action.id()
+        ))
     }
 
     pub(super) async fn lookup_session(&self, session_id: &str) -> Result<ScaleSession, String> {

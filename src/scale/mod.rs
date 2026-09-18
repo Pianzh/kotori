@@ -40,9 +40,14 @@ use std::path::{Path, PathBuf};
 
 use crate::config::ScaleProfile;
 
+pub use action::ScaleAction;
+
+// 阶梯算术的消费者只有 gamescope 那条路:启动参数、运行时旋钮,以及界面里显示
+// 缩放档位的那半。Windows 上缩放后端是空的(`unsupported`),没人读它们 ——
+// 但 `action` 模块本身仍在外面,因为它不碰 gamescope / X11 / libc。
+#[cfg(unix)]
 pub use action::{
-    SCALE_LADDER, ScaleAction, ladder_index_for, ladder_step, profile_ratio, toggle_target,
-    toggled_ratio,
+    SCALE_LADDER, ladder_index_for, ladder_step, profile_ratio, toggle_target, toggled_ratio,
 };
 
 #[cfg(unix)]

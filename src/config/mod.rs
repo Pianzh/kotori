@@ -12,9 +12,11 @@ pub use paths::{
     config_path, data_dir, default_socket_path, load, load_at, log_dir, plain_secrets_path,
     resolve_socket, save, save_to, secrets_path, socket_path,
 };
-pub use profile::{
-    FALLBACK_OUTPUT_HEIGHT, FALLBACK_OUTPUT_WIDTH, MAX_SHARPNESS, ScaleAlgorithm, ScaleProfile,
-};
+pub use profile::{FALLBACK_OUTPUT_HEIGHT, FALLBACK_OUTPUT_WIDTH, ScaleAlgorithm, ScaleProfile};
+// `MAX_SHARPNESS` 唯一的消费者是 gamescope 的命令行(`scale::args`,unix)。
+// Windows 上没有那条路,导出它只会换来一个 unused 警告。
+#[cfg(unix)]
+pub use profile::MAX_SHARPNESS;
 pub use sync::{SyncConfig, SyncEngine};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

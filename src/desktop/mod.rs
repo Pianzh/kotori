@@ -5,6 +5,9 @@
 //! which is what "缩放" means to a user. Everything else in kotori talks to
 //! gamescope, X11 or the portal directly, so this module stays deliberately small.
 
+// KDE 的窗口控制走 D-Bus 脚本,Windows 上没有对应物。它的调用点
+// (`scale::gamescope`) 本身也在 cfg(unix) 里,所以这里跟着关掉。
+#[cfg(unix)]
 pub mod kde;
 
 /// Is this a KDE Plasma session?

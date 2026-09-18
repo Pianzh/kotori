@@ -1,13 +1,38 @@
-//! JSON-RPC client for talking to the kotori daemon over a Unix socket.
+//! JSON-RPC client for talking to the kotori daemon.
 //!
 //! Shared by the GUI and the CLI so both go through the daemon (the daemon owns
 //! all runtime state; nothing else may spawn games).
+//!
+//! 传输是本机的,形状由 [`crate::daemon::ipc`] 那一层决定:Linux 是 Unix socket,
+//! Windows 是命名管道。这里只认"一个能连上的端点" —— 那个 `socket_path` 在
+//! Windows 上装的是管道名。
 
 use std::path::Path;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+
+/// 客户端这一侧的连接。
+#[cfg(unix)]
+type IpcStream = tokio::net::UnixStream;
+#[cfg(windows)]
+type IpcStream = tokio::net::windows::named_pipe::NamedPipeClient;
+
+/// 连上守护进程的本机端点。
+#[cfg(unix)]
+async fn connect(socket_path: &Path) -> Result<IpcStream, String> {
+    IpcStream::connect(socket_path)
+        .await
+        .map_err(|e| format!("无法连接守护进程（是否已启动？）: {e}"))
+}
+
+/// Windows 上没有 `UnixStream`。`NamedPipeClient::connect` 是同步的,但连一条
+/// 本机管道是即时的,不值得为此再套一层 `spawn_blocking`。
+#[cfg(windows)]
+async fn connect(socket_path: &Path) -> Result<IpcStream, String> {
+    let name = socket_path.as_os_str().to_string_lossy().into_owned();
+    IpcStream::connect(&*name).map_err(|e| format!("无法连接守护进程（是否已启动？）: {e}"))
+}
 
 /// Send a JSON-RPC request to the daemon and receive a single response.
 ///
@@ -18,9 +43,7 @@ pub async fn call(
     method: &str,
     params: Option<serde_json::Map<String, Value>>,
 ) -> Result<Value, String> {
-    let mut stream = UnixStream::connect(socket_path)
-        .await
-        .map_err(|e| format!("无法连接守护进程（是否已启动？）: {e}"))?;
+    let stream = connect(socket_path).await?;
 
     let req = json!({
         "jsonrpc": "2.0",
@@ -29,14 +52,16 @@ pub async fn call(
         "params": params.unwrap_or_default(),
     });
 
-    stream
+    // 先拆再写:两半都要。`tokio::io::split` 对两种流都成立,不像
+    // `UnixStream::into_split` 只属于 Unix 那一种。
+    let (reader, mut writer) = tokio::io::split(stream);
+    writer
         .write_all(req.to_string().as_bytes())
         .await
         .map_err(|e| e.to_string())?;
-    stream.write_all(b"\n").await.map_err(|e| e.to_string())?;
-    stream.flush().await.map_err(|e| e.to_string())?;
+    writer.write_all(b"\n").await.map_err(|e| e.to_string())?;
+    writer.flush().await.map_err(|e| e.to_string())?;
 
-    let (reader, _writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
     let line = lines
         .next_line()
