@@ -284,19 +284,8 @@ export component SyncPage inherits ScrollView {
                 }
                 Divider { }
                 CardRow {
-                    title: "bucket";
-                    description: "B2 上那个 bucket 的名字。";
-                    TextField {
-                        field-width: 220px;
-                        text <=> root.bucket;
-                        edited(text) => { root.field(1, text); }
-                        placeholder: "kotori-saves";
-                    }
-                }
-                Divider { }
-                CardRow {
                     title: "prefix";
-                    description: "bucket 里归 kotori 独占的目录,bucket 里的其他东西我们一律不碰。";
+                    description: "bucket 里归 kotori 独占的目录(bucket 本身在下面凭据区填),bucket 里的其他东西我们一律不碰。";
                     TextField {
                         field-width: 220px;
                         text <=> root.prefix;
@@ -386,6 +375,8 @@ export component SyncPage inherits ScrollView {
             step: 6;
             bottom: 24px;
                 SyncCredentialsGroup {
+                    // bucket 2026-09-18 起住进凭据组(用户拍板),值仍归页面所有。
+                    bucket <=> root.bucket;
                     store-kind: root.store-kind;
                     store-locked: root.store-locked;
                     store-path: root.store-path;
