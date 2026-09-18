@@ -39,6 +39,8 @@ DISCIPLINE-*.md
 
 # 跑在仓库里那些 agent 工具自己的目录
 .opencode/
+# GLM 那个 agent 工具的计划/会话目录(它会自己在工作区里建,连副 worktree 里也有一份)
+.zcode/
 
 # Local config / real data - NEVER commit
 config.toml
