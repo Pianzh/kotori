@@ -22,7 +22,7 @@ use crate::config::{SyncConfig, SyncEngine};
 use crate::secrets::{Keyring, SecretKey};
 use crate::sync::{
     self, SaveTarget,
-    runner::{GameOutcome, PULL_TIMEOUT, Runner, SETTLE_DELAY},
+    runner::{CHECK_TIMEOUT, GameOutcome, PULL_TIMEOUT, Runner, SETTLE_DELAY},
 };
 
 /// Ceiling for the sliding window. A typo here decides how much history is

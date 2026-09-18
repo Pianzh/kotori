@@ -46,6 +46,12 @@ pub const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
 /// Budget for the automatic pull before a launch. Past this the game starts
 /// anyway: a slow network must never keep the user out of their game.
 pub const PULL_TIMEOUT: Duration = Duration::from_secs(30);
+/// Budget for「测试连接」(`sync.test`)整件事,不是单条引擎命令。
+///
+/// 那三步(连桶、必要时建仓库、列一次快照)各自的上限是 [`COMMAND_TIMEOUT`],叠起来
+/// 最长十五分钟 —— 而这是一个按钮,用户盯着它等。所以这里给一个明显的总上限,
+/// 到点就如实说超时(用户 2026-09-18 报的"点了测试连接没反应")。
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Grace period before uploading after a game exits.
 ///

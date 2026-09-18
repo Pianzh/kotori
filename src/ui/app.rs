@@ -1012,4 +1012,18 @@ mod tests {
             app.sync_form.msg
         );
     }
+
+    /// 「测试连接」点下去必须**立刻**有一句话可说。
+    ///
+    /// 它背后是一次真的网络往返(连桶 / 必要时建仓库 / 列一次快照),而 `busy` 只把按钮
+    /// 变灰 —— 从前这里把 msg 清成了 `None`,于是最长几分钟里界面毫无动静,用户看到的
+    /// 就是"点了没反应"(2026-09-18 报的)。「立即同步全部」一直都有这句,是这一个漏了。
+    #[test]
+    fn testing_the_connection_says_something_right_away() {
+        let (mut app, _boot) = App::new();
+        let _ = app.update(Message::SyncTest);
+        assert!(app.sync_form.busy, "按下去就该进忙状态");
+        let msg = app.sync_form.msg.clone().unwrap_or_default();
+        assert!(msg.contains("测试连接"), "{msg}");
+    }
 }

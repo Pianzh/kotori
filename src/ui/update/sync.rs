@@ -200,7 +200,11 @@ impl App {
             }
             Message::SyncTest => {
                 self.sync_form.busy = true;
-                self.sync_form.msg = None;
+                // 这一条**必须**先给句话:它背后可能是一次真的网络往返(kopia 连桶、
+                // 建仓库、列一次快照),最长能到几十秒,而 busy 只把按钮变灰 ——
+                // 用户看到的就是"点了没反应"(2026-09-18 报的)。「立即同步全部」一直
+                // 都有这句,是这一个漏了。
+                self.sync_form.msg = Some("正在测试连接…".to_string());
                 let socket = self.daemon_socket.clone();
                 Task::perform(async move { sync_test(&socket).await }, Message::SyncTested)
             }
