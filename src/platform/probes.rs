@@ -9,8 +9,12 @@
 use std::process::Stdio;
 
 use super::distro::{Distro, Package};
-use super::{Check, Level, MIN_GAMESCOPE, PROBE_TIMEOUT, State};
+#[cfg(unix)]
+use super::MIN_GAMESCOPE;
+use super::{Check, Level, PROBE_TIMEOUT, State};
 
+// Linux 专有:这是"kotori 自己把游戏拉起来再缩放"那条路上的东西,Windows 版不走那条路。
+#[cfg(unix)]
 pub(super) async fn gamescope(distro: &Distro) -> Check {
     const IMPACT: &str = "没有它就启动不了游戏:kotori 是用 gamescope 把 wine 拉起来的,\
                           缩放增强(FSR / 整数缩放 / 锐度)也全靠它";
@@ -47,6 +51,7 @@ pub(super) async fn gamescope(distro: &Distro) -> Check {
     }
 }
 
+#[cfg(unix)]
 pub(super) async fn wine(distro: &Distro) -> Check {
     const IMPACT: &str = "没有它就启动不了 Windows 游戏;已经配好的 wine prefix 也需要它来跑";
     let install = distro.install(Package::same("wine"));
@@ -152,6 +157,7 @@ pub(super) async fn file_dialog(distro: &Distro) -> Check {
     }
 }
 
+#[cfg(unix)]
 pub(super) fn window_control() -> Check {
     let degraded = |detail: &str, impact: &str| {
         Check::degraded(
@@ -204,6 +210,10 @@ pub(super) fn resolution() -> Check {
 }
 
 /// 系统密钥环。没有它**不是错误**:默认就是 0600 的明文凭据文件(ADR-014)。
+///
+/// 两个平台**共用**这一个版本:`Keyring::system()` 的失败信息本身就是平台自适应的
+/// (Windows 上说的是"凭据管理器还没实现"),而 `install` 在认不出发行版时是空串 ——
+/// 不会像早先担心的那样给 Windows 用户推荐装 libsecret。实测确认过。
 pub(super) fn keyring(distro: &Distro) -> Check {
     let install = distro.install(Package::per_distro(
         "libsecret",
@@ -297,6 +307,7 @@ fn strip_log_prefix(line: &str) -> String {
 }
 
 /// 从版本输出里认出 `主.次`。认不出来就返回 `None`(那就别下"太旧"的结论)。
+#[cfg(unix)]
 pub(super) fn gamescope_version(text: &str) -> Option<(u32, u32)> {
     let bytes = text.as_bytes();
     let mut index = 0;

@@ -26,6 +26,7 @@ use distro::Distro;
 pub(super) const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// kotori 的启动参数模型针对 gamescope 3.16(`-S`/`-F`/`--sharpness` 是这一版之后的形状)。
+#[cfg(unix)]
 pub(super) const MIN_GAMESCOPE: (u32, u32) = (3, 16);
 
 mod distro;
@@ -194,6 +195,12 @@ pub const fn platform() -> &'static str {
 /// "没装"，两处说法就打架了。
 pub async fn report(settings: &crate::config::SyncConfig) -> Report {
     let distro = Distro::detect();
+
+    // gamescope / wine / 窗口尺寸控制属于 Linux 那条「kotori 自己把游戏拉起来、用
+    // gamescope 缩放」的路。Windows 版不走那条路(它借 Magpie,而且只能观察),在这儿报
+    // 「缺 wine」「只在 KDE Plasma 上实现」只会让用户以为自己少装了什么 —— 所以是
+    // **整个不报**,而不是把结论改成「缺失」。三个平台各有各的清单,不做交集。
+    #[cfg(unix)]
     let checks = vec![
         probes::gamescope(&distro).await,
         probes::wine(&distro).await,
@@ -204,13 +211,25 @@ pub async fn report(settings: &crate::config::SyncConfig) -> Report {
         probes::resolution(),
         probes::keyring(&distro),
     ];
+
+    #[cfg(windows)]
+    let checks = vec![
+        probes::rclone(&distro, &settings.rclone_binary).await,
+        probes::kopia(&distro, &settings.kopia_binary).await,
+        probes::file_dialog(&distro).await,
+        probes::resolution(),
+        probes::keyring(&distro),
+    ];
+
     Report::from_checks(checks)
 }
 
 #[cfg(test)]
 mod tests {
     use super::distro::{Distro, Family, Package};
-    use super::probes::{first_line, gamescope_version};
+    use super::probes::first_line;
+    #[cfg(unix)]
+    use super::probes::gamescope_version;
     use super::*;
 
     fn check(level: Level, state: State) -> Check {
@@ -319,6 +338,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn the_gamescope_version_is_read_out_of_a_noisy_line() {
         assert_eq!(
@@ -332,6 +352,7 @@ mod tests {
         assert_eq!(gamescope_version(""), None);
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_older_gamescope_is_degraded_not_ready() {
         let old = gamescope_version("gamescope version 3.15.1");
