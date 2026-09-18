@@ -4,19 +4,22 @@
 wire 形状与全部方法、配置写入的并发规矩、路径与外部依赖怎么注入、以及退出与信号。
 **什么时候读它**:要加一个 RPC、要改配置持久化、要排查"界面显示的和实际不一致"的时候。
 
-核对来源:`src/daemon/{mod,protocol,game_rpc,scale_rpc,status_rpc}.rs`、`src/daemon/sync_rpc/`、
+核对来源:`src/daemon/{mod,ipc,protocol,game_rpc,scale_rpc,status_rpc}.rs`、`src/daemon/sync_rpc/`、
 `src/rpc.rs`、`src/config/paths.rs`、`src/main.rs`、`src/ui/{tasks,app,update/mod.rs}`。
 
 ---
 
 ## 1. 谁启动谁
 
-- **UI 与 CLI 都可以把 daemon 拉起来**:`daemon::ensure_running`(`src/daemon/mod.rs`)先
-  `UnixStream::connect` 探一下;连不上就用 `current_exe()` + 参数 `daemon` spawn 一个,
-  `stdin` 为 null,stdout/stderr 追加到 `<data_dir>/logs/daemon.log`,并且
-  **`process_group(0)` 让它自立门户**(否则 UI 收到信号时会把 daemon 一起带走)。
-  之后最多等 50 × 100ms = 5s 直到 socket 可连。
-- **daemon 不做 double-fork,也不自建会话**。它就是被拉起的那一个子进程,只是换了进程组。
+- **UI 与 CLI 都可以把 daemon 拉起来**:`daemon::ensure_running`(`src/daemon/ipc.rs`,由
+  `src/daemon/mod.rs` 再导出)先探一下端点——Unix 是 `UnixStream::connect`,Windows 是
+  命名管道的 `ClientOptions::open`;连不上就用 `current_exe()` + 参数 `daemon` spawn 一个,
+  `stdin` 为 null,stdout/stderr 追加到 `<data_dir>/logs/daemon.log`。启动方式分平台:
+  Unix 用 **`process_group(0)`** 让它自立门户(否则 UI 收到信号时会把 daemon 一起带走);
+  Windows 没有进程组概念,改用 **`CREATE_NO_WINDOW`**,别让后台的守护进程弹黑框。
+  之后最多等 50 × 100ms = 5s,直到端点可连。
+- **daemon 不做 double-fork,也不自建会话**。它就是被拉起的那一个子进程,只是换了
+  进程组(Windows 上则是 `CREATE_NO_WINDOW`,不挂任何控制台)。
 - 调用 `ensure_running` 的地方:`src/main.rs` 的 `scale_cli` / `sync_cli`、
   `src/game/mod.rs::launch`、`src/ui/mod.rs::run`、`src/ui/tasks.rs::connect_and_load`。
 - **UI 是唯一会"先探测再决定要不要拉起"的调用方**:用户按过「停止服务」之后
@@ -32,7 +35,7 @@ wire 形状与全部方法、配置写入的并发规矩、路径与外部依赖
 | `config.toml` 的写 | daemon | 只有一份内存副本;UI 直接写盘会出现两个写者 |
 | 运行中会话表 | daemon | 曾经 daemon 里另存一份副本,结果它过期后把已退出的游戏报成"运行中" |
 | 凭据句柄 / 主密码解锁状态 | daemon | 解锁状态是进程内的密钥,不可能跨进程共享 |
-| rclone 子进程与其环境 | daemon | 凭据只经子进程环境传递,不进 argv、不落盘 |
+| kopia / rclone 子进程与其环境 | daemon | 默认引擎是 kopia。凭据不落盘:rclone 只经子进程环境;kopia 的仓库密码走 `KOPIA_PASSWORD`,B2 key 只在建/连仓库那一次进 argv |
 | 窗口/页签/输入框内容 | UI 进程 | Slint 的 `in-out` 属性;Rust 只推不反向写(见 GUI 篇 §5) |
 | 游戏进程组 | daemon spawn 并收尾 | 进程组 id 记在会话里 |
 
@@ -42,9 +45,17 @@ UI 进程崩溃**不影响**正在跑的游戏与退出后上传 —— 这是�
 
 ## 3. wire 形状
 
-- 传输:**Unix socket**,`SOCKET_STREAM`,**一行一条 JSON-RPC 2.0**。
+- 传输按平台分(`src/daemon/ipc.rs`,对上层只是"一个能读写的 tokio 流"):Unix 是
+  **Unix socket**(`SOCKET_STREAM`),Windows 是**命名管道** `\\.\pipe\kotori-<用户名>`
+  —— 管道名带用户,因为 `\\.\pipe\` 是全机器命名空间,不带后缀同一台机器上两个用户
+  会互相抢。两边都是**一行一条 JSON-RPC 2.0**。
 - 路径解析 `config::resolve_socket`:`KOTORI_SOCKET` > `config.daemon.socket_path` >
-  `dirs::runtime_dir()/kotori.sock`(通常是 `/run/user/<uid>/kotori.sock`)。
+  默认值(Unix `dirs::runtime_dir()/kotori.sock`,通常是 `/run/user/<uid>/kotori.sock`;
+  Windows 上那个"路径"直接就是管道名,`PathBuf` 只当字符串容器,还原在 `daemon::ipc`)。
+- **命名管道的形状差异**:服务端必须**预建**实例,否则"上一个实例刚被连上、下一个还
+  没建出来"的空档里,客户端 `open()` 会撞 `ERROR_PIPE_BUSY`(231,Windows VM 实测发作过)。
+  做法是先建出下一个实例再拿手里的那个去 `connect`,客户端对 231 做短重试兜底
+  (`src/rpc.rs`)。
 - 请求 / 应答各一行,没有通知、没有批量、没有服务端主动推送。
 
 ```jsonc
@@ -92,7 +103,7 @@ UI 进程崩溃**不影响**正在跑的游戏与退出后上传 —— 这是�
 | `config.reload` | — | 从 daemon 记住的那个路径重读配置 |
 | `wine.status` | — | `configured` / `default` / `environment` / `detected[]` |
 | `wine.set_prefix` | `prefix`:字符串或 `null` | 存在但缺 `drive_c` 时拒绝;不存在则接受(wine 会自己造) |
-| `env.report` | — | 设置页「环境检查」:探测对外部程序的依赖(版本/路径、缺了会怎样、按发行版的安装命令)。探测**只读**,且会真去跑外部程序,所以只在设置页打开或点「重新检查」时调,不跟状态轮询。实现见 `src/platform/` |
+| `env.report` | — | 设置页「环境检查」:探测对外部程序的依赖(版本/路径、缺了会怎样、按发行版的安装命令)。探测**只读**,且会真去跑外部程序,所以只在设置页打开或点「重新检查」时调,不跟状态轮询。实现见 `src/platform/`。⚠ 清单按平台各算各的:Windows 上**没有** gamescope / wine / 窗口尺寸控制这三项——它们是 Linux 那条「自己起游戏再缩放」的路,报「缺 wine」只会让用户以为自己少装了东西(`src/platform/mod.rs` 的 cfg 分支) |
 
 ### 游戏库与运行
 
@@ -111,6 +122,10 @@ UI 进程崩溃**不影响**正在跑的游戏与退出后上传 —— 这是�
 其中 `wine_prefix` / `process_name` 是 `Option<Option<T>>`(用 `double_option`),
 所以"键缺失"与"显式 `null`"能区分开。
 
+⚠ **Windows 版不起游戏**:`game.launch` 由 `UnsupportedScaleEngine::start_session` 直接
+报错(`ScaleError::Unsupported`),`game.wait`/`game.stop` 对不存在的会话也无从谈起。
+Windows 版目前只做云存档同步。
+
 ### 运行时缩放
 
 | 方法 | 参数 | 说明 |
@@ -123,6 +138,12 @@ UI 进程崩溃**不影响**正在跑的游戏与退出后上传 —— 这是�
 **⚠ 语义陷阱**:这几个方法都只把 `session_id` 用来"确认有这么个会话",真正的执行是
 `engine.apply_action(action)`,它**对所有存活会话生效**(`src/scale/gamescope.rs`)。
 两个游戏同时跑时,一条命令会同时改两个。
+
+**⚠ Windows 上没有可调的缩放后端**:这些方法在那边**如实回「做不到」**。`scale_rpc.rs`
+的 `run_action` 在 Windows 上直接报错("缩放归外部工具(Magpie),kotori 只能观察"),
+刻意不给空后端补同名方法凑合(GOALS §3.2);`scale.get_status` 的 `live`(滤镜/锐度)
+那一段是 Unix 专有,而 Windows 上连会话都没有(`get_session` 恒 `None`),所以这几个
+方法在那边全都走失败路径,不会假装成功。
 
 ### 云同步
 
@@ -176,7 +197,7 @@ UI 进程崩溃**不影响**正在跑的游戏与退出后上传 —— 这是�
 |----------|------|------|
 | `KOTORI_CONFIG` | `config.toml` 路径 | `~/.config/kotori/config.toml` |
 | `KOTORI_DATA_DIR` | 数据/日志目录 | `~/.local/share/kotori`(日志在其 `logs/`) |
-| `KOTORI_SOCKET` | daemon socket | 配置里的 `daemon.socket_path` → `$XDG_RUNTIME_DIR/kotori.sock` |
+| `KOTORI_SOCKET` | daemon 端点 | 配置里的 `daemon.socket_path` → `$XDG_RUNTIME_DIR/kotori.sock`(Windows 上是管道名 `\\.\pipe\kotori-<用户>`) |
 | `KOTORI_SECRETS_FILE` | 主密码凭据文件路径;**它的目录同时也是明文凭据文件的目录** | `<config 目录>/secrets.json` 与 `<同目录>/credentials.json` |
 | `KOTORI_SECRET_TOOL` | `secret-tool` 可执行文件 | `which secret-tool`(仍要过"真探一次"的探测) |
 | `KOTORI_RCLONE` | rclone 可执行文件 | `which rclone` |
@@ -194,16 +215,16 @@ UI 进程崩溃**不影响**正在跑的游戏与退出后上传 —— 这是�
 
 ## 7. 退出与信号
 
-daemon 的主循环(`src/daemon/mod.rs::run`)是一个 `tokio::select!`,四个分支:
+daemon 的主循环(`src/daemon/mod.rs::run`)是一个 `tokio::select!`,三个分支:
 
 | 分支 | 触发 | 收尾行为 |
 |------|------|----------|
 | `listener.accept()` | 新连接 | 新 task 处理;accept 出错睡 50ms 重试 |
 | `shutdown.notified()` | 收到 `daemon.shutdown` | **只停自己**;正在跑的游戏继续跑,`signalled = false` |
-| `sigterm.recv()` | 关机 / 注销 | `signalled = true` → `close_all_sessions()` |
-| `sigint.recv()` | Ctrl-C | 同上 |
+| `session_end_signal()` | Unix:SIGTERM(关机/注销)或 SIGINT(终端 Ctrl-C);Windows:控制台 Ctrl-C(`tokio::signal::ctrl_c`) | `signalled = true` → `close_all_sessions()` |
 
-退出时**一定**会做:`drop(listener)` + 删掉 socket 文件。信号路径额外做
+退出时**一定**会做:`drop(listener)` + 删掉 socket 文件(Windows 上没有文件可删——
+管道由内核持有,最后一个实例关掉它自己就没了,那条 `remove_file` 只是无操作)。信号路径额外做
 `close_all_sessions()`,它对每个会话调 `engine.stop_session`,而 `stop_session` 本身
 已经覆盖三层收尾(进程组、子进程树、`wineserver -k`);然后**再**调
 `wine_prefixes::close_all()` —— 收掉"没人认领"的残留:上一次 daemon 被 SIGKILL 掉时
@@ -216,8 +237,12 @@ daemon 的主循环(`src/daemon/mod.rs::run`)是一个 `tokio::select!`,四个�
 `close_all_sessions` **不动 `watch_only` 的会话的 prefix**:它只丢会话
 (`process_group` 是 `None`),因为那是用户自己起的游戏,不归 kotori 关。
 
-**启动时**:`run()` 先对 `<socket_path>.lock` 取非阻塞 `flock`,拿不到就报
-"已经有一个守护进程"并退出;拿到锁之后再清掉陈旧 socket 文件并 bind。从前是 bind 前
+**启动时**(`ipc::claim_socket`,平台各一套):Unix 对 `<socket_path>.lock` 取非阻塞
+`flock`,拿不到就报"已经有一个守护进程"并退出;拿到锁之后再清掉陈旧 socket 文件并 bind。
+Windows 没有 `flock`,用**独占打开**(`share_mode(0)`)换到同样的保证——第二个进程打开
+同一个文件会失败;锁文件也不放管道"旁边"(管道名不是文件系统路径),放在
+`<data_dir>/daemon.lock`,而且没有"陈旧文件要清"这回事。两个平台的锁都由内核持有,
+进程没了(SIGKILL 也算)锁就没了,崩溃的守护进程不会挡住继任者。从前(Unix)是 bind 前
 无条件 `remove_file`—— 那意味着**第二个 daemon 会抢走第一个的 socket 文件**(第一个
 仍在跑、仍有会话,只是没有人再找得到它,而两个写者同时写 `config.toml` 直接违背
 "daemon 是唯一配置写者")。现在两个行为分开:`tests/ipc_e2e/daemon.rs` 里

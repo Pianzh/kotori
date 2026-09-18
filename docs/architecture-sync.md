@@ -16,8 +16,8 @@ B2 里、自动取回与手动恢复为什么语义不同、保留窗口怎么�
 
 | 引擎 | 形态 | 加密 | 默认 |
 |------|------|------|------|
-| `rclone`(默认) | `<prefix>/games/<id>/<stamp>.zip`,一版一个完整 zip | **不加密**,落桶即明文 | ✅ |
-| `kopia`(0.22+) | `<prefix>/kopia`,内容寻址仓库,一版一个快照 | **自带加密**(仓库密码默认 `kotori`) | — |
+| `kopia`(**默认**,要求 ≥0.22) | `<prefix>/kopia`,内容寻址仓库,一版一个快照 | **自带加密**(仓库密码默认 `kotori`) | ✅ |
+| `rclone`(备选) | `<prefix>/games/<id>/<stamp>.zip`,一版一个完整 zip | **不加密**,落桶即明文 | — |
 
 - 两个引擎在桶里**各写各的区域**,布局互不相通;同一个桶里混用只会让"有些存档看不见"
   变成一件要靠猜的事。换机器(双系统)也必须选同一个。
@@ -139,7 +139,12 @@ applicationKey 有没有复制全;`403`/`forbidden` → 凭据有效但这个 ke
 - 保留窗口到期要删快照时,`remove` 先按 description 找到快照 id 再删;找不到就当
   "已经不在了"直接返回(保留窗口是 best-effort)。
 
-`find_kopia()` 顺序:`KOTORI_KOPIA` > PATH,两个引擎互不干扰。
+`find_kopia()` 顺序(`executables::find`,rclone 同款):设置页里填的位置 >
+`KOTORI_KOPIA`(rclone 是 `KOTORI_RCLONE`) > **kotori 可执行文件旁边** > `PATH`,
+两个引擎各找各的,互不干扰。前三步都要求那里**真的有那个文件**,填错不会静默退到
+PATH。「旁边」正是 Windows 发布包的落点:release 把官方 **kopia.exe(版本锁 0.23.1)**
+一起打进发布目录,放在 kotori.exe 旁边(`.github/workflows/release.yml`)——
+Windows 上开箱即用靠的就是这一步。
 
 ---
 
@@ -199,7 +204,11 @@ applicationKey 有没有复制全;`403`/`forbidden` → 凭据有效但这个 ke
    失败要报成"没取完",绝不报成"云端没有存档"。
 
 期间的东西落在 `work_dir`(`<data_dir>/sync`,不在存档目录旁边 —— 那儿多出来的临时
-文件会被下一次打包收进去),经 `staging` 铺回存档目录。
+文件会被下一次打包收进去),经 `staging`(`stage-<uuid>`,`Drop` 收尾)铺回存档目录。
+上次 daemon 被杀/崩了留下的 `stage-*` 残骸由 **daemon 启动时清掉**
+(`runner::sweep_stale`,拿到进程锁之后才动手)—— Windows 上尤其要紧:`%TEMP%` 不像
+Linux 那样有人定期扫,而这些目录就在数据目录下,一个几 MB、大的上百 MB,攒着白占
+磁盘。
 
 ### 手动恢复 `restore()` —— 「覆盖,且以包为准」
 
@@ -300,7 +309,8 @@ applicationKey 有没有复制全;`403`/`forbidden` → 凭据有效但这个 ke
 
 只有 Linux 的 Secret Service 后端实现了;`Keyring::system()` 在非 Linux 上返回
 `BackendUnsupported`,于是按顺序落到**明文文件**(Windows 上是 `%APPDATA%` 的用户
-ACL)。凭据管理器后端属于 Windows 移植,尚未开始。`lookup_hint` 也**不会**把 Windows
+ACL)。Windows 凭据管理器后端**尚未实现** —— 移植的其他部分已经能跑(IPC、单实例锁、
+UI 都验过了),只有 keyring 这一块没接。`lookup_hint` 也**不会**把 Windows
 用户指去凭据管理器 —— 那里现在没有条目,承诺一条不存在的取回路径更坏。
 
 ---

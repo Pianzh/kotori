@@ -5,9 +5,6 @@
 时怎么验证界面**。**什么时候读它**:动界面、动 `src/ui/` 任何一层,或者要给 UI 加一个
 新的用户操作的时候。
 
-核对来源:`src/ui/**`、`src/ui/slint/**`、`build.rs`、`Cargo.toml`。设计 token 与逐条实测
-的坑另有一份本地文档 `UI_GUIDE.md`(刻意不入 git),本篇只写架构层面的东西。
-
 ---
 
 ## 1. 为什么是 Slint
@@ -30,6 +27,39 @@ Windows 上默认就是 fluent、可静态链接成单 exe、Linux ARM64 是它�
 **标题栏用系统的**(`app.slint` 里 `no-frame: false`)。自绘标题栏(KWin 下)会把窗口卡进
 "永不结束的交互式移动",根因是 winit 的 `latest_button_serial()` 按下与抬起都会覆盖,
 而 `xdg_toplevel.move` 要的是按下那一刻的 serial —— Slint 隔了一层回调拿不到。
+
+### 入口:不给子命令就是 UI
+
+```rust
+let command = cli.command.unwrap_or(cli::Command::Ui);   // src/main.rs
+```
+
+双击 `kotori.exe`(Windows)、点桌面图标(Linux)、在终端里直接敲 `kotori`,走的是同一条路。
+这不是图省事:GUI 应用双击之后先弹一段 help、还要用户自己猜该敲哪个子命令,是没道理的。
+要看帮助仍然有 `kotori --help`(它照旧列出全部子命令)。
+
+### 图形后端:起不来就换软件渲染
+
+Slint 的渲染器是**编译期**定的(`renderer-femtovg` 这个 feature),运行时只有"要求用
+某一个"这一种表达方式,而且 `i_slint_core::platform::set_platform` **只允许成功一次** ——
+所以"先试 OpenGL,不行再换软件渲染"没法在同一个进程里做第二遍。
+
+没有 GPU 的机器(虚拟机、远程桌面、只有「Microsoft 基本显示适配器」的系统)上,femtovg
+会在建窗口那一刻失败(`src/ui/driver.rs` 的 `AppWindow::new()`):
+
+```text
+Error: Failed to initialize OpenGL driver: Could not locate glCreateShader symbol
+```
+
+Windows 自带的 `opengl32.dll` 只到 OpenGL 1.1,而 femtovg 要 2.0+ —— `glCreateShader`
+正是 2.0 才有的符号。**Slint 自己不会回退**:`i-slint-backend-winit` 的 `create_renderer`
+在没指定渲染器时直接走编译期的默认值,那个 `allow_fallback` 只管"名字不认识",不管
+"初始化失败"。
+
+`src/ui/backend.rs` 负责收尾:捕获这个失败,带着 `SLINT_BACKEND=winit-software`
+**把自己重启一次**(用重启而不是重试,就是因为上面那条 `set_platform` 只能成功一次),
+并留一个环境变量记住"已经退过一次",免得软件渲染也起不来时无限重启。**用户显式设过
+`SLINT_BACKEND` 就不覆盖** —— 他既然写明了,报错比背着他换掉诚实。
 
 ---
 

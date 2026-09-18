@@ -1,12 +1,15 @@
 # 缩放引擎
 
-**这篇讲什么**:kotori 怎么用 gamescope 把一局游戏画大、启动时窗口尺寸从哪来、运行中改
-缩放走哪三条通道(以及为什么一条都不注入按键)、缩放档次的算术、以及一局结束后怎么把
-进程真的收干净。**什么时候读它**:动 gamescope 参数、动运行时缩放、或者排查"退了游戏还有
-残留进程 / 关机卡住"的时候。
+**这篇讲什么**:Linux 上 kotori 怎么用 gamescope 把一局游戏画大、启动时窗口尺寸从哪来、
+运行中改缩放走哪三条通道(以及为什么一条都不注入按键)、缩放档次的算术、以及一局结束后
+怎么把进程真的收干净。Windows 上 kotori 不做缩放(缩放归外部工具 Magpie,观察后端还没写),
+`scale_rpc` 对动作统一回"这个平台做不到",能力表据此把缩放编辑设为**不适用**(不是"缺失")。
+**什么时候读它**:动 gamescope 参数、动运行时缩放、或者排查"退了游戏
+还有残留进程 / 关机卡住"的时候。
 
-核对来源:`src/scale/{args,gamescope,action,x11,teardown}.rs`、`src/desktop/kde.rs`、
-`src/config/profile.rs`、`src/display.rs`、`src/wine.rs`、`src/process.rs`。
+核对来源:`src/scale/{args,gamescope,action,x11,teardown,unsupported}.rs`、
+`src/daemon/scale_rpc.rs`、`src/desktop/kde.rs`、`src/config/profile.rs`、
+`src/display.rs`、`src/wine.rs`、`src/process.rs`。
 
 ---
 
@@ -191,7 +194,8 @@ D-Bus 服务;而"只用来决定下一步往哪走"对精度要求不高。所�
 
 **动作**(`gamescope.rs` 里的 watchdog task):每 `TEARDOWN_POLL`(250ms)看一次 → 命中后
 **再等 `TEARDOWN_GRACE`(1.2s)并复查一次**(只看一眼不算卡死)→ 仍卡着就
-`libc::kill(-pgid, SIGKILL)` 收掉整个进程组,紧接着 `close_wine(prefix)`。
+`kill_session_now(pgid)`:对整个进程组**加子进程树**直接 SIGKILL(跳过 SIGTERM),
+紧接着 `close_wine(prefix)`。
 
 ### 路径 ②:游戏内部退出 / 启动器交接 —— gamescope 根本没察觉
 
@@ -241,8 +245,9 @@ gamescope 的 `Child` 被一个 watcher task 持有:`child.wait()` → 记录退
 再走就找不到了)→ 对进程组与树里每个 pid 发 SIGTERM → 最多等 3s → 再补 SIGKILL;最后
 `close_wine(session.wine_prefix)`,由 watcher 负责移除会话 + 发 `Ended`。
 
-路径 ① 只做其中 SIGKILL 那一下(**只杀进程组,没有重走 `terminate_session` 的树击杀**),
-依赖紧随其后的 `close_wine` 兜住 `winedevice.exe`;路径 ②③ 走完整的 `terminate_session`。
+路径 ① 只做其中 SIGKILL 那一下(进程组**加子进程树**,跟 `terminate_session` 相比只是跳过
+先 SIGTERM 再等 3s 那一步),依赖紧随其后的 `close_wine` 兜住 `winedevice.exe`;路径 ②③走
+完整的 `terminate_session`。
 
 ---
 
@@ -253,7 +258,10 @@ gamescope 的 `Child` 被一个 watcher task 持有:`child.wait()` → 记录退
   **只在运行时动作里被调用**,启动路径没有调它(`grep resize_window` 只有一处调用)。
 - **游戏真实渲染尺寸从未被探测**:`internal_*` 是用户手填的,4:3 的 galgame 在 16:9 的
   虚拟屏里居中渲染,黑边会被 FSR 一起放大 —— 这才是"两边空置"的根因。
-- **daemon 被 SIGKILL 时无兜底**:信号路径只在 SIGTERM/SIGINT 下有效。要根治得让每局游戏
+- **daemon 被 SIGKILL 时正在跑的会话当场无人收尾**:信号路径只在 SIGTERM/SIGINT 下有效,
+  SIGKILL 当下 `close_all_sessions` 跑不到。但每局启动时会把 prefix 记进数据目录
+  (`wine_prefixes.rs`),下一次 daemon 收到关机信号时顺手把这些没人认领的 prefix 用
+  `wineserver -k` 关掉,所以 `winedevice.exe` 不会无限期赖着。要根治仍得让每局游戏
   自己进一个 cgroup,收尾写 `cgroup.kill`。**收尾时 gamescope 常以 SIGABRT 结束**,KDE
   于是弹崩溃通知(用户已决定暂不处理)。
 
@@ -261,3 +269,11 @@ gamescope 的 `Child` 被一个 watcher task 持有:`child.wait()` → 记录退
 `--mouse-sensitivity`、`winedevice.exe` 无视 SIGTERM、nested 窗口尺寸直接写进 `g_nOutput`、
 keycode 偏移 8 —— 都只来自代码注释与单测的契约,没有读 gamescope/wine 源码或真机复现。
 三条退出路径中,**叉号那条**与**"跑一局之后关机不再等 90 秒"**同样没有真机复核。
+
+**Windows 上没有缩放可做**(`src/scale/unsupported.rs`):`start_session` 等真正"做缩放"的
+动作一律回 `ScaleError::Unsupported`(`stop_session` 刻意回 `Ok`:没有会话可停,再报错只是
+噪音),`scale_rpc` 的 `run_action` 对动作统一回"这个平台做不到"(`src/daemon/scale_rpc.rs`,
+刻意不给空后端补同名方法去凑合)。能力表据此把缩放相关的编辑设为**不适用**(不是"缺失"),
+界面显示成"缩放归外部工具"而不是报错。缩放本身归 Magpie,而 Magpie 只让观察、不让下命令,
+所以这篇里"启动 gamescope""运行时改缩放""退出收尾"三套东西到 Windows 上全不成立;连
+Magpie 观察后端都**还没写**(PLATFORMS.md §2.3 / §2.7)—— 别把"没接"当成"已经能看了"。

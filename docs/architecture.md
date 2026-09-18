@@ -4,20 +4,22 @@
 完整走过哪些步骤,以及源码的模块地图。**什么时候读它**:第一次打开这个仓库,或者需要确认
 "某件事该归谁管"的时候。往下钻的细节在文末索引的四篇里。
 
-结论都来自 `src/**`、`Cargo.toml`、`build.rs`、`tests/`。凡是在代码里核对不到的,标
-`TODO(未核对)`,不猜。
-
 ---
 
 ## 1. 定位与边界
 
-kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对等**(`src/main.rs` 里的
-`Cli` 子命令就是完整能力面):
+kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对等**(`src/cli/mod.rs`
+里的 `Cli` 子命令就是完整能力面):
 
 | 平台 | 启动游戏 | gamescope 缩放增强 | 云存档同步 |
 |------|----------|--------------------|------------|
 | Linux x86_64(当前开发/交付目标) | ✅ | ✅ | ✅ |
-| Windows x86_64(同步版,**未开始**) | ❌ | ❌ | ✅(计划) |
+| Windows x86_64(只做云存档同步) | ❌ | ❌ | ✅ |
+
+Windows 版能编译,并在 2026-09-17~18 的 Windows VM 上完成了端到端验证(命名管道
+IPC、单实例锁、UI 启动、中文路径扫描都实测过)。注意两端能力**不对等**,Windows
+只做云存档同步:不启动游戏(用户自己启动),也不做缩放 —— 缩放归外部工具 Magpie,
+而 kotori 这边对接它的后端还没写。
 
 边界上还有几条硬规矩,写在代码注释与工具函数里:
 
@@ -28,20 +30,23 @@ kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对�
   只出现在用户机器上;文档与测试里只用占位路径(`/games/demo/game.exe`)。
 - **凭据绝不进 `config.toml`**,只在 `src/secrets/` 管的几个存储之一(设计四级、实现三级,见
   [architecture-sync.md](architecture-sync.md) §6)。
-- **当前代码只有 Unix 能编译**:`tokio::net::UnixStream`(`src/daemon/mod.rs`、
-  `src/rpc.rs`)与 `libc::process_group` / `libc::kill`(`src/scale/teardown.rs`、
-  `src/daemon/mod.rs`)没有平台抽象层。Windows 版需要先补这一层。
+- **两端都能编译**:传输层是平台抽象 —— `src/daemon/ipc.rs`(Unix 上是 Unix
+  socket,Windows 上是命名管道 `\\.\pipe\kotori-<用户名>`),`src/rpc.rs` 同样按平台
+  分开。纯 Unix 的实现(gamescope / X11 / 进程组收尾,`src/scale/` 里那一堆)整个
+  在 `cfg(unix)` 里;Windows 侧是一个什么都不做的 `UnsupportedScaleEngine`
+  (`src/scale/unsupported.rs`)。
 
 技术栈:`Rust 2024` + `tokio` + `Slint 1.17`(GUI,`Cargo.toml`)+ 外部工具
-`gamescope` / `wine` / `rclone`(默认同步引擎)与可选的 `kopia` 0.22+(加密同步引擎,
-都被包在可注入的查找函数后面,见第 4 节模块地图)。
+`gamescope` / `wine` / `kopia`(默认同步引擎,自带加密;release 锁 **0.23.1**,见
+`.github/workflows/release.yml`)与备选的 `rclone`(一版一个 zip),都被包在可注入的
+查找函数后面,见第 4 节模块地图。
 
 ---
 
 ## 2. 两个进程与所有权
 
 ```
-┌───────────────────────────┐        Unix socket, 一行一条 JSON-RPC 2.0
+┌───────────────────────────┐        Unix socket / 命名管道, 一行一条 JSON-RPC 2.0
 │ kotori ui   (Slint 窗口)  │  ────────────────────────────────────────┐
 │ kotori <cli 子命令>       │  ◄────────────────────────────────────────┤
 └───────────────────────────┘                                          │
@@ -87,7 +92,7 @@ kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对�
    │         │            │              │             └─► ⑥UI 每 3s 轮询 daemon.status
    │         │            │              └─► 会话入 sessions 表,CWD=游戏根目录,WINEPREFIX 显式注入
    │         │            └─► 拉最新一版包,逐文件比较只取新的(上限 30s,失败只报告不拦)
-   │         └─► JSON-RPC over Unix socket
+   │         └─► JSON-RPC over 本机连接(§2)
    └─► Message::Launch → Task::perform(rpc) → 回包 Message::LaunchDone
 
 ⑦游戏结束(三条路,见 scaling 篇 §6) ⑧收尾 ⑨Ended 事件 ⑩等 3s ⑪把整份存档打成一包上传
@@ -120,12 +125,12 @@ kotori 是一个跨平台的 Galgame 管理器,但两个平台的能力**不对�
 |------|----------|----------|
 | 入口 / CLI | 子命令分发、日志初始化、`scale`/`sync` 的共用汇报 | `src/main.rs`、`src/cli/mod.rs` |
 | IPC 客户端 | 一行 JSON-RPC 发一条收一条 | `src/rpc.rs` |
-| daemon | 分发请求、**唯一配置写者**、信号处理、会话事件 → 同步钩子 | `src/daemon/mod.rs` |
+| daemon | 分发请求、**唯一配置写者**、信号处理、会话事件 → 同步钩子 | `src/daemon/mod.rs`、`src/daemon/ipc.rs`(平台传输层) |
 | daemon/*_rpc | 按域切开的处理器 + wire 结构 | `daemon/{game,scale,status}_rpc.rs`、`daemon/sync_rpc/{mod,credentials,actions}.rs`、`protocol.rs` |
 | 配置 | 类型、读写、路径(全部可注入)、缩放档案、同步设置 | `src/config/{mod,paths,profile,sync}.rs` |
 | 缩放引擎 | gamescope 命令行、会话、运行时属性、退出看门狗 | `src/scale/{args,gamescope,x11,action,teardown}.rs` |
 | 桌面集成 | 只做一件事:KDE 的 KWin 脚本桥(窗口尺寸/全屏) | `src/desktop/{mod,kde}.rs` |
-| 云同步 | 双引擎门面(rclone 一版一 zip / kopia 快照)、打包解包、编排 | `src/sync/`:`mod.rs`、`engine/`、`archive/`、`runner/`、`rclone_args.rs`、`rclone_env.rs`、`remote_paths.rs`、`snapshots.rs`、`validate.rs` |
+| 云同步 | 双引擎门面(kopia 快照为默认 / rclone 一版一 zip)、打包解包、编排 | `src/sync/`:`mod.rs`、`engine/`、`archive/`、`runner/`、`executables.rs`(找引擎二进制)、`save_targets.rs`、`rclone_args.rs`、`rclone_env.rs`、`remote_paths.rs`、`snapshots.rs`、`validate.rs` |
 | 凭据 | 三级存储(设计四级)与挑选顺序;明文文件;主密码加密文件 | `src/secrets/{mod,plain,encrypted}.rs`、`src/secrets/keyring/` |
 | GUI | Slint 视图 + 状态→属性 + 回调→消息 + 消息循环 | `src/ui/**`(详见 [architecture-gui.md](architecture-gui.md)) |
 | wine | prefix 探测与选择、存档路径解析与反解析、`wineserver -k` | `src/wine.rs` |
@@ -156,6 +161,3 @@ Rust,风格 `fluent`,并打开 `with_debug_info`(给 UI 的几何断言用)。
 **建议的读码顺序**:`src/main.rs` → `src/config/mod.rs` → `src/daemon/mod.rs` →
 `src/scale/gamescope.rs` → `src/sync/runner/mod.rs` → `src/ui/update/mod.rs`。这条路径能把
 "一次启动"从头走到尾,其余模块都是它沿途用到的工具。
-
-`TODO(未核对)`:本仓库没有可用的 aarch64 std/rustup,Windows 目标也不在当前工具链里,
-所以"除 Unix 外是否真的编不过"只由代码里的 `UnixStream` / `libc` 用法推断,没有实测。

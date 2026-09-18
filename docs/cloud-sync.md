@@ -6,12 +6,12 @@
 
 | 引擎 | 一句话 | 加密 |
 |------|--------|------|
-| **rclone**（默认） | 一版一个 zip，谁都能用 B2 网页把包拿下来解开 | **不加密**，落桶即明文 |
-| **kopia**（0.22+） | 内容寻址仓库，去重、增量、快照 | **自带加密**（仓库密码默认 `kotori`） |
+| **kopia**（默认，0.23.x） | 内容寻址仓库，去重、增量、快照 | **自带加密**（仓库密码默认 `kotori`） |
+| **rclone**（备选） | 一版一个 zip，谁都能用 B2 网页把包拿下来解开 | **不加密**，落桶即明文 |
 
-默认引擎是 rclone：bucket 里的存档就是普通 zip，不装 kotori、不装 rclone、用 B2 网页
-就能下载回来。要加密就选 kopia（见文末）。**两个引擎各写各的区域，换引擎不会读到对面
-的存档；换机器（双系统）必须选同一个。**
+默认引擎是 kopia：bucket 里的存档在 kopia 仓库里，增量、去重、加密都在这条路上。
+想要"谁都能用 B2 网页直接解开"的普通 zip 才换 rclone（见文末）。**两个引擎各写各的
+区域，换引擎不会读到对面的存档；换机器（双系统）必须选同一个。**
 
 ---
 
@@ -23,13 +23,13 @@
 |------|--------|--------|
 | Bucket Unique Name | 自己起，比如 `kotori-saves-你的名字` | 全局唯一，重名要换一个 |
 | Files in Bucket are | **Private** | 存档不该公开可读 |
-| Default Encryption | **Disable** | 加密由 kopia 引擎可选地做；这里开着也没坏处，只是没必要 |
+| Default Encryption | **Disable** | 加密由 kopia 引擎做（默认就加密）；这里开着也没坏处，只是没必要 |
 | Object Lock | **Disable** | 用不上 |
 
 建好之后列表里会显示一个 `Endpoint: s3.us-west-004.backblazeb2.com` 之类的值。
 
 > ⚠️ **这个 Endpoint 我们不需要。** 那是 B2 的 S3 兼容接口，而 kotori 用的是 B2 原生接口
-> （rclone 会自己找到正确的地址；kopia 也走原生 B2）。如果你把它填进 kotori 的 API
+> （kopia 走原生 B2；rclone 也会自己找到正确的地址）。如果你把它填进 kotori 的 API
 > endpoint 框，程序会明确拒绝并告诉你留空——这是刻意的，不然第一次同步会以一个看不懂的
 > 404 结束。
 
@@ -53,19 +53,19 @@
 ⚠️ **applicationKey 只显示这一次**，关掉页面就再也看不到了（看不到就删掉这把 key 重建一把，
 不影响已上传的存档）。把两个值复制出来。
 
-> keyID 不是你的 B2 账号 ID。rclone/kopia 都要求用 Application Key ID，填账号 ID 会得到 401。
+> keyID 不是你的 B2 账号 ID。kopia 和 rclone 都要求用 Application Key ID，填账号 ID 会得到 401。
 
 ## 3. 填进 kotori
 
 ```bash
 cd <kotori 项目目录>
-cargo run -- ui
+cargo run -- ui   # 不带子命令直接 `cargo run --` 也一样，默认就进 UI
 ```
 
 在 GUI 左侧选 **设置**，滚到 **云存档同步**：
 
 1. 打开 **启用云同步** 开关
-2. **引擎** 保持 `rclone(zip)`（要加密再换 kopia，见文末）
+2. **引擎** 保持 `kopia`（默认，自带加密；想拿明文 zip 再换 `rclone(zip)`，见文末）
 3. **bucket** 填第 1 步建的那个 bucket 名字（不是 endpoint，也不是网址）
 4. **prefix** 保持 `kotori`。它是 bucket 里归 kotori 独占的目录，bucket 里的其他东西我们一律不碰
 5. **API endpoint 留空**
@@ -74,8 +74,8 @@ cargo run -- ui
 8. 在 **B2 凭据** 里填 keyID 与 applicationKey，点 **保存凭据**
 9. 点 **测试连接**
 
-看到 `连接正常：rclone … kotori:<你的 bucket>/kotori` 就通了（选了 kopia 会显示 kopia
-的二进制与仓库路径，表明连的是哪一边）。
+看到 `连接正常：kopia …`（显示 kopia 的二进制路径）就通了。换成 rclone 后会显示
+`连接正常：rclone … kotori:<你的 bucket>/kotori`——这一行标明连的是哪一边。
 
 命令行同样可以看状态和测连接：
 
@@ -106,7 +106,7 @@ cargo run -- sync test     # 只测凭据 + bucket + 读写权限
 
 - **启动游戏前**：自动把云端**较新的文件**取回来（逐文件比修改时间，**绝不覆盖本地更新的
   存档**），最多等 30 秒，失败只提示、不挡你玩游戏
-- **游戏退出后**：等 3 秒（让 wineserver 落盘）自动打成一版 zip 上传
+- **游戏退出后**：等 3 秒（让写入落盘）自动把改动同步成一版上传
 - 手动：设置页里有 **立即同步全部**，每个游戏后面也有 **同步 / 恢复**
 
 命令行：
@@ -129,7 +129,7 @@ cargo run -- sync restore <游戏id> --version 20260911T101500123Z-1a2b3c4d  # �
 
 ## 6. 存在哪、怎么自己拿回来
 
-rclone 引擎下（默认），bucket 里的结构是：
+rclone 引擎下（备选），bucket 里的结构是：
 
 ```
 <bucket>/kotori/games/<游戏id>/20260911T101500123Z-1a2b3c4d.zip   ← 一版一个完整 zip
@@ -140,13 +140,13 @@ rclone 引擎下（默认），bucket 里的结构是：
 是 UTC 毫秒时间戳 + 随机后缀，字典序就是时间序，"最新" = 名字最大的那个，没有别的
 指针文件。
 
-kopia 引擎（可选）下：整个仓库在 `<bucket>/kotori/kopia`，是 kopia 自己的格式，要用
+kopia 引擎（默认）下：整个仓库在 `<bucket>/kotori/kopia`，是 kopia 自己的格式，要用
 `kopia` 客户端（或 kotori 的 `sync restore`）来读，不能直接在网页里解包。
 
 | 东西 | 存在哪 | 你怎么取回来 |
 |------|--------|-------------|
 | B2 keyID / applicationKey | 系统密钥环 / 明文文件 / 主密码文件（按顺序挑） | `secret-tool lookup service kotori account b2-key-id`（applicationKey 换 `b2-app-key`） |
-| kopia 仓库密码（只有选 kopia 才有意义） | 同上 | `secret-tool lookup service kotori account kopia-password`（留空 = 默认 `kotori`） |
+| kopia 仓库密码（默认引擎 kopia 用得上） | 同上 | `secret-tool lookup service kotori account kopia-password`（留空 = 默认 `kotori`） |
 
 `~/.config/kotori/config.toml` 里**没有**任何密钥：只有 bucket 名、prefix、保留版本数
 这些非敏感设置。
@@ -183,15 +183,21 @@ cargo run -- sync unlock            # 下次开机解锁一次即可
 **里面没有明文**。主密码由你自己保管，我们不会存它——忘了就打不开这个文件（重新填一次 B2 凭据即可，
 云端数据不受影响）。
 
-> Windows 端目前还没有接上凭据管理器，所以那边也是靠主密码文件这条路；等移植时会补上。
+> Windows 端也还没有接上系统凭据管理器（keyring 后端未实现，`sync status` 会如实说明），
+> 所以那边同样走明文凭据文件 / 主密码文件这条路。
 
-## 7. 加密（可选，换 kopia 引擎）
+## 7. 加密与引擎（kopia 默认自带）
 
-rclone 那条路**没有加密**（一版一个 zip，zip 里就是明文）。要加密就**换 kopia 引擎**：
+**kopia（默认）自带加密**：仓库没有密码读不出来。rclone 那条路才**没有加密**
+（一版一个 zip，zip 里就是明文）。想换到明文 zip：
 
-1. 设置页 **引擎** 选 `kopia`，保存设置（回话里有"引擎已切换"的提示——两个引擎各写
-   各的区域，换过去之后原来 rclone 的 zip 还在桶里，只是不再被读到，**数据没丢**）。
-2. 安装 kopia ≥ 0.22（Arch: `sudo pacman -S archlinuxcn/kopia`）。
+1. 设置页 **引擎** 选 `rclone(zip)`，保存设置（回话里有"引擎已切换"的提示——两个引擎
+   各写各的区域，换过去之后原来 kopia 的仓库还在桶里，只是不再被读到，**数据没丢**）。
+2. 装 kopia（默认引擎用得上）：
+   - **Linux**：走发行版仓库。Arch 官方仓库没有，用 `sudo pacman -S archlinuxcn/kopia`
+     （Debian/Ubuntu: `sudo apt install kopia`，Fedora: `sudo dnf install kopia`）。
+   - **Windows**：**不用装**——发布包里已经内置 kopia.exe（就在 kotori.exe 旁边，
+     版本锁 0.23.1）。
 3. **仓库密码默认 `kotori`**，所有端一致，双系统直接互通。想设自己的：在 kopia 那一组
    里填一个新密码点保存（留空 = 清掉并回到默认 `kotori`）。
 
@@ -203,8 +209,8 @@ rclone 那条路**没有加密**（一版一个 zip，zip 里就是明文）。�
   混用只会让"有些存档看不见"。要换就全局换，换机器也保持一致。
 - 仓库密码丢了，已上传的存档读不回来（B2 凭据还在也只能再写新的）。它存在凭据库里，
   也能用上面那条 `secret-tool` 命令取回来。
-- 想省空间（去重/增量）也建议 kopia —— rclone 那条路是全量上传，不做"内容没变就跳过"
-  （用户 2026-09-15 明确）。
+- 想省空间不用多选：kopia（默认）就是增量 + 去重；rclone 那条路是全量上传，不做
+  "内容没变就跳过"（用户 2026-09-15 明确）。
 
 ## 8. 出问题先看这里
 
@@ -224,7 +230,7 @@ cargo run -- sync --help
 | **这是 B2 的 S3 兼容接口地址** | API endpoint 填了 `s3.<region>.backblazeb2.com`，留空即可 |
 | **连不上 B2** | 网络 / 代理 / DNS |
 | **本地没有这个目录** | 存档位置写错了，或那个盘没挂载（这不算失败，会跳过） |
-| **PATH 里找不到 kopia** | 选了 kopia 引擎但没装：`sudo pacman -S archlinuxcn/kopia` |
+| **PATH 里找不到 kopia** | Linux：选了 kopia 但没装，走发行版仓库——Arch 用 `sudo pacman -S archlinuxcn/kopia`（Debian/Ubuntu: `sudo apt install kopia`，Fedora: `sudo dnf install kopia`）。Windows 不会出现这条：发布包内置了 kopia.exe |
 
 ## 9. 费用
 
