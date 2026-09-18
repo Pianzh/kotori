@@ -55,7 +55,7 @@ impl App {
             }
             Message::SyncEngineSelected(engine) => {
                 // **点下去就生效**：引擎是二选一的开关，不该还要用户再去找一个「保存设置」
-                // ——从前就是那样，界面上按钮立刻变成「kopia ✓」，而 config 里一个字节都
+                // ——从前就是那样，界面上按钮立刻变成「kopia √」，而 config 里一个字节都
                 // 没动，重开 GUI 就又回到 rclone（用户 2026-09-16 报的就是这个）。
                 //
                 // 只提交 engine 一个字段：用户手上那些还没保存的编辑（bucket、prefix…）

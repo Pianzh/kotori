@@ -276,7 +276,7 @@ fn save_sync_follows_the_game_lifecycle() {
 /// 替换，界面上点一次引擎就会静默清掉用户正在填的 bucket。
 ///
 /// 从前的问题更基本：点引擎**根本不提交**（只改表单，等「保存设置」），而按钮上已经
-/// 显示成「kopia ✓」了 —— 用户 2026-09-16 报的"每次开 GUI 都回到 rclone"就是这么来的。
+/// 显示成「kopia √」了 —— 用户 2026-09-16 报的"每次开 GUI 都回到 rclone"就是这么来的。
 #[test]
 fn setting_only_the_engine_leaves_the_other_settings_alone() {
     let mut fixture = Fixture::new("engine");

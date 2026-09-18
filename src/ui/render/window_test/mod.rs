@@ -264,7 +264,7 @@ fn library_and_sync_pages_render_without_a_display() {
             name: "Demo".into(),
             locations: 0,
             problem: Some("存档位置「%NOPE%」解析不了".into()),
-            last: Some("✗ 2026-09-11T10:15 ✓".into()),
+            last: Some("× 2026-09-11T10:15 √".into()),
         }],
         ..sync_status_fixture()
     });

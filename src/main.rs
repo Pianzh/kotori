@@ -637,7 +637,9 @@ fn print_sync_result(method: &str, value: &serde_json::Value) {
                     .as_array()
                     .is_some_and(|list| list.iter().any(|a| a.as_str() == Some(account)))
             };
-            let mark = |account: &str| if saved(account) { "✓" } else { "✗" };
+            // 字形与界面同一条规矩:用 `√` / `×`,不用雅黑缺字形的 `✓` / `✗`
+            // (见 `ui::parse::sync::credentials_label`)。
+            let mark = |account: &str| if saved(account) { "√" } else { "×" };
             println!(
                 "凭据: keyID {} applicationKey {}",
                 mark("b2-key-id"),
@@ -703,9 +705,9 @@ fn print_sync_result(method: &str, value: &serde_json::Value) {
                 let id = game["game_id"].as_str().unwrap_or("?");
                 if let Some(error) = game["error"].as_str() {
                     failed = true;
-                    println!("✗ [{id}] {name}: {error}");
+                    println!("× [{id}] {name}: {error}");
                 } else {
-                    println!("✓ [{id}] {name}");
+                    println!("√ [{id}] {name}");
                 }
                 for location in game["locations"].as_array().into_iter().flatten() {
                     println!(
