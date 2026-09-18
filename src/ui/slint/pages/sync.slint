@@ -375,7 +375,8 @@ export component SyncPage inherits ScrollView {
             step: 6;
             bottom: 24px;
                 SyncCredentialsGroup {
-                    // bucket 2026-09-18 起住进凭据组(用户拍板),值仍归页面所有。
+                    // bucket 2026-09-18 起住在凭据组里(**位置还等用户定**,见
+                    // `sync-credentials.slint` 那条注释),值仍归页面所有。
                     bucket <=> root.bucket;
                     store-kind: root.store-kind;
                     store-locked: root.store-locked;
