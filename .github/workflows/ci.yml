@@ -1,7 +1,10 @@
-# 构建与测试 —— 目标有三个:
+# 构建与测试 —— 目标有四个:
 #   ① 每次 push/PR 都在 x86_64 上跑一遍格式 / clippy / 全部测试;
-#   ② **在真的 aarch64 机器上**跑同一套测试(不是交叉编译);
-#   ③ 在同一个 aarch64 job 里**编出交付产物**(tar.zst)并当 artifact 传上来 ——
+#   ② 同一个 x86_64 job 接着**编出 Linux 交付产物**(tar.zst)并当 artifact 传上来 ——
+#      Linux 的日常构建也走 CI:一个 debug `target/` 要三十来 G,不该成为"能不能出包"
+#      的前提,"能装上去的那份"要有个不依赖某台开发机的来源;
+#   ③ **在真的 aarch64 机器上**跑同一套测试(不是交叉编译);
+#   ④ 在同一个 aarch64 job 里**编出交付产物**(tar.zst)并当 artifact 传上来 ——
 #      ARM 设备的构建**一律在 CI 里做**,设备只负责跑(用户 2026-09-13)。
 #
 # 为什么不用交叉编译:Slint 官方文档给的路子是 `cross` + 自带系统库的容器,而
@@ -36,12 +39,13 @@ jobs:
       - uses: actions/checkout@v4
 
       # Slint 的 Linux 依赖(libxcb-shape0-dev 等)。缺了会在链接期才炸,别省。
+      # zstd 是给下面打包用的(和 aarch64 那条同一个形状)。
       - name: 系统依赖
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev \
-            libfontconfig-dev libssl-dev
+            libfontconfig-dev libssl-dev zstd
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -57,6 +61,46 @@ jobs:
 
       - name: 测试
         run: scripts/test.sh
+
+      # 交付物:Linux x86_64 的**日常构建**。一个 debug `target/` 三十来 G,所以"能不能
+      # 出包"不该押在某台机器有没有编过 —— 推完就能从这里下载来验。
+      # ⚠ 与 `test-arm` 同一个形状:strip + 自报家门的 BUILD-INFO(带 ldd 与 glibc)
+      #   + tar.zst。产物带 ldd 的理由也一样:发行版比 runner 旧时,第一个问题永远
+      #   是依赖和 glibc,让产物自己带着答案。
+      - name: 构建 release
+        run: cargo build --release --locked
+
+      - name: 打包 x86_64 产物
+        run: |
+          set -euo pipefail
+          name="kotori-x86_64-$(git rev-parse --short HEAD)"
+          mkdir -p "dist/$name"
+          strip target/release/kotori -o "dist/$name/kotori"
+          install -m 644 assets/io.github.kotori.desktop "dist/$name/"
+          install -m 644 LICENSE "dist/$name/"
+          {
+            echo "commit: $(git rev-parse HEAD)"
+            echo "built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)  (ubuntu-24.04 runner)"
+            echo "rustc:  $(rustc --version)"
+            echo "glibc:  $(ldd --version | head -1)"
+            echo
+            echo "== file dist/$name/kotori =="
+            file "dist/$name/kotori"
+            echo
+            echo "== ldd target/release/kotori =="
+            ldd target/release/kotori
+          } > "dist/$name/BUILD-INFO.txt"
+          tar -C dist -I 'zstd -19 -T0' -cf "dist/$name.tar.zst" "$name"
+          ls -lh "dist/$name.tar.zst"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kotori-linux-x86_64
+          path: dist/*.tar.zst
+          if-no-files-found: error
+          # 每次 push 都出一个包,所以保留期短:够"推完就下载来验",又不至于把
+          # artifact 一份份攒下去。要长期留的那份走 Release(见 release.yml)。
+          retention-days: 7
 
   # ── Windows:当前只求"编得过" ────────────────────────────────────────────
   # 为什么先有这一步:这个仓库从来没有在 Windows 上编译过一次(此前 CI 里只有两个

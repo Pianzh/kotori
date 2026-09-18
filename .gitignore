@@ -29,6 +29,10 @@ DISCIPLINE.md
 PITFALLS.md
 SUBAGENT.md
 
+# 真机黑盒测试的 bug 记录:里面有用户原话与真机路径,和上面那批同性质(只给 agent 看)。
+# 它是工作台账,不是项目产物 —— 修完就该删,不该跟着代码进历史。
+BUG-REPORT.md
+
 # 每个副 agent 的一次性工作文件:任务交接单 + 它自己的纪律(合并后都删掉,见 DISCIPLINE §8)
 TASK-*.md
 DISCIPLINE-*.md
