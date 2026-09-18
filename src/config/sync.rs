@@ -17,9 +17,13 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum SyncEngine {
     /// rclone + 一版一个 zip。谁都能用别的工具把包拿下来解开（不加密）。
-    #[default]
     Rclone,
     /// kopia 仓库：内容寻址、去重、自带加密（密码默认 `kotori`，见 ADR-010 的修正）。
+    ///
+    /// **这是默认值**（2026-09-18 用户:"kopia 才是我们的备份特色"）。改它不需要什么
+    /// 迁移照顾:项目还没有对外发布过,不存在"缺这个键的老配置",而本机那份配置里
+    /// 早就写着 `engine = "kopia"`。
+    #[default]
     Kopia,
 }
 
@@ -43,8 +47,7 @@ impl SyncEngine {
 pub struct SyncConfig {
     #[serde(default)]
     pub enabled: bool,
-    /// 用哪个引擎。旧配置没有这个键，serde 默认成 [`SyncEngine::Rclone`]——
-    /// 那正是它们当年写下的东西。
+    /// 用哪个引擎。缺这个键时 serde 会用 [`SyncEngine`] 的默认值(kopia,备份特色)。
     #[serde(default)]
     pub engine: SyncEngine,
     /// Optional override for the storage API endpoint.
@@ -128,14 +131,16 @@ keep_versions = 3
     }
 
     #[test]
-    fn a_sync_config_without_an_engine_key_is_rclone() {
-        // 引擎字段是 2026-09-16 加的。在那之前写下的每一份配置都没有这个键，
-        // 而它们当年级的就是 rclone —— 默认值必须是它，不能是别的。
+    fn a_sync_config_without_an_engine_key_gets_the_current_default() {
+        // 引擎字段是 2026-09-16 加的,当时默认 rclone。2026-09-18 改成 kopia
+        // ("kopia 才是我们的备份特色")—— 项目还没对外发布,没有"缺这个键的老配置"
+        // 要照顾,所以缺键就用当下的默认值。
         let config: SyncConfig = toml::from_str("enabled = true\n").unwrap();
-        assert_eq!(config.engine, SyncEngine::Rclone);
+        assert_eq!(config.engine, SyncEngine::Kopia);
 
+        // 而且写回去时会把键**写实**,往后就不再依赖默认值了。
         let written = toml::to_string(&config).unwrap();
-        assert!(written.contains("engine = \"rclone\""), "{written}");
+        assert!(written.contains("engine = \"kopia\""), "{written}");
     }
 
     #[test]

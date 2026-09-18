@@ -439,7 +439,8 @@ encryption = true
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert!(config.sync.enabled);
-        assert_eq!(config.sync.engine, SyncEngine::Rclone);
+        // 没写 `engine` 键的配置拿到的是**当下的默认值**（2026-09-18 起是 kopia）。
+        assert_eq!(config.sync.engine, SyncEngine::Kopia);
 
         let written = toml::to_string(&config).unwrap();
         assert!(!written.contains("encryption"), "{written}");

@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 
 use super::Runner;
-use crate::config::SyncConfig;
+use crate::config::{SyncConfig, SyncEngine};
 use crate::secrets::{Keyring, SecretKey};
 use crate::sync::SaveTarget;
 
@@ -77,6 +77,10 @@ exit 0
 
     pub(super) fn settings(&self, keep_versions: u32) -> SyncConfig {
         SyncConfig {
+            // ⚠ 引擎**必须写死成 rclone**:这个夹具的整个意义就是"假 rclone",而
+            // `SyncConfig::default()` 的引擎在 2026-09-18 改成了 kopia —— 跟着默认值
+            // 走的话,这些测试会全部跑去走 kopia 那条路。
+            engine: SyncEngine::Rclone,
             enabled: true,
             endpoint: String::new(),
             bucket: "bkt".to_string(),

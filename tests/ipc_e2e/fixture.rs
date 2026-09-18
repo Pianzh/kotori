@@ -181,8 +181,11 @@ exit 0
         ));
 
         let mut config = std::fs::read_to_string(&self.config).unwrap();
+        // ⚠ `engine` 必须**显式**写成 rclone:这个夹具造的是**假 rclone**,而缺这个键时
+        // serde 会用当下的默认值(2026-09-18 起是 kopia)—— 不写的话这些端到端测试会
+        // 全部转去找 kopia,假 rclone 一次都不会被调用。
         config.push_str(&format!(
-            "\n[sync]\nenabled = {enabled}\nbucket = \"test-bucket\"\nprefix = \"kotori\"\n"
+            "\n[sync]\nenabled = {enabled}\nengine = \"rclone\"\nbucket = \"test-bucket\"\nprefix = \"kotori\"\n"
         ));
         std::fs::write(&self.config, config).unwrap();
 
