@@ -8,9 +8,9 @@
 
 use std::process::Stdio;
 
-use super::distro::{Distro, Package};
 #[cfg(unix)]
 use super::MIN_GAMESCOPE;
+use super::distro::{Distro, Package};
 use super::{Check, Level, PROBE_TIMEOUT, State};
 
 // Linux 专有:这是"kotori 自己把游戏拉起来再缩放"那条路上的东西,Windows 版不走那条路。
@@ -139,13 +139,21 @@ pub(super) async fn kopia(distro: &Distro, configured: &str) -> Check {
 
 pub(super) async fn file_dialog(distro: &Distro) -> Check {
     let install = distro.install(Package::same("xdg-desktop-portal"));
+    // 「对话框从哪来」两个平台不一样:Linux 走桌面门户(xdg-desktop-portal),Windows 走
+    // 系统自带的 shell 对话框(见 `picker::platform`)。**说法得跟着变** —— 在 Windows 上
+    // 写"桌面门户可用"是撒谎,而"界面不许撒谎"是这个项目的规矩(实测发现)。
+    #[cfg(unix)]
+    const READY: &str = "桌面门户可用,各处「浏览…」都能弹出对话框";
+    #[cfg(windows)]
+    const READY: &str = "系统对话框可用,各处「浏览…」都能弹出对话框";
+
     match crate::picker::probe().await {
         Ok(()) => Check {
             id: "file-dialog",
             title: "系统文件对话框".to_string(),
             level: Level::Optional,
             state: State::Ready,
-            detail: "桌面门户可用,各处「浏览…」都能弹出对话框".to_string(),
+            detail: READY.to_string(),
             impact: "挑游戏目录 / exe / wine prefix / 存档位置".to_string(),
             install: String::new(),
         },
