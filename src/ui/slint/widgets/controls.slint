@@ -68,6 +68,17 @@ export component TextField inherits Rectangle {
     // 字段，渲染器也不看 `single-line` —— 文本一超出宽度就被硬裁在右边缘，**正在打
     // 的字看不见**（上游 issue #8567）。所以这里自己算：拿 TextInput 报上来的光标 x，
     // 把整个输入框往左挪，让光标始终留在框里。
+    //
+    // ── 粘贴带换行的文本会让文字向下偏移（上游 bug，待在 Rust 侧清洗）──────────
+    // TextInput 的 paste 在 single-line 下只把 `\n` 替换成空格、`\r` 原样保留
+    // （`items/text.rs` 的 insert_text），而文本布局引擎把**孤立的 `\r`** 当强制换行
+    // （`textlayout/sharedparley.rs` 的 `paragraph_ranges` 只吞 `\r\n` 成对的那一种）。
+    // Windows 剪贴板的行尾是 `\r\n`，粘进来正好剩一个孤 `\r` → 多出一个空行 →
+    // 经 `vertical-alignment: center` 居中后就是"文字向下偏移"（2026-09-18 实测；
+    // Linux 剪贴板行尾是 `\n`，会被换成空格，所以只在 Windows 复现）。上游 master
+    // 的 paste 至今是同一个写法，升级救不了。`.slint` 没有字符串处理原语，清洗只能
+    // 做在 Rust 侧：wire/update 把 `\r`（以及密钥类字段的 `\n` —— 空格会混进密钥，
+    // 必须删）清掉后再经 render 回写显示，注意"先比再写"防光标弹回行尾。
     private property <length> inner-width: root.width - 20px;
     /// 文本实际占多宽。密码框画的是 `●`，所以按**字符数**乘一个 `●` 的宽度 ——
     /// 拿原文去量会偏小（applicationKey 那种长串正是密码框）。
