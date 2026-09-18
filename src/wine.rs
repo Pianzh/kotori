@@ -436,29 +436,37 @@ pub fn to_relative_path(game_dir: &Path, picked: &Path) -> Result<String, String
 
 /// 本机路径 → `windows` 写法(`%APPDATA%\Game\save`)。
 ///
-/// 认的是**路径的形状**而不是"这是哪个 prefix":任何 `…/drive_c/users/<用户名>/…`
-/// 都是一个 Windows 用户目录,它后面那一段就是 Windows 眼里的相对路径。这样不需要
-/// 先知道游戏用的是哪个 prefix —— 连游戏自带的便携 prefix 也照样认得出。
+/// 认的是**路径的形状**而不是"这是哪个 prefix",两种形状都认:
+///
+/// ① wine prefix:`…/drive_c/users/<用户名>/…`
+/// ② 真 Windows:`<盘符>:\Users\<用户名>\…` —— 资源管理器挑回来的就是这种
+///
+/// 这样不需要先知道游戏用的是哪个 prefix,连游戏自带的便携 prefix 也照样认得出。
+///
+/// ⚠ ② 是 2026-09-18 补的:在那之前只认 ①,于是**真 Windows 上点「浏览…」永远翻译
+/// 失败**;而调用点的规矩是"翻译不了就什么都不改",用户看到的就是"点了没反应"
+/// (BUG-REPORT「存档位置的浏览有问题」)。
+///
+/// 分隔符按**字符**自己切,不走 `Path::components()`:`\` 在 Linux 上不是分隔符,而
+/// 这个函数完全可能拿到一串 Windows 形状的文本 —— 切不开的话它就只能在 Windows 上
+/// 才测得到,而那正是最不方便测的地方。
 pub fn to_windows_token(picked: &Path) -> Result<String, String> {
     let segments: Vec<&str> = picked
-        .components()
-        .map(|part| part.as_os_str().to_str().unwrap_or_default())
+        .to_str()
+        .unwrap_or_default()
+        .split(['\\', '/'])
+        .filter(|part| !part.is_empty())
         .collect();
 
-    // `drive_c/users/<user>` 之后就是 Windows 用户目录里面的相对路径。
-    let user_at = segments.windows(3).position(|window| {
-        window[0].eq_ignore_ascii_case("drive_c")
-            && window[1].eq_ignore_ascii_case("users")
-            && !window[2].is_empty()
-    });
-    let Some(user_at) = user_at else {
+    let Some(user_at) = user_dir_at(&segments) else {
         return Err(format!(
-            "{} 不在某个 wine prefix 的用户目录里(drive_c/users/<用户名>),写不成跨平台的令牌;\
-             请挑 prefix 用户目录里的位置,或者把这一行改成 absolute。",
+            "{} 不在用户目录里,写不成跨平台的令牌;请挑用户目录里的位置\
+             (Windows 上是 C:\\Users\\<用户名>\\…,wine 里是 drive_c/users/<用户名>/…),\
+             或者把这一行改成 absolute。",
             picked.display()
         ));
     };
-    let tail = &segments[user_at + 3..];
+    let tail = &segments[user_at..];
     if tail.is_empty() {
         return Ok("%USERPROFILE%".to_string());
     }
@@ -488,6 +496,58 @@ pub fn to_windows_token(picked: &Path) -> Result<String, String> {
         text.push_str(segment);
     }
     Ok(text)
+}
+
+/// 用户目录(`%USERPROFILE%` 那个位置)到哪里为止 —— 返回**用户名后面那一段**的下标。
+/// 两种形状各试一次,都不像就是 `None`。
+fn user_dir_at(segments: &[&str]) -> Option<usize> {
+    // ① wine prefix:`…/drive_c/users/<用户名>/…`
+    if let Some(at) = segments.windows(3).position(|window| {
+        window[0].eq_ignore_ascii_case("drive_c")
+            && window[1].eq_ignore_ascii_case("users")
+            && !window[2].is_empty()
+    }) {
+        return Some(at + 3);
+    }
+    // ② 真 Windows:`<盘符>:\Users\<用户名>\…`(`C:\Users\<我>\AppData\Roaming\…`)
+    if segments.len() >= 3
+        && is_drive_letter(segments[0])
+        && segments[1].eq_ignore_ascii_case("users")
+        && !segments[2].is_empty()
+    {
+        return Some(3);
+    }
+    None
+}
+
+/// `C:` 这种盘符段。字符串切过之后它自己就是一段,所以 `strip_drive_letter` 剥完
+/// 什么都不剩 —— 这就是判据。
+fn is_drive_letter(segment: &str) -> bool {
+    strip_drive_letter(segment) == Some("")
+}
+
+/// 一个本机路径 → 档案里那种可移植的写法,**按「相对 → 令牌 → 绝对」的顺序试**
+/// (用户 2026-09-18 定的顺序),连同它对应的 kind 一起给出。
+///
+/// 这是「浏览…」挑完位置之后该走的那条路:挑回来的路径**自己**说明它属于哪一类,
+/// 而不是由用户事先在下拉框里选好 —— 选错了就翻译不成,而"翻译不成"在界面上的
+/// 表现是"点了没反应"。
+///
+/// 三条路的取舍:
+/// ① 在游戏目录里面 → [`SavePathKind::Relative`]:连盘符都不用记,换台机器照样对得上,
+///    所以最优先;
+/// ② 在用户目录里 → [`SavePathKind::Windows`] 令牌:跨系统,而且同一个令牌在 wine 与
+///    真 Windows 上指向同一个地方(见 [`resolve_windows_path`]);
+/// ③ 都不是 → [`SavePathKind::Absolute`]:只在这台机器上成立,所以**不假装**它可移植
+///    —— kind 本身就把这件事说清楚了,界面上那一栏也会跟着变成「绝对路径(仅本机)」。
+pub fn portable_save_path(game_dir: &Path, picked: &Path) -> (SavePathKind, String) {
+    if let Ok(relative) = to_relative_path(game_dir, picked) {
+        return (SavePathKind::Relative, relative);
+    }
+    if let Ok(token) = to_windows_token(picked) {
+        return (SavePathKind::Windows, token);
+    }
+    (SavePathKind::Absolute, picked.display().to_string())
 }
 
 /// The Windows user directory inside a prefix (`drive_c/users/<user>`).
@@ -734,6 +794,95 @@ mod tests {
         let err = to_windows_token(Path::new("/opt/saves/demo")).unwrap_err();
         assert!(err.contains("drive_c"), "{err}");
         assert!(err.contains("absolute"), "{err}");
+    }
+
+    /// 真 Windows 上从资源管理器挑出来的路径(`C:\Users\<我>\AppData\Roaming\…`)
+    /// 也要写得出令牌。
+    ///
+    /// 这条测试**在 Linux 上跑**,而它验的正是 Windows 才会出现的形状 —— 能做到这点
+    /// 是因为 `to_windows_token` 切的是字符而不是 `Path::components()`(`\` 在 Linux
+    /// 上不是分隔符)。在那之前这个形状必然翻译失败,于是真机上「浏览…」点了没反应。
+    #[test]
+    fn a_real_windows_profile_path_becomes_a_token_too() {
+        for (picked, written) in [
+            (
+                r"C:\Users\tester\AppData\Roaming\Game\save",
+                r"%APPDATA%\Game\save",
+            ),
+            (
+                r"C:\Users\tester\AppData\Local\Game",
+                r"%LOCALAPPDATA%\Game",
+            ),
+            (r"C:\Users\tester\Documents\Game", r"%DOCUMENTS%\Game"),
+            (r"C:\Users\tester\Saved Games\Game", r"%SAVEDGAMES%\Game"),
+            (
+                r"C:\Users\tester\Desktop\Game",
+                r"%USERPROFILE%\Desktop\Game",
+            ),
+            (r"C:\Users\tester", r"%USERPROFILE%"),
+            // 大小写不敏感:Windows 上这两段的写法不固定。
+            (r"C:\users\Tester\documents\Game", r"%DOCUMENTS%\Game"),
+            // 正斜杠也吃(配置里两种写法都出现过)。
+            ("C:/Users/tester/AppData/Roaming/Game", r"%APPDATA%\Game"),
+        ] {
+            assert_eq!(
+                to_windows_token(Path::new(picked)).unwrap(),
+                written,
+                "for {picked}"
+            );
+        }
+
+        // 盘符有,但不在用户目录里 —— 照样要拒,并且给出路。
+        let err = to_windows_token(Path::new(r"D:\Saves\Game")).unwrap_err();
+        assert!(err.contains("absolute"), "{err}");
+    }
+
+    /// 「浏览…」挑完之后翻译的三档顺序:**相对 → 令牌 → 绝对**(用户 2026-09-18 定的)。
+    ///
+    /// 这条顺序是"点浏览没反应"那个 bug 的正解:挑回来的路径自己决定用哪一档,而不是
+    /// 听用户在下拉框里预先选的那个 —— 选错了就翻译不成,而"翻译不成"在界面上等于
+    /// "什么都没发生"。
+    #[test]
+    fn a_picked_path_is_expressed_the_most_portable_way_first() {
+        let game_dir = Path::new("/games/demo");
+        let prefix = FakePrefix::new("portable", &["tester"]);
+        let user = prefix.path().join("drive_c/users/tester");
+
+        for (picked, kind, written) in [
+            // ① 在游戏目录里面 → 相对:换台机器照样对得上,所以最优先。
+            (
+                PathBuf::from("/games/demo/savedata"),
+                SavePathKind::Relative,
+                "savedata",
+            ),
+            // ② 在用户目录里 → 令牌(wine 的 prefix 形状)。
+            (
+                user.join("AppData/Roaming/Game"),
+                SavePathKind::Windows,
+                r"%APPDATA%\Game",
+            ),
+            // ② 真 Windows 的形状也走令牌(以前这一条会掉到第三档,见上面的测试)。
+            (
+                PathBuf::from(r"C:\Users\tester\Documents\Game"),
+                SavePathKind::Windows,
+                r"%DOCUMENTS%\Game",
+            ),
+            // ③ 都不是 → 绝对,并如实标成"仅本机"。
+            (
+                PathBuf::from("/opt/saves/demo"),
+                SavePathKind::Absolute,
+                "/opt/saves/demo",
+            ),
+            (
+                PathBuf::from(r"D:\Saves\Game"),
+                SavePathKind::Absolute,
+                r"D:\Saves\Game",
+            ),
+        ] {
+            let (got_kind, got) = portable_save_path(game_dir, &picked);
+            assert_eq!(got_kind, kind, "kind for {picked:?}");
+            assert_eq!(got, written, "text for {picked:?}");
+        }
     }
 
     #[test]
