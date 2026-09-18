@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use crate::config::SyncConfig;
 use crate::secrets::{Keyring, SecretKey};
+use crate::util::exec::Quiet;
 
 use super::super::archive::{self, Manifest, PackReport};
 use super::super::save_targets::SaveTarget;
@@ -91,7 +92,9 @@ impl RcloneZip {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             // 超时的传输不许在后台继续跑。
-            .kill_on_drop(true);
+            .kill_on_drop(true)
+            // 同 kopia:后台动作也不许在桌面上闪黑框(见 `util::exec`)。
+            .quiet();
 
         let child = command
             .spawn()

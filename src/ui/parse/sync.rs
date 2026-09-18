@@ -14,7 +14,10 @@ use super::*;
 /// that has none would promise persistence we do not have.
 pub(in crate::ui) fn credentials_label(has_key_id: bool, has_app_key: bool, store: &str) -> String {
     let stored = usize::from(has_key_id) + usize::from(has_app_key);
-    let mark = |saved: bool| if saved { "✓" } else { "✗ 未保存" };
+    // ⚠ 打勾用 `√`(U+221A)而不是 `✓`(U+2713):后者在微软雅黑里**没有字形**,
+    // 界面上渲染成豆腐块(用户 2026-09-18:「kopia 后面的字符无法正常显示」)。
+    // `√` 在 GBK 里就有,雅黑与 Noto Sans CJK 都覆盖;同理 `✗`(U+2717)→ `×`。
+    let mark = |saved: bool| if saved { "√" } else { "× 未保存" };
     format!(
         "{store}里现在有 {stored}/2 项：keyID {}，applicationKey {}。再次保存会覆盖上一套，\
          只进{store}，配置文件里没有任何明文。",
@@ -52,9 +55,9 @@ pub(in crate::ui) fn parse_sync_status(value: &Value) -> Result<SyncStatus, Stri
                             .map(|at| at.chars().take(16).collect::<String>())
                             .unwrap_or_default();
                         let mark = if last.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-                            "✓"
+                            "√"
                         } else {
-                            "✗"
+                            "×"
                         };
                         Some(format!("{mark} {when} {action} {detail}"))
                     }),
@@ -214,7 +217,7 @@ mod tests {
         assert_eq!(status.games.len(), 2);
         assert_eq!(status.games[0].locations, 2);
         let last = status.games[0].last_label();
-        assert!(last.contains("✓") && last.contains("上传"), "{last}");
+        assert!(last.contains("√") && last.contains("上传"), "{last}");
         assert_eq!(status.games[1].last_label(), "还没同步过");
 
         // A malformed payload is an error, not a silently empty page.

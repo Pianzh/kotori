@@ -225,13 +225,13 @@ export component SyncPage inherits ScrollView {
                     HorizontalLayout {
                         spacing: 8px;
                         StdButton {
-                            label: root.engine == "rclone" ? "rclone(zip) ✓" : "rclone(zip)";
+                            label: root.engine == "rclone" ? "rclone(zip) √" : "rclone(zip)";
                             button-width: 124px;
                             button-enabled: !root.busy && root.engine != "rclone";
                             clicked => { root.engine-selected("rclone"); }
                         }
                         StdButton {
-                            label: root.engine == "kopia" ? "kopia ✓" : "kopia";
+                            label: root.engine == "kopia" ? "kopia √" : "kopia";
                             button-width: 96px;
                             button-enabled: !root.busy && root.engine != "kopia";
                             clicked => { root.engine-selected("kopia"); }

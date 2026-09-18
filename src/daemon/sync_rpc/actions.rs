@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use crate::config::{SyncConfig, SyncEngine};
 use crate::secrets::Keyring;
 
-use super::{Daemon, GameOutcome, PULL_TIMEOUT, SETTLE_DELAY, sync};
+use super::{CHECK_TIMEOUT, Daemon, GameOutcome, PULL_TIMEOUT, SETTLE_DELAY, sync};
 
 /// 同步现在为什么跑不起来；一切就绪时是 `None`。
 ///
@@ -54,10 +54,25 @@ pub(super) fn readiness_problem(
 
 impl Daemon {
     /// Check credentials, bucket and write access.
+    ///
+    /// 「测试连接」是个按钮,用户盯着它等 —— 所以它**必须**在有限时间内给出答案。
+    /// 底下那三步(kopia 连桶、必要时建仓库、列一次快照)各自的上限是 300 秒的
+    /// [`CHECK_TIMEOUT`] 之外的 [`crate::sync::runner::COMMAND_TIMEOUT`],叠起来能把
+    /// 按钮灰着转十几分钟;界面那边只会显示一句"正在测试连接…",跟卡住没区别
+    /// (用户 2026-09-18 报的"点了没反应")。这里给它一个**明显短于一次真实同步**的
+    /// 总预算,到点如实说超时。
     pub(in crate::daemon) async fn rpc_sync_test(&self) -> Result<Value, String> {
         let settings = self.config.read().await.sync.clone();
         let runner = self.sync_runner(&settings)?;
-        let remote = runner.check().await.map_err(|e| e.to_string())?;
+        let remote = tokio::time::timeout(CHECK_TIMEOUT, runner.check())
+            .await
+            .map_err(|_| {
+                format!(
+                    "测试连接超过 {} 秒没有回应 —— 桶名/端点/凭据对不对?网络通不通?",
+                    CHECK_TIMEOUT.as_secs()
+                )
+            })?
+            .map_err(|e| e.to_string())?;
         Ok(json!({ "ok": true, "remote": remote }))
     }
 

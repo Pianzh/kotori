@@ -85,6 +85,13 @@ pub(super) fn fits(ui: &Ui, type_names: &[&str]) {
     }
 }
 
+/// 现在这个窗口里有几个某种类型的元素。
+///
+/// 用来验"某一整块在某个条件下**根本不在树里**" —— 那种断言量不了几何,只能数。
+pub(super) fn count(ui: &Ui, type_name: &str) -> usize {
+    i_slint_backend_testing::ElementHandle::find_by_element_type_name(&ui.window, type_name).count()
+}
+
 #[test]
 fn library_and_sync_pages_render_without_a_display() {
     let mut ui = ui();
@@ -257,7 +264,7 @@ fn library_and_sync_pages_render_without_a_display() {
             name: "Demo".into(),
             locations: 0,
             problem: Some("存档位置「%NOPE%」解析不了".into()),
-            last: Some("✗ 2026-09-11T10:15 ✓".into()),
+            last: Some("× 2026-09-11T10:15 √".into()),
         }],
         ..sync_status_fixture()
     });

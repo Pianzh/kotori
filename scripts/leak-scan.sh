@@ -262,7 +262,13 @@ scan_staged() {   # 暂存区(逐行解析 `diff --cached --raw`,路径在 TAB �
         [ -n "$line" ] || continue
         meta="${line%%$'\t'*}"; path="${line#*$'\t'}"
         sha="$(printf '%s' "$meta" | awk '{print $4}')"
-        case "$sha" in ""|0000000000000000000000000000000000000000) continue ;; esac
+        # 全 0 的 sha = 这个文件在暂存之后**不存在**(删除),没有对象可查。
+        # ⚠ 长度不能写死成 40:`--raw` 默认会缩写,不存在的那个对象给的是 **7 个 0**
+        # (`:100644 000000 7fdbaed 0000000 D<TAB>src/wine.rs`)。写死 40 个 0 的话
+        # 这条 guard 匹配不上,脚本会拿 "0000000" 去 `cat-file`,报
+        # "Not a valid object name 0000000" —— **任何删掉一个文件的提交都推不出去**。
+        # 2026-09-18 拆 wine.rs(删掉 src/wine.rs)时撞到。
+        case "$sha" in ""|*[!0]*) ;; *) continue ;; esac
         n_blobs=$((n_blobs + 1))
         scan_blob "暂存区" "$path" "$sha"
     done < <(g diff --cached --raw)

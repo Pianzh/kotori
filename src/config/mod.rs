@@ -114,6 +114,20 @@ impl SavePathKind {
             Self::Relative
         }
     }
+
+    /// 配置与界面里用的那个拼写(`"windows"` / `"relative"` / `"absolute"`)。
+    ///
+    /// 与 serde 的写法**必须逐字一致**(`rename_all = "lowercase"`)—— 界面那边拿
+    /// 字符串装 kind(`SAVE_PATH_KINDS` 与下拉框下标都靠它),两边对不上就是静默地把
+    /// 一个位置存成另一种意思。显式写出来是因为 serde 那边的改动不会在这里报错,
+    /// 所以配一条测试盯着(见文件末尾 `as_str_matches_what_serde_writes`)。
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Relative => "relative",
+            Self::Absolute => "absolute",
+        }
+    }
 }
 
 /// `C:\...` / `c:/...` — a Windows drive path.
@@ -257,6 +271,19 @@ impl Default for DaemonConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 界面拿字符串装 kind,配置拿 serde 装 —— 两种写法必须一模一样。
+    #[test]
+    fn as_str_matches_what_serde_writes() {
+        for kind in [
+            SavePathKind::Windows,
+            SavePathKind::Relative,
+            SavePathKind::Absolute,
+        ] {
+            let written = serde_json::to_value(kind).unwrap();
+            assert_eq!(written, serde_json::Value::from(kind.as_str()), "{kind:?}");
+        }
+    }
 
     fn temp_path(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

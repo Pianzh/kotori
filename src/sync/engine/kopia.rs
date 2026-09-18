@@ -31,6 +31,7 @@ use std::time::Duration;
 
 use crate::config::SyncConfig;
 use crate::secrets::{Keyring, SecretKey};
+use crate::util::exec::Quiet;
 
 use super::super::SyncError;
 use super::super::archive::{self, Manifest, PackReport};
@@ -200,7 +201,10 @@ impl Kopia {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true);
+            .kill_on_drop(true)
+            // 同步是后台动作,但它起的是个控制台程序 —— 没有这一下,每同步一次
+            // 用户桌面上就闪一个黑框(见 `util::exec`)。
+            .quiet();
 
         let child = command
             .spawn()

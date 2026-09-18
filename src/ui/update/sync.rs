@@ -55,7 +55,7 @@ impl App {
             }
             Message::SyncEngineSelected(engine) => {
                 // **点下去就生效**：引擎是二选一的开关，不该还要用户再去找一个「保存设置」
-                // ——从前就是那样，界面上按钮立刻变成「kopia ✓」，而 config 里一个字节都
+                // ——从前就是那样，界面上按钮立刻变成「kopia √」，而 config 里一个字节都
                 // 没动，重开 GUI 就又回到 rclone（用户 2026-09-16 报的就是这个）。
                 //
                 // 只提交 engine 一个字段：用户手上那些还没保存的编辑（bucket、prefix…）
@@ -200,7 +200,11 @@ impl App {
             }
             Message::SyncTest => {
                 self.sync_form.busy = true;
-                self.sync_form.msg = None;
+                // 这一条**必须**先给句话:它背后可能是一次真的网络往返(kopia 连桶、
+                // 建仓库、列一次快照),最长能到几十秒,而 busy 只把按钮变灰 ——
+                // 用户看到的就是"点了没反应"(2026-09-18 报的)。「立即同步全部」一直
+                // 都有这句,是这一个漏了。
+                self.sync_form.msg = Some("正在测试连接…".to_string());
                 let socket = self.daemon_socket.clone();
                 Task::perform(async move { sync_test(&socket).await }, Message::SyncTested)
             }

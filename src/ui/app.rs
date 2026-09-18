@@ -370,35 +370,30 @@ impl App {
                 return self.schedule_auto_save();
             }
             PathTarget::SavePath(index) => {
-                // 挑选的位置得先翻译成档案里那种写法(相对游戏根目录 / 前缀里的令牌)
-                // —— 翻译不了就什么都不改:存一个假的路径比存不下去更糟。
-                let translated = {
+                // 挑回来的路径**自己**说明它属于哪一类(相对 → 令牌 → 绝对),
+                // 所以这里顺手把类型也改对,再按那一类翻译。
+                //
+                // 从前是拿**当前选中的类型**去翻译,类型与路径不符就报错、什么都不改 ——
+                // 而真 Windows 上挑回来的必然是 `C:\Users\…`,当时那个 windows 分支只认
+                // wine 的 `drive_c/users/…` 形状,于是"点浏览没反应"(BUG-REPORT
+                // 「存档位置的浏览有问题」)。顺序与取舍见 `wine::portable_save_path`。
+                let (kind, value) = {
                     let Some(draft) = self.draft.as_ref() else {
                         return Task::none();
                     };
-                    let Some(entry) = draft.save_paths.get(index) else {
-                        return Task::none();
-                    };
-                    match entry.kind.as_str() {
-                        "relative" => {
-                            crate::wine::to_relative_path(Path::new(draft.game_dir.trim()), picked)
-                        }
-                        "windows" => crate::wine::to_windows_token(picked),
-                        _ => Ok(text.clone()),
-                    }
-                };
-                let value = match translated {
-                    Ok(value) => value,
-                    Err(reason) => {
-                        self.report_saved(reason, false);
+                    if draft.save_paths.get(index).is_none() {
                         return Task::none();
                     }
+                    let (kind, text) =
+                        crate::wine::portable_save_path(Path::new(draft.game_dir.trim()), picked);
+                    (kind.as_str().to_string(), text)
                 };
                 if let Some(entry) = self
                     .draft
                     .as_mut()
                     .and_then(|draft| draft.save_paths.get_mut(index))
                 {
+                    entry.kind = kind;
                     entry.path = value.clone();
                 }
                 self.picked_path = Some((target, value));
@@ -492,7 +487,7 @@ mod tests {
     /// 点「kopia」必须**当场提交**，而不是只改表单等「保存设置」。
     ///
     /// 回归测试：从前 `SyncEngineSelected` 只改 `sync_form.engine`，而按钮上立刻显示成
-    /// 「kopia ✓」—— 用户以为选了，config 里一个字节都没变，重开 GUI 又回到 rclone
+    /// 「kopia √」—— 用户以为选了，config 里一个字节都没变，重开 GUI 又回到 rclone
     /// （2026-09-16 报的）。所以这里断言的是"这一次点击**产生了一次提交**"，而不是
     /// "表单变了" —— 表单变了正是当初唯一发生的事情，它证明不了任何事。
     #[test]
@@ -714,22 +709,26 @@ mod tests {
             "savedata/backup"
         );
 
-        // 挑到游戏目录外面:什么都不改,而且要说清怎么办。
+        // 挑到游戏目录外面:退到下一档。先试令牌(不在用户目录里,不成),再退成
+        // **绝对路径** —— 用户点了浏览总得有个结果,而"这条只在这台机器上成立"由 kind
+        // 那一栏自己说清楚(它会从 relative 变成 absolute)。
+        //
+        // ⚠ 这条断言 2026-09-18 变了:从前是"翻译不了就什么都不改 + 报一句红字",
+        // 那个规矩在真机上表现成"点了浏览没反应"(见 `wine::portable_save_path`)。
         app.apply_picked_path(PathTarget::SavePath(0), Path::new("/elsewhere/save"));
-        assert_eq!(
-            app.draft.as_ref().unwrap().save_paths[0].path,
-            "savedata/backup",
-            "翻译不过来就不许改"
+        let entry = &app.draft.as_ref().unwrap().save_paths[0];
+        assert_eq!(entry.kind, "absolute");
+        assert_eq!(entry.path, "/elsewhere/save");
+
+        // 真 Windows 上从资源管理器挑回来的形状 —— 这条是那个 bug 的正面:
+        // 挑回来必然长这样,而它**必须**自己认出来是令牌形态,并把类型一起改对。
+        app.apply_picked_path(
+            PathTarget::SavePath(0),
+            Path::new(r"C:\Users\tester\AppData\Roaming\Game\save"),
         );
-        assert!(!app.saved_ok, "那行小字得是红的");
-        assert!(
-            app.saved_msg
-                .as_deref()
-                .unwrap_or_default()
-                .contains("absolute"),
-            "{:?}",
-            app.saved_msg
-        );
+        let entry = &app.draft.as_ref().unwrap().save_paths[0];
+        assert_eq!(entry.kind, "windows");
+        assert_eq!(entry.path, r"%APPDATA%\Game\save");
 
         // 添加游戏页的两个框走各自的字段,不进草稿,也不用那个推给页面的令牌。
         let stale = app.picked_path.clone();
@@ -1012,5 +1011,19 @@ mod tests {
             "要说清后果:{:?}",
             app.sync_form.msg
         );
+    }
+
+    /// 「测试连接」点下去必须**立刻**有一句话可说。
+    ///
+    /// 它背后是一次真的网络往返(连桶 / 必要时建仓库 / 列一次快照),而 `busy` 只把按钮
+    /// 变灰 —— 从前这里把 msg 清成了 `None`,于是最长几分钟里界面毫无动静,用户看到的
+    /// 就是"点了没反应"(2026-09-18 报的)。「立即同步全部」一直都有这句,是这一个漏了。
+    #[test]
+    fn testing_the_connection_says_something_right_away() {
+        let (mut app, _boot) = App::new();
+        let _ = app.update(Message::SyncTest);
+        assert!(app.sync_form.busy, "按下去就该进忙状态");
+        let msg = app.sync_form.msg.clone().unwrap_or_default();
+        assert!(msg.contains("测试连接"), "{msg}");
     }
 }
