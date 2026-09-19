@@ -113,6 +113,34 @@ fn a_second_entry_with_the_same_name_gets_a_numeric_suffix() {
 }
 
 #[test]
+fn directories_whose_ids_collide_are_all_added_not_swallowed() {
+    // `a&b` / `a—b` / `a-b` normalize to the same id `a-b`. The old dedup keyed
+    // on the id, so the first entry won and the rest were silently dropped
+    // ("No new games added", exit 0). They are different games: dedup runs on
+    // the exe, collisions get a suffix.
+    let root = TempDir::new("id-collide");
+    let mut found = Vec::new();
+    for name in ["a&b", "a—b", "a-b"] {
+        let dir = root.path().join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("game.exe"), b"").unwrap();
+        found.push(game_entry(&dir, dir.join("game.exe")));
+    }
+
+    let mut config = crate::config::Config::default();
+    let added = add_games(&mut config, found.clone());
+
+    assert_eq!(added.len(), 3, "三条都要进来: {added:?}");
+    let mut ids: Vec<&str> = added.iter().map(|(id, _)| id.as_str()).collect();
+    ids.sort();
+    assert_eq!(ids, vec!["a-b", "a-b-2", "a-b-3"]);
+
+    // A re-scan of the same exes adds nothing (the tuned profiles survive).
+    let again = add_games(&mut config, found);
+    assert!(again.is_empty(), "同一个 exe 不该加第二条: {again:?}");
+}
+
+#[test]
 fn an_exe_already_used_by_another_entry_warns_but_stays_allowed() {
     let dir = TempDir::new("duplicate-exe");
     dir.with(&["game.exe"]);

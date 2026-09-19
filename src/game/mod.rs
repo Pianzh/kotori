@@ -177,8 +177,12 @@ pub fn add_from_dir(directory: &Path) -> anyhow::Result<Vec<(String, GameConfig)
     Ok(added)
 }
 
-/// Insert scanned games into `config`, skipping ids that already exist so that
-/// re-scanning never overwrites a tuned profile.
+/// Insert scanned games into `config`. Dedup runs on the **executable**: a
+/// re-scan of the same directory finds the same exe and is skipped (so a tuned
+/// profile survives), while different directories whose names normalize to the
+/// same id (`a&b` / `a—b` / `a-b` all become `a-b`) are **different games** —
+/// they get a suffixed id and are all added, instead of being silently
+/// swallowed by an id collision (BUG-6, measured 2026-09-19).
 ///
 /// Pure: the caller owns persistence (the daemon persists atomically, the CLI
 /// writes the file directly). Returns what was actually added.
@@ -188,11 +192,16 @@ pub fn add_games(
 ) -> Vec<(String, GameConfig)> {
     let mut added = Vec::new();
     for game in found {
-        let id = generate_game_id(&game.name);
-        if let std::collections::hash_map::Entry::Vacant(slot) = config.games.entry(id.clone()) {
-            slot.insert(game.clone());
-            added.push((id, game));
+        if config
+            .games
+            .values()
+            .any(|existing| existing.exe_path == game.exe_path)
+        {
+            continue;
         }
+        let id = generate_unique_game_id(config, &game.name);
+        config.games.insert(id.clone(), game.clone());
+        added.push((id, game));
     }
     added
 }

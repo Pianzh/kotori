@@ -223,7 +223,7 @@ impl Daemon {
         let (game, wine_prefix, prefix_source) = {
             let config = self.config.read().await;
             let Some(game) = config.games.get(id).cloned() else {
-                return Err(format!("Game not found: {id}"));
+                return Err(format!("配置中找不到游戏: {id}"));
             };
             let (prefix, source) = crate::wine::resolve_prefix(&game, &config);
             (game, prefix, source)
