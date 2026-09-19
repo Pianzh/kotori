@@ -32,6 +32,11 @@ pub struct App {
     pub(super) new_name: String,
     pub(super) new_game_dir: String,
     pub(super) new_exe: String,
+    /// exe 联动**自动填过**的根目录与名字:字段为空、或者还等于上次自动填的值时,
+    /// 才跟着新 exe 重填 —— 用户自己改过的值不动(用户 2026-09-19:"如果不对再由
+    /// 用户自行修改")。
+    pub(super) auto_filled_dir: String,
+    pub(super) auto_filled_name: String,
     pub(super) creating: bool,
     pub(super) create_msg: Option<String>,
     /// Settings tab: wine prefix.
@@ -100,6 +105,8 @@ impl App {
                 new_name: String::new(),
                 new_game_dir: String::new(),
                 new_exe: String::new(),
+                auto_filled_dir: String::new(),
+                auto_filled_name: String::new(),
                 creating: false,
                 create_msg: None,
                 wine_prefix_input: String::new(),
