@@ -81,10 +81,14 @@ ashpd = { version = "0.13.13", features = ["file_chooser", "tokio"] }
 # `src/picker.rs`),不引 rfd 的 GTK / portal 后端。
 [target.'cfg(windows)'.dependencies]
 rfd = { version = "0.15", default-features = false }
-# 只要一个 `AttachConsole`。可执行文件在 Windows 上是 **windows 子系统**(见
-# `src/main.rs` 顶部的 `windows_subsystem`),双击不会弹出控制台黑框;但 CLI 用法
-# (`kotori status` 之类)在终端里跑还得有输出,所以要附到父进程的控制台上。
-windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+# 两个入口:`AttachConsole`(CLI 在终端里跑得有输出,见 `src/main.rs` 顶部的
+# `windows_subsystem`)与 Toolhelp 快照(进程观测:一份快照回答"谁在跑、谁是
+# 谁的孩子",见 `src/process/windows.rs`)。
+windows-sys = { version = "0.61", features = [
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_Foundation",
+] }
 
 # The GUI stack is unusably slow when compiled without optimisation: a renderer
 # and a text shaper both do per-frame work, and at opt-level 0 a frame can take

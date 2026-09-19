@@ -1,4 +1,8 @@
-//! Process detection, used to tell when a watched game is running.
+//! Process detection:回答「这个游戏还在跑吗、它的进程树里都有谁」。
+//!
+//! 按平台拆成两个实现(`unix.rs` 轮询 `/proc`,`windows.rs` 打一份 Toolhelp 快照),
+//! 匹配逻辑与「游戏 vs wine 管道进程」的判定留在本文件 —— 它们平台无关,测试也
+//! 因此两边都能跑。对外的函数签名与拆分前一致,调用点一行都不用改。
 //!
 //! Wine process names are awkward to match:
 //!   * `/proc/<pid>/comm` is truncated to 15 bytes (`TASK_COMM_LEN`), so
@@ -7,9 +11,19 @@
 //!     while native helpers keep a Unix path.
 //!
 //! So both are inspected, case-insensitively, after stripping any directory
-//! part and trying the truncated form as well.
+//! part and trying the truncated form as well. (Windows has neither problem —
+//! the snapshot reports the full exe name — and simply passes it as `comm`.)
 
 use std::collections::HashMap;
+
+#[cfg(unix)]
+mod unix;
+#[cfg(unix)]
+pub use unix::{descendants, find_pids, live_game_processes};
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::{descendants, find_pids, live_game_processes};
 
 /// `C:\games\x\Game.exe` / `/usr/bin/wine` -> `game.exe` / `wine`
 pub fn normalize_process_name(name: &str) -> String {
@@ -39,49 +53,27 @@ fn truncated(name: &str) -> String {
     out
 }
 
-/// Does one process (already read from `/proc`) match the wanted name?
-fn matches(needle: &str, comm: &str, cmdline: &str) -> bool {
+/// Does one process match the wanted name?
+///
+/// `seen` is the process name the platform reports — `/proc/<pid>/comm` on
+/// Linux (truncated to 15 bytes) or the Toolhelp exe name on Windows
+/// (complete). `cmdline` is the NUL-separated command line (empty on Windows):
+/// wine rewrites `argv[0]` to a Windows path, so the first element is matched
+/// too.
+fn matches(needle: &str, seen: &str, cmdline: &str) -> bool {
     let needle = normalize_process_name(needle);
     if needle.is_empty() {
         return false;
     }
 
-    let comm = comm.trim().to_lowercase();
-    if !comm.is_empty() && (comm == needle || comm == truncated(&needle)) {
+    let seen = seen.trim().to_lowercase();
+    if !seen.is_empty() && (seen == needle || seen == truncated(&needle)) {
         return true;
     }
 
     let argv0 = cmdline.split('\0').next().unwrap_or_default();
     let argv0 = normalize_process_name(argv0);
     !argv0.is_empty() && argv0 == needle
-}
-
-/// PIDs of running processes whose name matches `name`.
-pub fn find_pids(name: &str) -> Vec<i32> {
-    let mut pids = Vec::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return pids;
-    };
-
-    for entry in entries.flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<i32>().ok())
-        else {
-            continue;
-        };
-
-        let dir = entry.path();
-        let comm = std::fs::read_to_string(dir.join("comm")).unwrap_or_default();
-        let cmdline = std::fs::read_to_string(dir.join("cmdline")).unwrap_or_default();
-        if matches(name, &comm, &cmdline) {
-            pids.push(pid);
-        }
-    }
-
-    pids.sort_unstable();
-    pids
 }
 
 /// Is a process with this name running?
@@ -110,58 +102,6 @@ pub async fn wait_until_gone(name: &str) {
             return;
         }
     }
-}
-
-/// Every live descendant of `root`.
-///
-/// Built from one pass over `/proc` instead of following parent links upwards
-/// from each candidate: this runs exactly when a session's tree is falling apart,
-/// and a process whose parent has already died is still listed under that old
-/// parent here — which is the only way to still find it.
-pub fn descendants(root: i32) -> Vec<i32> {
-    if root <= 0 {
-        return Vec::new();
-    }
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-
-    let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
-    for entry in entries.flatten() {
-        let Some(pid) = entry
-            .file_name()
-            .to_str()
-            .and_then(|name| name.parse::<i32>().ok())
-        else {
-            continue;
-        };
-        if let Some(parent) = parent_of(pid) {
-            children.entry(parent).or_default().push(pid);
-        }
-    }
-
-    let mut found = Vec::new();
-    let mut queue = vec![root];
-    while let Some(pid) = queue.pop() {
-        for &child in children.get(&pid).into_iter().flatten() {
-            found.push(child);
-            queue.push(child);
-        }
-    }
-    found
-}
-
-/// `PPid` from `/proc/<pid>/status`.
-///
-/// The `status` file rather than `stat`: `stat`'s second field is the command
-/// name in parentheses, and a command name may itself contain spaces and
-/// parentheses, which is a classic way to misparse it.
-fn parent_of(pid: i32) -> Option<i32> {
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("PPid:"))
-        .and_then(|rest| rest.trim().parse::<i32>().ok())
 }
 
 /// Processes that belong to wine's plumbing or to gamescope, not to a game.
@@ -194,20 +134,35 @@ pub fn is_plumbing(name: &str) -> bool {
     PLUMBING.contains(&normalize_process_name(name).as_str())
 }
 
-/// Descendants of `root` that look like a game: pid and `/proc/<pid>/comm`.
+/// Every live descendant of `root`, as (pid, name).
 ///
-/// The second opinion before kotori ends a session on the strength of a single
-/// process name: a launcher hands off to the real game and exits first, and the
-/// handoff target is what turns up here.
-pub fn live_game_processes(root: i32) -> Vec<(i32, String)> {
-    descendants(root)
-        .into_iter()
-        .filter_map(|pid| {
-            let name = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
-            let name = name.trim().to_string();
-            (!name.is_empty() && !is_plumbing(&name)).then_some((pid, name))
-        })
-        .collect()
+/// Both platforms answer from **one** pass over the process table instead of
+/// following parent links upwards from each candidate: this runs exactly when a
+/// session's tree is falling apart, and a process whose parent has already died
+/// is still listed under that old parent here — which is the only way to still
+/// find it.
+pub(crate) fn collect_descendants(
+    root: i32,
+    table: &[(i32, i32, String)],
+) -> (Vec<i32>, Vec<(i32, String)>) {
+    let mut children: HashMap<i32, Vec<i32>> = HashMap::new();
+    for (pid, parent, _) in table {
+        children.entry(*parent).or_default().push(*pid);
+    }
+
+    let mut pids = Vec::new();
+    let mut named = Vec::new();
+    let mut queue = vec![root];
+    while let Some(pid) = queue.pop() {
+        for &child in children.get(&pid).into_iter().flatten() {
+            pids.push(child);
+            if let Some((_, _, name)) = table.iter().find(|(p, _, _)| *p == child) {
+                named.push((child, name.clone()));
+            }
+            queue.push(child);
+        }
+    }
+    (pids, named)
 }
 
 #[cfg(test)]
@@ -282,38 +237,6 @@ mod tests {
     }
 
     #[test]
-    fn finds_descendants_and_calls_the_game_one_a_game() {
-        let mut child = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep");
-        let pid = child.id() as i32;
-        let own = std::process::id() as i32;
-
-        assert!(
-            descendants(own).contains(&pid),
-            "子进程 {pid} 应该出现在自己的后代里"
-        );
-
-        // `spawn` returns on fork, before the child has exec'd, so its name can
-        // briefly still be this test binary — poll instead of asserting at once.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !live_game_processes(own)
-            .iter()
-            .any(|(p, name)| *p == pid && name == "sleep")
-        {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "spawned sleep was never reported as a game process"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-
-        child.kill().unwrap();
-        child.wait().unwrap();
-    }
-
-    #[test]
     fn does_not_match_unrelated_processes() {
         assert!(!matches("game.exe", "wineserver", "/usr/bin/wineserver\0"));
         assert!(!matches(
@@ -325,47 +248,34 @@ mod tests {
         assert!(!matches("", "game.exe", "game.exe\0"));
     }
 
-    #[test]
-    fn finds_this_test_binary_and_a_spawned_process() {
-        // Our own process is visible under its own name...
-        let own = std::process::Command::new("sleep")
-            .arg("30")
-            .spawn()
-            .expect("spawn sleep");
-        let pid = own.id() as i32;
-
-        // `spawn` returns on fork, before the child has necessarily exec'd, so
-        // its name can briefly still be this test binary — poll instead of
-        // asserting immediately.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while !find_pids("sleep").contains(&pid) {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "spawned sleep (pid {pid}) never showed up as `sleep`"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert!(is_running("sleep"));
-
-        // ...and disappears once it is gone.
-        let mut own = own;
-        own.kill().unwrap();
-        own.wait().unwrap();
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while find_pids("sleep").contains(&pid) && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-        }
-        assert!(
-            !find_pids("sleep").contains(&pid),
-            "killed process still reported as running"
-        );
-    }
-
     #[tokio::test]
     async fn waiting_for_a_missing_process_returns_immediately() {
         let started = std::time::Instant::now();
         wait_until_gone("kotori-definitely-not-running").await;
         assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+
+    #[test]
+    fn descendants_come_from_one_pass_and_keep_their_names() {
+        // The shape both platform implementations share: one process table,
+        // BFS from the root, names carried along for the plumbing check.
+        let table = vec![
+            (1, 0, "init".to_string()),
+            (10, 1, "shell".to_string()),
+            (11, 10, "game.exe".to_string()),
+            (12, 10, "winedevice.exe".to_string()),
+            (13, 11, "game.exe".to_string()),
+            (14, 99, "unrelated".to_string()),
+        ];
+        let (pids, named) = collect_descendants(10, &table);
+        assert_eq!(pids, vec![11, 12, 13]);
+        assert_eq!(
+            named,
+            vec![
+                (11, "game.exe".to_string()),
+                (12, "winedevice.exe".to_string()),
+                (13, "game.exe".to_string())
+            ]
+        );
     }
 }
