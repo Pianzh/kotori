@@ -281,8 +281,15 @@ impl App {
             Message::CreateFinished(result) => {
                 self.creating = false;
                 match result {
-                    Ok(id) => {
-                        self.create_msg = Some(format!("已添加（ID: {id}），可在游戏库里继续配置"));
+                    Ok((id, warning)) => {
+                        // 重复 exe 不挡添加,但要让用户看到那三条隐患(云端版本
+                        // 历史劈半 / 同名观测混淆 / 并发写同一存档目录)。
+                        let mut message = format!("已添加（ID: {id}），可在游戏库里继续配置");
+                        if let Some(text) = warning {
+                            message.push_str("\n\n");
+                            message.push_str(&text);
+                        }
+                        self.create_msg = Some(message);
                         self.new_name.clear();
                         self.new_game_dir.clear();
                         self.new_exe.clear();

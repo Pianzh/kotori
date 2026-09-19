@@ -96,7 +96,7 @@ pub enum Message {
     NewGameDirChanged(String),
     NewExeChanged(String),
     CreateRequested,
-    CreateFinished(Result<String, String>),
+    CreateFinished(Result<(String, Option<String>), String>),
     WinePrefixChanged(String),
     SaveWinePrefix,
     ClearWinePrefix,

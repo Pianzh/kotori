@@ -45,18 +45,18 @@ fn manual_add_and_wine_settings_over_ipc() {
     assert!(created["scale_profile"]["output_width"].is_null());
     assert!(created["scale_profile"]["output_height"].is_null());
 
-    // Duplicates, a missing exe and a bad game dir are refused.
+    // A duplicate name is no longer refused (2026-09-19: two entries for one
+    // game are legal — "警告但不阻止"): the second one gets a suffixed id and
+    // the response carries a warning about the shared exe.
     let response = fixture.rpc(
         "game.create",
         json!({ "name": "My Game", "exe_path": exe, "game_dir": game_dir }),
     );
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("已存在同名"),
-        "{response}"
-    );
+    assert_eq!(response["result"]["id"], "my-game-2", "{response}");
+    let warning = response["result"]["warning"].as_str().unwrap().to_string();
+    assert!(warning.contains("My Game"), "{warning}");
+    assert!(warning.contains("允许"), "{warning}");
+    // A missing exe and a bad game dir are still refused.
     let response = fixture.rpc(
         "game.create",
         json!({ "name": "Ghost", "exe_path": "/nope/ghost.exe" }),

@@ -94,15 +94,15 @@ impl Daemon {
                 .unwrap_or_else(|| PathBuf::from(".")),
         };
 
-        let id = crate::game::generate_game_id(&name);
-        if id.is_empty() {
-            return Err("这个名称无法生成合法的游戏 ID，请换一个".to_string());
-        }
-
         self.mutate_config(|config| {
-            if config.games.contains_key(&id) {
-                return Err(format!("已存在同名游戏（ID: {id}）"));
+            // 同名冲突在 `generate_unique_game_id` 里已经用后缀解决了 —— 同一款
+            // 游戏建两条档案是合法需求,报错只会把它挡在门外。id 在写锁内生成,
+            // 两个并发 create 不会抢到同一个。
+            let id = crate::game::generate_unique_game_id(config, &name);
+            if id.is_empty() {
+                return Err("这个名称无法生成合法的游戏 ID，请换一个".to_string());
             }
+            let warning = crate::game::duplicate_exe_warning(config, &new_game.exe_path, None);
             config.games.insert(
                 id.clone(),
                 crate::config::GameConfig {
@@ -118,8 +118,16 @@ impl Daemon {
                     created_at: chrono::Utc::now(),
                 },
             );
-            tracing::info!("game.create: {id}");
-            Ok(json!({ "id": id, "name": name }))
+            if let Some(text) = &warning {
+                tracing::info!("game.create: {id} (duplicate exe warning: {text})");
+            } else {
+                tracing::info!("game.create: {id}");
+            }
+            let mut result = json!({ "id": id, "name": name });
+            if let Some(text) = warning {
+                result["warning"] = json!(text);
+            }
+            Ok(result)
         })
         .await
     }

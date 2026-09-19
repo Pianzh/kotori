@@ -395,5 +395,62 @@ pub fn generate_game_id(dir_name: &str) -> String {
         .join("-")
 }
 
+/// [`generate_game_id`], but collisions get a numeric suffix (`name-2`, …)
+/// instead of being an error: two library entries for the same game are legal
+/// (two launch argument sets, two save-path sets, one launching and one
+/// watch-only entry), and a UUID would fix the collision by making the id
+/// unreadable — it also shows up in the cloud layout.
+pub fn generate_unique_game_id(config: &crate::config::Config, name: &str) -> String {
+    let base = generate_game_id(name);
+    let mut candidate = base.clone();
+    let mut n = 2;
+    while config.games.contains_key(&candidate) {
+        candidate = format!("{base}-{n}");
+        n += 1;
+    }
+    candidate
+}
+
+/// Why adding another entry for an exe that is already in the library deserves
+/// a warning (still allowed — "警告但不阻止", user call 2026-09-19). Three ways
+/// a duplicate bites, all silent at add time:
+///
+/// 1. cloud versions are laid out per game id, so two ids for one game split
+///    the version history in half and a restore cannot know which half wins;
+/// 2. `process_name` watching is global by process name, so with two entries
+///    sharing it, "the game exited" no longer belongs to one session;
+/// 3. both entries running at once write the same local save directory.
+///
+/// Paths are compared canonicalized (resolving symlinks; both sides fall back
+/// to the literal path when that fails) so the same file under a different
+/// spelling still counts. `exclude_id` lets a caller that already inserted the
+/// new entry skip itself.
+pub fn duplicate_exe_warning(
+    config: &crate::config::Config,
+    exe_path: &Path,
+    exclude_id: Option<&str>,
+) -> Option<String> {
+    let wanted = std::fs::canonicalize(exe_path).unwrap_or_else(|_| exe_path.to_path_buf());
+    let same: Vec<&str> = config
+        .games
+        .iter()
+        .filter(|(id, game)| {
+            Some(id.as_str()) != exclude_id
+                && std::fs::canonicalize(&game.exe_path).unwrap_or_else(|_| game.exe_path.clone())
+                    == wanted
+        })
+        .map(|(_, game)| game.name.as_str())
+        .collect();
+    if same.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "可执行文件已被这些档案使用：{}。同一个 exe 建多条档案是允许的（两套启动参数、\
+         一条启动一条仅观测等），但注意：云端的版本历史按档案分开存，观测同一进程名时\
+         分不清谁在跑，两边同时运行还会写同一个本地存档目录。",
+        same.join("、")
+    ))
+}
+
 #[cfg(test)]
 mod tests;

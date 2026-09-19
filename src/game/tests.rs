@@ -92,6 +92,69 @@ fn game_ids_are_stable_and_filesystem_safe() {
 }
 
 #[test]
+fn a_second_entry_with_the_same_name_gets_a_numeric_suffix() {
+    // Two library entries for one game are legal (two launch sets, two save
+    // sets, one launching and one watch-only) — the id collides, so the second
+    // one gets `-2` instead of the add being refused. A UUID would fix the
+    // collision by making the id unreadable, and the id shows up in the cloud
+    // layout.
+    let mut config = crate::config::Config::default();
+    let first = generate_unique_game_id(&config, "3days");
+    config.games.insert(first, game_config_named("3days"));
+
+    assert_eq!(generate_unique_game_id(&config, "3days"), "3days-2");
+    // ...and the third one skips past the second.
+    config
+        .games
+        .insert("3days-2".to_string(), game_config_named("3days"));
+    assert_eq!(generate_unique_game_id(&config, "3days"), "3days-3");
+    // A different name is unaffected by the collisions.
+    assert_eq!(generate_unique_game_id(&config, "narcissu"), "narcissu");
+}
+
+#[test]
+fn an_exe_already_used_by_another_entry_warns_but_stays_allowed() {
+    let dir = TempDir::new("duplicate-exe");
+    dir.with(&["game.exe"]);
+    let exe = dir.path().join("game.exe");
+
+    let mut config = crate::config::Config::default();
+    let mut game = game_config_named("原型");
+    game.exe_path = exe.clone();
+    config.games.insert("yuan-xing".to_string(), game);
+
+    // Same file, different spelling: canonicalization must still match it.
+    let awkward = dir.path().join("./game.exe");
+    let warning = duplicate_exe_warning(&config, &awkward, None).expect("same exe must warn");
+    assert!(warning.contains("原型"), "warning names the other entry");
+    assert!(
+        warning.contains("允许"),
+        "the warning must not imply a refusal"
+    );
+
+    // The entry itself is not a duplicate of itself.
+    assert!(duplicate_exe_warning(&config, &exe, Some("yuan-xing")).is_none());
+    // A different exe does not warn.
+    dir.with(&["other.exe"]);
+    assert!(duplicate_exe_warning(&config, &dir.path().join("other.exe"), None).is_none());
+}
+
+fn game_config_named(name: &str) -> crate::config::GameConfig {
+    crate::config::GameConfig {
+        name: name.to_string(),
+        game_dir: PathBuf::from("/games/demo"),
+        exe_path: PathBuf::from("/games/demo/game.exe"),
+        launch_args: Vec::new(),
+        save_paths: Vec::new(),
+        wine_prefix: None,
+        watch_only: false,
+        process_name: None,
+        scale_profile: crate::config::ScaleProfile::default_for(),
+        created_at: chrono::Utc::now(),
+    }
+}
+
+#[test]
 fn scan_counts_subdirectories_and_the_root_itself() {
     let root = TempDir::new("scan-root");
     std::fs::create_dir_all(root.path().join("GameA")).unwrap();

@@ -38,13 +38,15 @@ pub(super) async fn load_games_from(socket: &Path) -> Result<Vec<UiGame>, String
     parse_games(&value)
 }
 
-/// Add one game from explicit user input.
+/// Add one game from explicit user input. The second element of the payload is
+/// the daemon's duplicate-exe warning (`game.create` still adds the entry —
+/// "警告但不阻止").
 pub(super) async fn create_game(
     socket: &Path,
     name: String,
     exe_path: String,
     game_dir: String,
-) -> Result<String, String> {
+) -> Result<(String, Option<String>), String> {
     let mut params = vec![
         ("name", Value::String(name)),
         ("exe_path", Value::String(exe_path)),
@@ -55,11 +57,16 @@ pub(super) async fn create_game(
     }
 
     let value = crate::rpc::call(socket, "game.create", Some(crate::rpc::params(params))).await?;
-    Ok(value
+    let id = value
         .get("id")
         .and_then(|v| v.as_str())
         .unwrap_or("?")
-        .to_string())
+        .to_string();
+    let warning = value
+        .get("warning")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    Ok((id, warning))
 }
 
 /// `Some(prefix)` sets the machine-wide wine prefix, `None` returns to

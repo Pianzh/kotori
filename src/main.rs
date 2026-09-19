@@ -219,6 +219,16 @@ fn main() -> anyhow::Result<()> {
                 for (id, g) in &added {
                     println!("  [{}] {} -> {}", id, g.name, g.exe_path.display());
                 }
+                // 重扫描的已有条目走的是"跳过"分支(不覆盖调好的档案),不会出现在
+                // added 里;这里的警告只针对真正新加的、exe 又撞上别的档案的那几条。
+                let config = config::load()?;
+                for (id, g) in &added {
+                    if let Some(warning) =
+                        game::duplicate_exe_warning(&config, &g.exe_path, Some(id))
+                    {
+                        println!("  ⚠ [{}] {}", id, warning);
+                    }
+                }
             }
         }
         cli::Command::Sync { action } => {
