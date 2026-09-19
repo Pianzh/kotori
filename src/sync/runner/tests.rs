@@ -35,7 +35,12 @@ async fn credentials_reach_rclone_through_the_environment_only() {
         env.contains("env:RCLONE_CONFIG_KOTORI_KEY=appkey456"),
         "{env}"
     );
-    assert!(env.contains("env:RCLONE_CONFIG=/dev/null"), "{env}");
+    // 断言用 `null_config_path()` 而不是写死 "/dev/null":Windows 上代码正确地
+    // 输出 `NUL`,写死 Linux 值的断言会把正确的行为报成失败(VM 实测过)。
+    assert!(
+        env.contains(&format!("env:RCLONE_CONFIG={}", crate::sync::null_config_path())),
+        "{env}"
+    );
     // Unencrypted setups carry no crypt remote at all.
     assert!(!env.contains("KOTORIENC"), "{env}");
 }

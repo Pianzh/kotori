@@ -55,8 +55,8 @@ mod tests {
         };
 
         // Any rclone.conf on the machine is ignored, so nothing we write can
-        // leak credentials.
-        assert_eq!(get("RCLONE_CONFIG"), Some("/dev/null"));
+        // leak credentials. (The null path is per-platform: NUL on Windows.)
+        assert_eq!(get("RCLONE_CONFIG"), Some(crate::sync::null_config_path()));
         assert_eq!(get("RCLONE_CONFIG_KOTORI_TYPE"), Some("b2"));
         assert_eq!(get("RCLONE_CONFIG_KOTORI_ACCOUNT"), Some("keyid123"));
         assert_eq!(get("RCLONE_CONFIG_KOTORI_KEY"), Some("appkey456"));
