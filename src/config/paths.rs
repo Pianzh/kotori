@@ -31,14 +31,38 @@ pub fn default_socket_path() -> PathBuf {
 
 /// Path of the config file. `KOTORI_CONFIG` overrides it (used by tests and
 /// portable installs).
+///
+/// 只有两个地点(用户 2026-09-19 定,不做自定义):**二进制同目录**与**平台默认
+/// 目录**,启动时优先搜前者 —— 便携安装把 `config.toml` 放在 `kotori.exe` 旁边,
+/// 配置就跟着程序走。没有配置时"默认"就是配置地点(先有鸡才有蛋),所以新装用户
+/// 的配置落在默认目录;daemon 启动时记住实际路径并成为唯一写者,"这次从哪读"与
+/// "之后存到哪"因此永远一致。
 pub fn config_path() -> PathBuf {
     if let Some(p) = std::env::var_os("KOTORI_CONFIG") {
         return PathBuf::from(p);
     }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf));
+    choose_config_path(exe_dir.as_deref(), &default_config_dir())
+}
+
+/// Where the config lands by platform (`~/.config/kotori` / `%APPDATA%\kotori`).
+fn default_config_dir() -> PathBuf {
     dirs::config_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join("kotori")
-        .join("config.toml")
+}
+
+/// The search rule as a pure function: a `config.toml` sitting next to the
+/// binary wins, the platform default is the fallback.
+fn choose_config_path(exe_dir: Option<&Path>, fallback_dir: &Path) -> PathBuf {
+    if let Some(dir) = exe_dir
+        && dir.join("config.toml").is_file()
+    {
+        return dir.join("config.toml");
+    }
+    fallback_dir.join("config.toml")
 }
 
 /// Path of the master-password credential file.
@@ -78,9 +102,14 @@ pub fn data_dir() -> PathBuf {
         .join("kotori")
 }
 
-/// Directory holding daemon logs (`<data_dir>/logs`).
+/// Directory holding daemon logs. **跟随配置文件所在目录**(用户 2026-09-19:
+/// "log跟随配置文件地址")—— 便携安装的日志也就跟着程序走;解析不出配置目录时
+/// 才退回数据目录。
 pub fn log_dir() -> PathBuf {
-    data_dir().join("logs")
+    config_path()
+        .parent()
+        .map(|dir| dir.join("logs"))
+        .unwrap_or_else(|| data_dir().join("logs"))
 }
 
 /// Resolve the daemon socket for a given config.
@@ -154,4 +183,61 @@ pub fn save_to(path: &Path, config: &Config) -> anyhow::Result<()> {
     let content = toml::to_string_pretty(config)?;
     std::fs::write(path, content)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A unique scratch directory that removes itself on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            let dir =
+                std::env::temp_dir().join(format!("kotori-paths-{}-{tag}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            Self(dir)
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_config_next_to_the_binary_wins_over_the_default() {
+        let exe_dir = Scratch::new("portable");
+        let fallback = Scratch::new("default");
+        std::fs::write(exe_dir.0.join("config.toml"), "").unwrap();
+
+        assert_eq!(
+            choose_config_path(Some(&exe_dir.0), &fallback.0),
+            exe_dir.0.join("config.toml")
+        );
+    }
+
+    #[test]
+    fn without_a_beside_binary_config_the_default_directory_is_used() {
+        let exe_dir = Scratch::new("empty");
+        let fallback = Scratch::new("default");
+
+        assert_eq!(
+            choose_config_path(Some(&exe_dir.0), &fallback.0),
+            fallback.0.join("config.toml")
+        );
+    }
+
+    #[test]
+    fn no_exe_information_falls_back_to_the_default() {
+        let fallback = Scratch::new("noexe");
+
+        assert_eq!(
+            choose_config_path(None, &fallback.0),
+            fallback.0.join("config.toml")
+        );
+    }
 }

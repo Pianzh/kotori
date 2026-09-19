@@ -12,6 +12,9 @@ impl Daemon {
         Ok(json!({
             "running": true,
             "games": games,
+            // 实际生效的那份配置(二进制同目录优先,见 `config::config_path`),
+            // `kotori status` 打印整个回包,用户由此知道配置与日志在哪。
+            "config_path": self.config_path.display().to_string(),
             "sessions": sessions
                 .iter()
                 .map(|s| json!({
