@@ -153,6 +153,7 @@ mod test_support {
             launch_args: Vec::new(),
             save_paths: Vec::new(),
             watch_only: false,
+            direct_launch: false,
             process_name: String::new(),
             profile_name: "默认".into(),
             algo: "Fsr".into(),

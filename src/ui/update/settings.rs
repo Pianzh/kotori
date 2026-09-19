@@ -111,6 +111,26 @@ impl App {
                     Message::WineStatusLoaded,
                 )
             }
+            Message::DirectLaunchToggled(value) => {
+                if let Some(draft) = &mut self.draft {
+                    draft.direct_launch = value;
+                    // 两把开关互斥:直接启动与仅观测是同一个"启动方式"的三种态
+                    // 里的两档(第三档是两个都关 = 缩放启动)。
+                    if value {
+                        draft.watch_only = false;
+                    }
+                }
+                self.schedule_auto_save()
+            }
+            Message::WatchOnlyToggled(value) => {
+                if let Some(draft) = &mut self.draft {
+                    draft.watch_only = value;
+                    if value {
+                        draft.direct_launch = false;
+                    }
+                }
+                self.schedule_auto_save()
+            }
             Message::GameDirChanged(value) => {
                 if let Some(draft) = &mut self.draft {
                     draft.game_dir = value;

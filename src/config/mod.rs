@@ -75,6 +75,12 @@ pub struct GameConfig {
     /// launcher does). Save sync still works by watching `process_name`.
     #[serde(default)]
     pub watch_only: bool,
+    /// Launch the exe **without** gamescope: plain wine on Linux, the exe
+    /// itself on Windows (where this is the only kind of launch there is).
+    /// 与 [`GameConfig::watch_only`] 互斥（那里优先）：一个说"kotori 不启动"，
+    /// 一个说"启动，但不套缩放"。
+    #[serde(default)]
+    pub direct_launch: bool,
     /// Process name to watch so save sync knows when the game is running.
     /// Useful for launcher games (where the launched process exits early) and
     /// required for watch-only games.
@@ -306,6 +312,7 @@ mod tests {
                 exe_path: PathBuf::from("/games/demo/game.exe"),
                 launch_args: Vec::new(),
                 watch_only: false,
+                direct_launch: false,
                 process_name: None,
                 save_paths: vec![SavePath::inferred("%APPDATA%\\Demo\\save")],
                 scale_profile: ScaleProfile {

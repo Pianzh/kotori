@@ -35,6 +35,17 @@ pub(super) fn push_detail(ui: &mut Ui) {
         |v| w.set_show_sharpness(v),
     );
 
+    push_bool(
+        w.get_game_direct_launch(),
+        app.draft.as_ref().map(|d| d.direct_launch).unwrap_or(false),
+        |v| w.set_game_direct_launch(v),
+    );
+    push_bool(
+        w.get_game_watch_only(),
+        app.draft.as_ref().map(|d| d.watch_only).unwrap_or(false),
+        |v| w.set_game_watch_only(v),
+    );
+
     if let Some(game) = app.selected_game() {
         push_eq(w.get_game(), game_item(game, app), |v| w.set_game(v));
         // ⚠ 这份「已存值」只能来自库里的游戏,不能来自草稿:页面的可编辑副本是

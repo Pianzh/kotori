@@ -363,6 +363,12 @@ pub(super) async fn save_profile(draft: Draft) -> Result<(), String> {
     if draft.save_paths_changed() {
         params.push(("save_paths", save_paths_to_json(&draft.save_paths)));
     }
+    if draft.direct_launch != draft.direct_launch_original {
+        params.push(("direct_launch", Value::Bool(draft.direct_launch)));
+    }
+    if draft.watch_only != draft.watch_only_original {
+        params.push(("watch_only", Value::Bool(draft.watch_only)));
+    }
 
     crate::rpc::call(
         &crate::config::socket_path(),

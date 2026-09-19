@@ -113,6 +113,7 @@ impl Daemon {
                     save_paths: Vec::new(),
                     wine_prefix: None,
                     watch_only: false,
+                    direct_launch: false,
                     process_name: None,
                     scale_profile: crate::config::ScaleProfile::default_for(),
                     created_at: chrono::Utc::now(),
@@ -206,6 +207,10 @@ impl Daemon {
                 game.watch_only = watch_only;
             }
 
+            if let Some(direct_launch) = patch.direct_launch {
+                game.direct_launch = direct_launch;
+            }
+
             if let Some(profile) = &patch.profile {
                 let mut parsed = profile.clone();
                 parsed.normalize();
@@ -254,6 +259,7 @@ impl Daemon {
                 profile: &game.scale_profile,
                 process_name: Some(name),
                 watch_only: true,
+                direct_launch: false,
             };
             let session = self
                 .engine
@@ -287,6 +293,7 @@ impl Daemon {
             profile: &game.scale_profile,
             process_name: game.process_name.as_deref(),
             watch_only: false,
+            direct_launch: game.direct_launch,
         };
 
         let session = self

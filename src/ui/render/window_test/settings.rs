@@ -166,6 +166,16 @@ pub(super) fn settings_page(mut ui: Ui) {
     window.invoke_fullscreen_toggled(false);
     assert!(!draft().fullscreen);
 
+    // 启动方式:两把开关互斥(第三态是都关 = 缩放启动)。
+    assert!(!draft().direct_launch);
+    window.invoke_direct_launch_toggled(true);
+    assert!(draft().direct_launch);
+    window.invoke_watch_only_toggled(true);
+    assert!(draft().watch_only);
+    assert!(!draft().direct_launch, "开仅观测要自动关掉直接启动");
+    window.invoke_watch_only_toggled(false);
+    assert!(!draft().watch_only);
+
     // 存档位置:加一行 → 换形态 → 删掉。新行默认相对(推荐顺序第一位);手动把
     // kind 选成 absolute 后再敲令牌文本,自动推断会把它改回 windows(用户
     // 2026-09-19:路径文本自己说明它属于哪一类)。

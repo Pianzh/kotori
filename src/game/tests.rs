@@ -176,6 +176,7 @@ fn game_config_named(name: &str) -> crate::config::GameConfig {
         save_paths: Vec::new(),
         wine_prefix: None,
         watch_only: false,
+        direct_launch: false,
         process_name: None,
         scale_profile: crate::config::ScaleProfile::default_for(),
         created_at: chrono::Utc::now(),

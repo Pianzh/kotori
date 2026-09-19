@@ -50,6 +50,10 @@ pub(in crate::ui) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     .get("watch_only")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
+                direct_launch: g
+                    .get("direct_launch")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 process_name: g
                     .get("process_name")
                     .and_then(|v| v.as_str())

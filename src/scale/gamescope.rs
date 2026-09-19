@@ -82,90 +82,6 @@ impl GamescopeScaleEngine {
         });
     }
 
-    /// Track a game the user starts themselves: kotori launches nothing, the
-    /// session simply follows `process_name` for as long as it runs.
-    async fn start_watch_session(&self, spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError> {
-        let Some(name) = spec.process_name.filter(|name| !name.trim().is_empty()) else {
-            return Err(ScaleError::ProtocolError(
-                "「仅观测」模式必须指定要观测的进程名".to_string(),
-            ));
-        };
-
-        let screen = screen_size();
-        let session = ScaleSession {
-            session_id: uuid::Uuid::new_v4().to_string(),
-            game_id: Some(spec.game_id.to_string()),
-            gamescope_pid: None,
-            profile: spec.profile.clone(),
-            runtime_ratio: profile_ratio(spec.profile, screen),
-            started_at: std::time::Instant::now(),
-            process_group: None,
-            process_name: Some(name.to_string()),
-            output_size: spec.profile.output_size_for(screen),
-            // Nothing was launched, so there is no prefix of ours to close.
-            wine_prefix: None,
-            watch_only: true,
-        };
-
-        self.sessions
-            .write()
-            .await
-            .insert(session.session_id.clone(), session.clone());
-        tracing::info!(
-            "watching for process {name} (session {})",
-            session.session_id
-        );
-        self.announce(&session, SessionKind::Started);
-
-        let sessions = self.sessions.clone();
-        let events = self.events.clone();
-        let sid = session.session_id.clone();
-        let game_id = session.game_id.clone();
-        let name = name.to_string();
-        tokio::spawn(async move {
-            let deadline = tokio::time::Instant::now() + process::APPEAR_TIMEOUT;
-
-            // Wait for the game to show up — unless the session is stopped.
-            loop {
-                if !sessions.read().await.contains_key(&sid) {
-                    return;
-                }
-                if process::is_running(&name) {
-                    break;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    tracing::warn!("session {sid}: {name} never appeared, giving up");
-                    sessions.write().await.remove(&sid);
-                    // Deliberately no `Ended`: the game never ran, so a client
-                    // must not treat this as "a game finished, sync it".
-                    return;
-                }
-                tokio::time::sleep(process::POLL_INTERVAL).await;
-            }
-
-            tracing::info!("session {sid}: {name} is running");
-            loop {
-                tokio::time::sleep(process::POLL_INTERVAL).await;
-                if !sessions.read().await.contains_key(&sid) {
-                    return;
-                }
-                if !process::is_running(&name) {
-                    break;
-                }
-            }
-
-            tracing::info!("session {sid}: {name} exited");
-            sessions.write().await.remove(&sid);
-            let _ = events.send(SessionEvent {
-                session_id: sid,
-                game_id,
-                kind: SessionKind::Ended,
-            });
-        });
-
-        Ok(session)
-    }
-
     /// Wrap a game command so it runs inside gamescope via `gamescope <args> -- wine game.exe`.
     fn compose_command(&self, spec: &LaunchSpec<'_>, screen: (u32, u32)) -> Vec<String> {
         let mut game_cmd = vec![self.wine_path.clone(), spec.exe.to_string()];
@@ -219,6 +135,15 @@ impl GamescopeScaleEngine {
             let Some(pid) = session.gamescope_pid else {
                 continue;
             };
+            // 直接启动的会话没有 gamescope:滤镜是 gamescope 的 X 属性,窗口尺寸
+            // 是合成器的事,这里什么都没有。如实说"没动"。
+            if session.direct {
+                outcome.failed.push((
+                    session.session_id.clone(),
+                    "这一局是直接启动的，没有 gamescope 可调".to_string(),
+                ));
+                continue;
+            }
             // 用户自己写了 gamescope 参数:运行时动作往 gamescope 的 Xwayland 属性里
             // 写滤镜与缩放,会当场盖掉他写下的 `-F`/`-S` —— 那正是他明确关掉的东西
             // (见 `ScaleProfile::free_form`)。如实说"没动",而不是假装成功。
@@ -361,7 +286,7 @@ fn screen_size() -> (u32, u32) {
 ///
 /// Always called *after* the game's processes are gone: while a game is running
 /// this would kill that game's own server.
-async fn close_wine(prefix: Option<&Path>) {
+pub(super) async fn close_wine(prefix: Option<&Path>) {
     if let Some(prefix) = prefix {
         crate::wine::close_prefix(prefix).await;
     }
@@ -452,7 +377,12 @@ async fn game_shows_up(
 impl ScaleEngine for GamescopeScaleEngine {
     async fn start_session(&self, spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError> {
         if spec.watch_only {
-            return self.start_watch_session(spec).await;
+            return super::direct::start_watch_session(&self.sessions, &self.events, spec).await;
+        }
+        // 用户选了"不走缩放直接启动":不套 gamescope,但会话登记与退出后的
+        // 自动上传照旧(见 `direct`)。
+        if spec.direct_launch {
+            return super::direct::start_direct_session(&self.sessions, &self.events, spec).await;
         }
 
         if find_binary("gamescope").is_none() {
@@ -554,6 +484,7 @@ impl ScaleEngine for GamescopeScaleEngine {
             output_size: spec.profile.output_size_for(screen),
             wine_prefix: spec.wine_prefix.map(Path::to_path_buf),
             watch_only: false,
+            direct: false,
         };
 
         self.sessions

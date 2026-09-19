@@ -42,6 +42,7 @@ pub(super) fn daemon(keyring: Keyring) -> Daemon {
             save_paths: vec![SavePath::inferred("savedata")],
             wine_prefix: None,
             watch_only: false,
+            direct_launch: false,
             process_name: None,
             scale_profile: ScaleProfile::default_for(),
             created_at: chrono::Utc::now(),

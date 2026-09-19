@@ -38,6 +38,9 @@ pub struct UiGame {
     pub save_paths: Vec<SavePathDraft>,
     /// Watch-only games are started by the user; kotori follows the process.
     pub watch_only: bool,
+    /// Launched **without** gamescope (user choice on Linux; the only kind of
+    /// launch on Windows).
+    pub direct_launch: bool,
     pub process_name: String,
     /// Profile name as stored, so saving never silently renames it.
     pub profile_name: String,
@@ -79,6 +82,12 @@ pub(in crate::ui) struct Draft {
     pub(in crate::ui) launch_args_original: String,
     pub(in crate::ui) save_paths: Vec<SavePathDraft>,
     pub(in crate::ui) save_paths_original: Vec<SavePathDraft>,
+    /// 启动方式:直接启动(不走缩放)。「仅观测」与它互斥,两把开关的互斥逻辑
+    /// 在 update 层(开一个自动关另一个)。
+    pub(in crate::ui) direct_launch: bool,
+    pub(in crate::ui) direct_launch_original: bool,
+    pub(in crate::ui) watch_only: bool,
+    pub(in crate::ui) watch_only_original: bool,
     pub(in crate::ui) algo: String,
     pub(in crate::ui) sharpness: u32,
     pub(in crate::ui) internal_w: String,
@@ -111,6 +120,10 @@ impl Draft {
             launch_args_original: game.launch_args.join(" "),
             save_paths: game.save_paths.clone(),
             save_paths_original: game.save_paths.clone(),
+            direct_launch: game.direct_launch,
+            direct_launch_original: game.direct_launch,
+            watch_only: game.watch_only,
+            watch_only_original: game.watch_only,
             algo: if ScaleAlgorithm::ALL.contains(&game.algo.as_str()) {
                 game.algo.clone()
             } else {

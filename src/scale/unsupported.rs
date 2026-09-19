@@ -1,68 +1,85 @@
-//! 没有缩放可做的那一端：**让 trait 有个实现，而不是让编译停下来**。
+//! 缩放做不了的那一端：**启动、观测与同步照常，缩放归外部工具。**
 //!
 //! 先说清楚它不是什么：**它不是"还没写完"。** 在 Windows 上缩放本来就不归
 //! kotori 管 —— 它是外部工具（Magpie）的事，而那个工具留给第三方的接口
 //! **只能观察、不能下命令**（广播消息 + 窗口属性，见 `PLATFORMS.md` §2.3）。
 //! 所以"kotori 自己把画面缩起来"这件事在 Windows 上根本没有对应的动作。
 //!
-//! 它存在的意义只有一个：**让上层保持一套形状**。`ScaleEngine` 是 daemon 持有
-//! 的东西，`daemon` 和 `scale_rpc` 都按这个 trait 写；如果 Windows 上干脆没有
-//! 实现，那这些代码就得整个 `#[cfg]` 掉，也就等于给 Windows 写第二套 daemon。
+//! 但"启动游戏"与"跟着游戏、退出后上传存档"是 kotori 的份内事，而且三端的
+//! 语义对称（`PLATFORMS.md` §2.2）。所以这个后端管理真实的会话：
 //!
-//! ⚠ **界面的样子还没定。** Linux 那边"缩放"是 kotori 自己的状态（能加能减、
-//! 有阶梯、有 sharpness），Windows 这边将来顶多是"某个外部工具正在缩放这个游戏"
-//! 的一个观察结果（[`crate::platform`] 的能力表里已经按"外部工具提供 · 可观察 ·
-//! 不可控"记着了）。两者形状不同，所以**界面迟早要分开**，但那是以后的事：
-//! 现在所有动作都回 [`ScaleError::Unsupported`]，能力表据此把缩放相关的编辑禁掉，
-//! 界面至少不会撒谎。
+//! * `start_session`（用户点「启动」）= **直接启动**：这台机器没有 gamescope
+//!   可套，点击启动就是直接把 exe 跑起来（用户 2026-09-19：不再报错）；
+//! * `watch_only`（「仅观测」的游戏）= 只盯进程，与 Linux 同一条路径；
+//! * `Ended` 事件照发 —— 退出后的存档上传因此在 Windows 上工作。
+//!
+//! 缩放动作（`scale.action`）仍然全部回 [`ScaleError::Unsupported`]：那是
+//! "这件事在这里不归我们"，能力表据此把缩放编辑禁掉，界面不撒谎。
 
-use super::{LaunchSpec, ScaleEngine, ScaleError, ScaleSession, ScaleStatus};
+use std::collections::HashMap;
+use std::sync::Arc;
 
-/// Windows 上的缩放后端：每个动作都说"这里没有这回事"。
-#[derive(Debug, Default)]
-pub struct UnsupportedScaleEngine;
+use tokio::sync::{RwLock, broadcast};
+
+use super::{LaunchSpec, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, direct};
+
+/// Windows 上的后端：会话是真的，缩放没有。
+#[derive(Debug)]
+pub struct UnsupportedScaleEngine {
+    sessions: Arc<RwLock<HashMap<String, ScaleSession>>>,
+    events: broadcast::Sender<SessionEvent>,
+}
 
 impl UnsupportedScaleEngine {
     pub fn new() -> Self {
-        Self
+        Self {
+            sessions: Arc::new(RwLock::new(HashMap::new())),
+            events: broadcast::channel(64).0,
+        }
     }
 }
 
 #[async_trait::async_trait]
 impl ScaleEngine for UnsupportedScaleEngine {
-    /// 不启动任何东西。
-    ///
-    /// ⚠ 注意这一条**以后会变**：`LaunchSpec::watch_only` 的注释里写着"用户在
-    /// Windows 上自己启动游戏才是常态"，而"启动前取回存档 / 退出后上传"这条
-    /// 会话语义对三端是对称的（`PLATFORMS.md` §2.2）—— 那需要的是**监视**进程，
-    /// 不是缩放。等做到那一步时，这里会变成"只监视、不缩放"，而不是继续报错。
-    async fn start_session(&self, _spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError> {
-        Err(ScaleError::Unsupported)
+    /// 用户点「启动」= 直接启动（`watch_only` 的游戏则是纯观测）。
+    async fn start_session(&self, spec: &LaunchSpec<'_>) -> Result<ScaleSession, ScaleError> {
+        if spec.watch_only {
+            return direct::start_watch_session(&self.sessions, &self.events, spec).await;
+        }
+        direct::start_direct_session(&self.sessions, &self.events, spec).await
     }
 
-    /// 没有会话可停 —— 因为没有会话。
-    ///
-    /// 这里回 `Ok` 而不是 `Err` 是刻意的：启动已经在上一步失败了，收尾时再报一次
-    /// 错只是噪音。真正"没有这件事"的判断留给 [`ScaleError::Unsupported`] 出现的那一处。
-    async fn stop_session(&self, _session: &ScaleSession) -> Result<(), ScaleError> {
+    /// 直接启动的会话没有进程组可一锅端（Windows 没有 `process_group`）：
+    /// "停止" = kotori 不再跟踪这一局，游戏本身继续跑。
+    async fn stop_session(&self, session: &ScaleSession) -> Result<(), ScaleError> {
+        let removed = self.sessions.write().await.remove(&session.session_id);
+        match removed {
+            Some(_) => Ok(()),
+            None => Err(ScaleError::SessionNotFound(session.session_id.clone())),
+        }
+    }
+
+    async fn wait_session(&self, session: &ScaleSession) -> Result<(), ScaleError> {
+        loop {
+            if self.get_session(&session.session_id).await.is_none() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
         Ok(())
     }
 
-    async fn wait_session(&self, _session: &ScaleSession) -> Result<(), ScaleError> {
-        Err(ScaleError::Unsupported)
-    }
-
-    async fn get_session(&self, _session_id: &str) -> Option<ScaleSession> {
-        None
+    async fn get_session(&self, session_id: &str) -> Option<ScaleSession> {
+        self.sessions.read().await.get(session_id).cloned()
     }
 
     async fn list_sessions(&self) -> Vec<ScaleSession> {
-        Vec::new()
+        self.sessions.read().await.values().cloned().collect()
     }
 
-    // `subscribe` 刻意不实现：trait 的默认实现就回 `None`，而它的文档正好写着
-    // "一个报不出事件的 backend 就是没有同步触发点，这是受支持的状态，不是错误"。
-    // 这正是 Windows 现在的样子。
+    fn subscribe(&self) -> Option<broadcast::Receiver<SessionEvent>> {
+        Some(self.events.subscribe())
+    }
 
     async fn get_status(&self, _session: &ScaleSession) -> Result<ScaleStatus, ScaleError> {
         Err(ScaleError::Unsupported)

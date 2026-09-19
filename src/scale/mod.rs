@@ -24,6 +24,8 @@ pub mod action;
 // 看门狗。Windows 上一个都不存在 —— 那边是下面的 `unsupported`。
 #[cfg(unix)]
 pub mod args;
+// 直接启动与纯观测:两个引擎(Linux 的 gamescope、Windows 的空后端)共用。
+pub mod direct;
 #[cfg(unix)]
 pub mod gamescope;
 #[cfg(unix)]
@@ -85,6 +87,10 @@ pub struct LaunchSpec<'a> {
     /// Do not launch anything: only track `process_name`. Used for games the
     /// user starts themselves (the norm on Windows).
     pub watch_only: bool,
+    /// Launch **without** gamescope: plain wine on Linux, the exe itself on
+    /// Windows. Session tracking still runs (process name → `Ended`), which is
+    /// what makes save sync work for a direct launch too.
+    pub direct_launch: bool,
 }
 
 /// ScaleEngine trait - core abstraction for scaling backends
@@ -191,6 +197,10 @@ pub struct ScaleSession {
     pub wine_prefix: Option<PathBuf>,
     /// True when kotori did not launch the game, only watched it.
     pub watch_only: bool,
+    /// True when the game was launched **without** gamescope (user choice on
+    /// Linux; the only launch there is on Windows). Scale actions on such a
+    /// session are refused: there is no gamescope to talk to.
+    pub direct: bool,
 }
 
 /// Current scaling status
@@ -213,6 +223,10 @@ pub enum ScaleError {
 
     #[error("wine not found")]
     WineNotFound,
+
+    /// 直接启动(无 gamescope)时游戏没能跑起来:路径不对、缺 DLL、起来就退。
+    #[error("游戏启动失败：{0}")]
+    StartFailed(String),
 
     #[error("session not found: {0}")]
     SessionNotFound(String),

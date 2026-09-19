@@ -63,6 +63,8 @@ pub enum Message {
     OutputWChanged(String),
     OutputHChanged(String),
     ScaleRatioChanged(String),
+    DirectLaunchToggled(bool),
+    WatchOnlyToggled(bool),
     FullscreenToggled(bool),
     FramerateChanged(String),
     ExePathChanged(String),

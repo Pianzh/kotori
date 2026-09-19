@@ -70,6 +70,7 @@ pub(super) struct GamePatch {
     #[serde(default, deserialize_with = "double_option")]
     pub(super) wine_prefix: Option<Option<PathBuf>>,
     pub(super) watch_only: Option<bool>,
+    pub(super) direct_launch: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     pub(super) process_name: Option<Option<String>>,
     pub(super) profile: Option<crate::config::ScaleProfile>,
