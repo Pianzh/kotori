@@ -405,44 +405,9 @@ fn local_repository_from_env() -> Option<PathBuf> {
         .filter(|path| !path.as_os_str().is_empty())
 }
 
-/// kopia 的 stderr 收缩成可读的几行。
-///
-/// 它爱在前面写时间戳、在后面追加一堆 `write error: unable to open log file`
-/// （`KOPIA_LOG_DIR` 没指好时）；B2 后端的弃用警告(`The b2 backend is deprecated`)
-/// 也每跑一次打一遍 —— 这些对"这次为什么失败"都没有意义，删掉，真话留着。
-fn clean_stderr(stderr: &str) -> String {
-    let cleaned: Vec<&str> = stderr
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .filter(|line| !line.contains("unable to open log file"))
-        .filter(|line| !line.to_lowercase().contains("backend is deprecated"))
-        .collect();
-    let joined = cleaned.join("\n");
-    if joined.trim().is_empty() {
-        stderr.trim().to_string()
-    } else {
-        joined
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn log_noise_is_dropped_but_the_real_error_survives() {
-        let stderr = "2026-09-16 19:20:51 write error: unable to open log file: open /x.log: no such file\n\
-                      ERROR failed to connect to repository: invalid password\n";
-        let cleaned = clean_stderr(stderr);
-        assert!(cleaned.contains("invalid password"), "{cleaned}");
-        assert!(!cleaned.contains("unable to open log file"), "{cleaned}");
-    }
-
-    #[test]
-    fn an_empty_stderr_stays_empty() {
-        assert_eq!(clean_stderr("   \n  "), "");
-    }
 
     #[test]
     fn kopia_failures_are_explained_and_deprecation_noise_is_dropped() {

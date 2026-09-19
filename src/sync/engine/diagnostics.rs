@@ -57,7 +57,7 @@ pub(super) fn explain_failure(stderr: &str) -> String {
 /// B2 那边的报错两家措辞接近,hint 共用一套;差别在 kopia 的输出是**多行**的
 /// (B2 弃用警告 + 真错误),不走 rclone 的"取最后一行",也不剥时间戳前缀。
 pub(super) fn explain_kopia_failure(stderr: &str) -> String {
-    let detail = clean_stderr(stderr);
+    let detail = clean_kopia_stderr(stderr);
     let lower = detail.to_lowercase();
 
     let hint = if lower.contains("bucket")
@@ -96,6 +96,25 @@ pub(super) fn explain_kopia_failure(stderr: &str) -> String {
     match hint {
         Some(hint) => format!("{hint}\n（kopia 原话：{detail}）"),
         None => detail,
+    }
+}
+
+/// kopia 版的输出清理:**多行保留**(警告与错误都要留在原话里),去掉 log-file
+/// 噪音与 B2 弃用警告 —— 那两类对"这次为什么失败"都没有意义
+/// (从 `kopia.rs` 搬来:那边不再自己清理,失败统一过 [`explain_kopia_failure`])。
+fn clean_kopia_stderr(stderr: &str) -> String {
+    let cleaned: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .filter(|line| !line.contains("unable to open log file"))
+        .filter(|line| !line.to_lowercase().contains("backend is deprecated"))
+        .collect();
+    let joined = cleaned.join("\n");
+    if joined.trim().is_empty() {
+        stderr.trim().to_string()
+    } else {
+        joined
     }
 }
 
