@@ -21,7 +21,7 @@ use std::sync::Arc;
 
 use tokio::sync::{RwLock, broadcast};
 
-use super::{LaunchSpec, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, direct};
+use super::{LaunchSpec, ScaleEngine, ScaleError, ScaleSession, ScaleStatus, SessionEvent, direct};
 
 /// Windows 上的后端：会话是真的，缩放没有。
 #[derive(Debug)]
