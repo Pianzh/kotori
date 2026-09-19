@@ -13,8 +13,9 @@ use crate::ui::*;
 pub(in crate::ui) const AUTOSAVE_DEBOUNCE: std::time::Duration =
     std::time::Duration::from_millis(700);
 
-/// The three save-location kinds, as shown in the editor.
-pub(in crate::ui) const SAVE_PATH_KINDS: [&str; 3] = ["windows", "relative", "absolute"];
+/// The three save-location kinds, as shown in the editor — in the order a new
+/// location should be tried (用户 2026-09-19):相对最优先,令牌次之,绝对垫底。
+pub(in crate::ui) const SAVE_PATH_KINDS: [&str; 3] = ["relative", "windows", "absolute"];
 
 /// One save location in the editor.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

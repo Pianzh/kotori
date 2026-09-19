@@ -128,12 +128,20 @@ impl App {
                 self.schedule_auto_save()
             }
             Message::SavePathChanged(index, value) => {
-                if let Some(entry) = self
-                    .draft
-                    .as_mut()
-                    .and_then(|d| d.save_paths.get_mut(index))
+                if let Some(draft) = self.draft.as_mut()
+                    && let Some(entry) = draft.save_paths.get_mut(index)
                 {
-                    entry.path = value;
+                    entry.path = value.clone();
+                    // 手动敲的路径也自动认 kind(用户 2026-09-19),优先级与「浏览…」
+                    // 相同:相对 → 令牌 → 绝对。认不出(输入到一半)就保持原样;
+                    // 改写后的令牌写法只进档案,不打断正在输入的那个框(它的文本
+                    // 是页面自持的,render 只同步 kind,见 `render/detail.rs`)。
+                    let game_dir = std::path::PathBuf::from(draft.game_dir.trim());
+                    if let Some((kind, rewritten)) = crate::wine::infer_save_path(&game_dir, &value)
+                    {
+                        entry.kind = kind.as_str().to_string();
+                        entry.path = rewritten;
+                    }
                 }
                 self.schedule_auto_save()
             }
@@ -149,9 +157,11 @@ impl App {
             }
             Message::AddSavePath => {
                 if let Some(draft) = &mut self.draft {
+                    // 默认给相对写法:它是推荐顺序的第一位(用户 2026-09-19),
+                    // 输入路径后 kind 还会自动跟着文本走。
                     draft.save_paths.push(SavePathDraft {
-                        kind: "windows".to_string(),
-                        path: "%APPDATA%\\".to_string(),
+                        kind: "relative".to_string(),
+                        path: "savedata".to_string(),
                         exclude: String::new(),
                     });
                 }

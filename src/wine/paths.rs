@@ -304,6 +304,48 @@ pub fn portable_save_path(game_dir: &Path, picked: &Path) -> (SavePathKind, Stri
     (SavePathKind::Absolute, picked.display().to_string())
 }
 
+/// 用户**手动敲进**存档路径输入框的文本 → 推断 kind 与应该保存的写法;认不出
+/// (通常是输入到一半)返回 `None`,kind 保持原样、不打扰输入。
+///
+/// 与 [`portable_save_path`](「浏览…」链路)同一条优先级:相对 → 令牌 → 绝对,
+/// 但输入框里的文本有两种浏览永远遇不到的形态,要单独认:
+///
+/// ① **令牌写法本身**(`%APPDATA%\Game`)—— 那不是真实路径,`to_windows_token`
+///    只认 `C:\Users\…` / `drive_c/users/…` 的形状,认不出它,必须先按令牌认;
+/// ② **裸相对写法**(`savedata`)—— 挑回来的路径永远是绝对的,而敲进来的
+///    相对文本指的就是"相对游戏根目录",直接按 relative 原样保留。
+///
+/// 其余(真实绝对路径)交给 [`portable_save_path`]:游戏目录内的转 relative,
+/// 用户目录形状的转成令牌(`C:\Users\x\AppData\Roaming\G` → `%APPDATA%\G`),
+/// 都不是的按 absolute 原样。
+pub fn infer_save_path(game_dir: &Path, text: &str) -> Option<(SavePathKind, String)> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let upper = text.to_uppercase();
+    if TOKENS.iter().any(|(token, _)| upper.starts_with(token)) {
+        return Some((SavePathKind::Windows, text.to_string()));
+    }
+    if looks_relative(text) {
+        return Some((SavePathKind::Relative, text.to_string()));
+    }
+    // 盘符写到一半("C:")还不是一条路径:别急着替用户改写。
+    if strip_drive_letter(text) == Some("") {
+        return None;
+    }
+    Some(portable_save_path(game_dir, Path::new(text)))
+}
+
+/// 裸相对写法的判据:不含盘符,也不以根(`/` `\`)、家(`~`)、令牌(`%`)开头。
+fn looks_relative(text: &str) -> bool {
+    if text.starts_with(['/', '\\', '~', '%']) {
+        return false;
+    }
+    let bytes = text.as_bytes();
+    !(bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic())
+}
+
 /// The Windows user directory inside a prefix (`drive_c/users/<user>`).
 ///
 /// The name depends on how the prefix was made: plain wine uses the Linux

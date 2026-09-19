@@ -166,12 +166,16 @@ pub(super) fn settings_page(mut ui: Ui) {
     window.invoke_fullscreen_toggled(false);
     assert!(!draft().fullscreen);
 
-    // 存档位置:加一行 → 换形态 → 删掉。
+    // 存档位置:加一行 → 换形态 → 删掉。新行默认相对(推荐顺序第一位);手动把
+    // kind 选成 absolute 后再敲令牌文本,自动推断会把它改回 windows(用户
+    // 2026-09-19:路径文本自己说明它属于哪一类)。
     window.invoke_add_save();
     assert_eq!(draft().save_paths.len(), 1);
+    assert_eq!(draft().save_paths[0].kind, "relative");
     window.invoke_save_kind_picked(0, 2);
     assert_eq!(draft().save_paths[0].kind, "absolute");
     window.invoke_save_path_changed(0, "%APPDATA%\\Game".into());
+    assert_eq!(draft().save_paths[0].kind, "windows", "令牌文本自动改 kind");
     window.invoke_save_exclude_changed(0, "*.log".into());
     let entry = draft().save_paths[0].clone();
     assert_eq!(entry.path, "%APPDATA%\\Game");

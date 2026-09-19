@@ -387,3 +387,40 @@ save_paths = [
     let reparsed: Config = toml::from_str(&text).unwrap();
     assert_eq!(reparsed.games["demo"].save_paths[2].exclude, ["*.log"]);
 }
+
+#[test]
+fn typed_text_infers_its_kind_like_a_picked_path_would() {
+    // 手动敲进输入框的文本也要自动认 kind(用户 2026-09-19),两条浏览遇不到的
+    // 形态单独认:令牌写法本身,和裸相对写法。
+    let game_dir = Path::new("/games/demo");
+
+    // 令牌写法:原样保留,kind = windows(to_windows_token 认不出它)。
+    let (kind, value) = infer_save_path(game_dir, r"%APPDATA%\Game\save").unwrap();
+    assert_eq!(kind, SavePathKind::Windows);
+    assert_eq!(value, r"%APPDATA%\Game\save");
+
+    // 裸相对:原样,kind = relative。
+    let (kind, value) = infer_save_path(game_dir, "savedata").unwrap();
+    assert_eq!(kind, SavePathKind::Relative);
+    assert_eq!(value, "savedata");
+
+    // 用户目录形状的盘符路径 → 转成令牌(与浏览链路同一个"自动转化")。
+    let (kind, value) = infer_save_path(game_dir, r"C:\Users\tester\AppData\Roaming\Game").unwrap();
+    assert_eq!(kind, SavePathKind::Windows);
+    assert_eq!(value, r"%APPDATA%\Game");
+
+    // 游戏目录内的绝对路径 → 相对。
+    let (kind, value) = infer_save_path(game_dir, "/games/demo/savedata").unwrap();
+    assert_eq!(kind, SavePathKind::Relative);
+    assert_eq!(value, "savedata");
+
+    // 别的绝对路径 → absolute 原样。
+    let (kind, value) = infer_save_path(game_dir, "/opt/saves/demo").unwrap();
+    assert_eq!(kind, SavePathKind::Absolute);
+    assert_eq!(value, "/opt/saves/demo");
+
+    // 输入到一半的盘符:不改写、不猜(kind 保持原样)。
+    assert!(infer_save_path(game_dir, "C:").is_none());
+    // 空文本:没有可推断的东西。
+    assert!(infer_save_path(game_dir, "  ").is_none());
+}
