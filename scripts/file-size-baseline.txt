@@ -2,7 +2,6 @@
 # 由 scripts/check-file-size.sh --update 生成，别手改。
 1029	src/ui/app.rs
 784	src/scale/gamescope.rs
-730	src/main.rs
 603	src/secrets/encrypted.rs
 524	src/scale/x11.rs
 521	src/display.rs

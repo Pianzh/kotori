@@ -2,6 +2,11 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod scale_cli;
+mod sync_cli;
+pub(crate) use scale_cli::scale_cli;
+pub(crate) use sync_cli::sync_cli;
+
 #[derive(Parser)]
 #[command(name = "kotori")]
 #[command(about = "Galgame manager with scaling and cloud sync")]
