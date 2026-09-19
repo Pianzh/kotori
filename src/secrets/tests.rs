@@ -275,6 +275,9 @@ fn a_running_keyring_wins_over_the_plaintext_file() {
 }
 
 /// 加密文件是用户显式选过的更严那一级,它比密钥环更优先。
+/// (Unix 限定:它借假密钥环当"在跑的那一级"用;Windows 没有密钥环后端,
+/// 这个优先级问题在那边不成立。)
+#[cfg(unix)]
 #[test]
 fn an_encrypted_file_wins_over_a_running_keyring() {
     let fake = FakeTool::new("encrypted-first");
