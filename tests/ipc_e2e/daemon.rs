@@ -50,7 +50,7 @@ fn daemon_ipc_end_to_end() {
         response["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("Game not found"),
+            .contains("配置中找不到游戏"),
         "{response}"
     );
     let response = fixture.rpc("scale.get_status", json!({ "session_id": "ghost" }));
