@@ -34,7 +34,7 @@ export component GameSavesGroup inherits Rectangle {
                         padding: 16px;
                         spacing: 4px;
                         Text {
-                            text: "windows = prefix 里的 Windows 路径,推荐用 %APPDATA% / %DOCUMENTS% 这类令牌(别写用户名,各 prefix 不一样);relative = 相对游戏根目录;absolute = 只在这台机器上有效,不跨平台同步。"
+                            text: "windows = prefix 里的 Windows 路径,推荐用 %APPDATA% / %DOCUMENTS% 这类令牌(别写用户名,各 prefix 不一样);relative = 相对游戏根目录;absolute = 只在这台机器上有效,不跨平台同步。\n点「浏览…」挑一个位置,类型会自动识别并改写 —— 顺序是先 relative、再 windows 令牌、最后 absolute。"
                                 + (root.path-hint == "" ? "" : "\n\n" + root.path-hint);
                             font-size: 12px;
                             color: Tokens.text-3;
