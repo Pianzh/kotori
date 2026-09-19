@@ -222,7 +222,9 @@ impl Kopia {
             let detail = if stderr.trim().is_empty() {
                 format!("退出码 {:?}", output.status.code())
             } else {
-                clean_stderr(&stderr)
+                // 认得出的失败给一句"该去检查什么"(BUG-7:原始 stderr 直接
+                // 透传,让"改了桶名"看起来像"没生效"),kopia 原话保留在后。
+                super::diagnostics::explain_kopia_failure(&stderr)
             };
             return Err(SyncError::Command(format!(
                 "kopia {} 失败: {detail}",
@@ -403,16 +405,18 @@ fn local_repository_from_env() -> Option<PathBuf> {
         .filter(|path| !path.as_os_str().is_empty())
 }
 
-/// kopia 的 stderr 收缩成一行可读的话。
+/// kopia 的 stderr 收缩成可读的几行。
 ///
 /// 它爱在前面写时间戳、在后面追加一堆 `write error: unable to open log file`
-/// （`KOPIA_LOG_DIR` 没指好时）。这些对用户没有意义，删掉，真话留着。
+/// （`KOPIA_LOG_DIR` 没指好时）；B2 后端的弃用警告(`The b2 backend is deprecated`)
+/// 也每跑一次打一遍 —— 这些对"这次为什么失败"都没有意义，删掉，真话留着。
 fn clean_stderr(stderr: &str) -> String {
     let cleaned: Vec<&str> = stderr
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .filter(|line| !line.contains("unable to open log file"))
+        .filter(|line| !line.to_lowercase().contains("backend is deprecated"))
         .collect();
     let joined = cleaned.join("\n");
     if joined.trim().is_empty() {
@@ -438,6 +442,30 @@ mod tests {
     #[test]
     fn an_empty_stderr_stays_empty() {
         assert_eq!(clean_stderr("   \n  "), "");
+    }
+
+    #[test]
+    fn kopia_failures_are_explained_and_deprecation_noise_is_dropped() {
+        // 实测(2026-09-19,真机 B2):弃用警告 + bucket not found 混在一段 stderr
+        // 里直接透传,让"改了桶名"看起来像"没生效"。
+        let stderr = "WARNING The b2 backend is deprecated and will be removed in a future release\n\
+                      ERROR can't connect to storage: bucket not found\n";
+        let explained = super::super::diagnostics::explain_kopia_failure(stderr);
+        assert!(explained.contains("核对桶名"), "{explained}");
+        assert!(
+            explained.contains("bucket not found"),
+            "原话保留: {explained}"
+        );
+        assert!(
+            !explained.contains("deprecated"),
+            "弃用警告是噪音: {explained}"
+        );
+
+        // 密码错给的是密码那条指引。
+        let explained = super::super::diagnostics::explain_kopia_failure(
+            "ERROR failed to connect to repository: invalid password",
+        );
+        assert!(explained.contains("仓库密码"), "{explained}");
     }
 
     #[test]

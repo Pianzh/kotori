@@ -51,6 +51,54 @@ pub(super) fn explain_failure(stderr: &str) -> String {
     }
 }
 
+/// kopia 的 stderr 也按"该去检查什么"解释(BUG-7,2026-09-19 实测:直接透传的
+/// `can't connect to storage: bucket not found` 让"改了桶名"看起来像"没生效")。
+///
+/// B2 那边的报错两家措辞接近,hint 共用一套;差别在 kopia 的输出是**多行**的
+/// (B2 弃用警告 + 真错误),不走 rclone 的"取最后一行",也不剥时间戳前缀。
+pub(super) fn explain_kopia_failure(stderr: &str) -> String {
+    let detail = clean_stderr(stderr);
+    let lower = detail.to_lowercase();
+
+    let hint = if lower.contains("bucket")
+        && (lower.contains("not found")
+            || lower.contains("does not exist")
+            || lower.contains("no such"))
+    {
+        Some(
+            "找不到这个 bucket：到 B2 控制台核对桶名有没有写错（区分大小写），\
+             以及 Application Key 是否授权了它",
+        )
+    } else if lower.contains("unable to authenticate")
+        || lower.contains("unauthorized")
+        || lower.contains("401")
+    {
+        Some(
+            "B2 不认这组凭据。检查 keyID 是不是 Application Key ID（形如 005a…，不是账号 ID），\
+             以及 applicationKey 有没有完整复制",
+        )
+    } else if lower.contains("invalid password") || lower.contains("wrong password") {
+        Some(
+            "仓库密码不对：kopia 的仓库密码默认是 kotori，或你在设置页里自己设的那个;\
+             双系统/多机必须用同一个",
+        )
+    } else if lower.contains("no such host")
+        || lower.contains("connection refused")
+        || lower.contains("timeout")
+        || lower.contains("dial tcp")
+        || lower.contains("tls")
+    {
+        Some("连不上 B2：检查网络、代理或 DNS 设置")
+    } else {
+        None
+    };
+
+    match hint {
+        Some(hint) => format!("{hint}\n（kopia 原话：{detail}）"),
+        None => detail,
+    }
+}
+
 /// The last non-empty line of rclone's output, with its log prefix removed.
 fn clean_stderr(stderr: &str) -> String {
     stderr
