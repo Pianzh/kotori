@@ -2,9 +2,13 @@
 
 use super::keyring::adopt_plain_entries;
 use super::plain::PlainFile;
+// 假 secret-tool 是 shell 脚本,只在 Unix 上能跑 —— 用到它的测试全部
+// #[cfg(unix)],Windows 的密钥环后端(凭据管理器)实现后再补那边的夹具。
+#[cfg(unix)]
 use super::testing::FakeTool;
 use super::*;
 
+#[cfg(unix)]
 #[test]
 fn round_trips_a_secret_through_the_keyring() {
     let fake = FakeTool::new("roundtrip");
@@ -31,6 +35,7 @@ fn round_trips_a_secret_through_the_keyring() {
     assert_eq!(keyring.get(SecretKey::B2AppKey).unwrap(), None);
 }
 
+#[cfg(unix)]
 #[test]
 fn secrets_are_stored_under_distinct_accounts() {
     let fake = FakeTool::new("distinct");
@@ -61,6 +66,7 @@ fn secrets_are_stored_under_distinct_accounts() {
     assert_eq!(SecretKey::ALL.len(), 3, "B2 两条加 kopia 密码");
 }
 
+#[cfg(unix)]
 #[test]
 fn an_installed_but_dead_backend_is_not_mistaken_for_a_working_one() {
     // The bug this covers: `secret-tool` was present, so the settings page
@@ -112,6 +118,7 @@ fn an_installed_but_dead_backend_is_not_mistaken_for_a_working_one() {
     assert!(memory.is_ephemeral() && memory.probe().is_ok());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_healthy_backend_answers_the_probe_without_finding_anything() {
     let fake = FakeTool::new("probe-ok");
@@ -206,6 +213,7 @@ fn a_machine_without_a_keyring_falls_back_to_a_private_plain_file() {
 
 /// 有密钥环时:明文里已有的凭据要**搬进去**,搬全了就把明文删掉 —— 能不留明文就不留。
 /// (用户 2026-09-13:"密钥环作为可选使用"。)
+#[cfg(unix)]
 #[test]
 fn a_keyring_that_shows_up_takes_over_the_plaintext_file() {
     let fake = FakeTool::new("takeover");
@@ -234,6 +242,7 @@ fn a_keyring_that_shows_up_takes_over_the_plaintext_file() {
 
 /// 挑选顺序本身:密钥环在跑时它赢,明文里的东西被搬走后不再留明文。
 /// (顺序的另外两档——加密文件优先、都没有则明文——由上面两条测试覆盖。)
+#[cfg(unix)]
 #[test]
 fn a_running_keyring_wins_over_the_plaintext_file() {
     let fake = FakeTool::new("wins");

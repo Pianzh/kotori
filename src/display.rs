@@ -303,6 +303,7 @@ mod tests {
 
     // 这两条用 `/bin/sh`（POSIX 保证存在的绝对路径），不是 PATH 上的外部程序：
     // CI 规则禁的是 rclone / secret-tool 这类"这台机器上可能没装"的工具。
+    #[cfg(unix)]
     #[test]
     fn a_probe_that_never_answers_is_killed_and_read_as_no_answer() {
         let started = Instant::now();
@@ -315,6 +316,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_probe_that_answers_hands_back_its_output() {
         let out = probe_output_within("/bin/sh", &["-c", "printf hi"], Duration::from_secs(5))

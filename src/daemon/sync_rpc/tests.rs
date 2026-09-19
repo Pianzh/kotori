@@ -58,6 +58,9 @@ fn daemon(keyring: Keyring) -> Daemon {
     Daemon::with_keyring(config, keyring).with_config_path(dir.join("config.toml"))
 }
 
+// 假 secret-tool(FakeTool)是 shell 脚本,Unix 限定——Windows 的密钥环后端
+// 还没实现,这两条在 Windows 上 spawn 不出来(os error 193)。
+#[cfg(unix)]
 #[tokio::test]
 async fn status_never_returns_a_secret_value() {
     let fake = FakeTool::new("status-secrets");
@@ -154,6 +157,7 @@ async fn settings_are_validated_before_they_are_stored() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn credentials_go_into_the_keyring_and_can_be_cleared() {
     let fake = FakeTool::new("credentials");

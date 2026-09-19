@@ -80,7 +80,7 @@ impl Runner {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use crate::sync::archive;
     use crate::sync::runner::testing::{FakeRclone, target};

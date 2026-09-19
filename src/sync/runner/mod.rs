@@ -35,9 +35,11 @@ mod outcome;
 mod pull;
 mod restore;
 mod staging;
-#[cfg(test)]
+// 假 rclone 夹具是 shell 脚本,只在 Unix 上能跑(spawn 在 Windows 报 os error
+// 193);runner 的测试因此整体 Unix 限定,Windows 覆盖等有 Windows 版假货再补。
+#[cfg(all(test, unix))]
 mod testing;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests;
 mod upload;
 
@@ -94,7 +96,7 @@ impl Runner {
     /// A runner pinned to one binary. Used by tests, and by users who keep
     /// their tool somewhere unusual (`KOTORI_RCLONE` / `KOTORI_KOPIA` are
     /// handled by `new`).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn with_binary(binary: impl Into<PathBuf>, settings: SyncConfig, keyring: Keyring) -> Self {
         let backend = Backend::with_binary(binary.into(), settings.clone(), keyring.clone());
         Self {
@@ -109,7 +111,7 @@ impl Runner {
     ///
     /// 只给测试用：一次测试运行绝不该往真实数据目录里写包（生产路径永远走
     /// 数据目录下的 `sync/`）。
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub fn with_work_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.work_dir = dir.into();
         self

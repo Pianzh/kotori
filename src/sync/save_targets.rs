@@ -58,7 +58,7 @@ pub fn targets(game: &GameConfig, config: &Config) -> Result<Vec<SaveTarget>, St
     Ok(targets)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

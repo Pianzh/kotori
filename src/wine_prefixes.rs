@@ -164,6 +164,8 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    // 同 wine/tests.rs:假 wineserver 是 shell 脚本,Unix 限定。
+    #[cfg(unix)]
     #[tokio::test]
     async fn the_sweep_closes_what_still_exists_and_skips_what_is_gone() {
         let dir = scratch("prefixes-sweep");

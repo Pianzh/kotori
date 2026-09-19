@@ -90,6 +90,8 @@ fn recording_wineserver(dir: &Path) -> PathBuf {
     script
 }
 
+// 假 wineserver 是 shell 脚本,只在 Unix 上能跑(见 testing.rs 的 write_executable)。
+#[cfg(unix)]
 #[tokio::test]
 async fn closing_a_prefix_names_that_prefix_to_wineserver() {
     let dir = scratch("wineserver-args");

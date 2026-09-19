@@ -120,6 +120,9 @@ mod tests {
         assert!(validate(&config).is_ok());
     }
 
+    // 假 secret-tool 是 shell 脚本,只在 Unix 上能跑(Windows 上 spawn 报
+    // os error 193);其余的校验测试不 spawn 任何东西。
+    #[cfg(unix)]
     #[test]
     fn missing_secrets_are_reported_before_a_run() {
         use crate::secrets::testing::FakeTool;
