@@ -73,8 +73,8 @@ pub(super) fn install_callbacks(window: &AppWindow) {
             ui.reseed_detail();
         });
     });
-    window.on_launch(|id| dispatch(Message::Launch(id.to_string())));
-    window.on_stop(|id| dispatch(Message::Stop(id.to_string())));
+    // 一颗按钮两种时候 —— 该启动还是该停由 Rust 决定,界面不自己分岔。
+    window.on_toggle_run(|id| dispatch(Message::ToggleRun(id.to_string())));
 
     // ── 添加游戏 ──────────────────────────────────────────────────────────
     window.on_new_name_changed(|text| dispatch(Message::NewNameChanged(one_line(&text))));

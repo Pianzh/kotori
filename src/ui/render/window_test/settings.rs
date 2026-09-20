@@ -220,6 +220,28 @@ pub(super) fn settings_page(mut ui: Ui) {
         ui.app.saved_msg = None;
     });
 
+    // 「启动 / 停止」是一颗按钮两种时候:没在跑时点它 = 启动(`launching` 立起来);
+    // 在跑时点它 = 停,**绝不**再发一次启动 —— 详情页头部那颗从前就是在这儿撒的谎。
+    window.invoke_toggle_run("demo".into());
+    assert_app(&|app| assert_eq!(app.launching.as_deref(), Some("demo")));
+    with_ui(|ui| ui.app.launching = None);
+    assert_app(&|app| assert!(app.running.is_empty()));
+    with_ui(|ui| {
+        ui.app.running.insert(
+            "demo".into(),
+            SessionInfo {
+                session_id: "s1".into(),
+                watch_only: false,
+            },
+        );
+    });
+    window.invoke_toggle_run("demo".into());
+    assert_app(&|app| assert_eq!(app.launching, None, "在跑的该去停"));
+    with_ui(|ui| {
+        ui.app.running.clear();
+        ui.app.saved_msg = None;
+    });
+
     // 配置来源:点一下 = 开始切(旗立起来挡住第二次点击),顺手清掉上一句回话 ——
     // 界面不会停在上一次的结果上。(真正那趟 RPC 由 `update_settings` 发出去,
     // 这里只看消息有没有落地。)

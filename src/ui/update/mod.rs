@@ -8,6 +8,8 @@ use super::*;
 
 mod add;
 mod picker;
+// 「启动 / 停止」那一族住在 `run.rs`;`pub(in crate::ui)` 只为单元测试叫得到它。
+pub(in crate::ui) mod run;
 mod settings;
 mod sync;
 
@@ -89,18 +91,9 @@ impl App {
                 }
                 Task::none()
             }
-            Message::Launch(id) => {
-                self.launching = Some(id.clone());
-                let socket = self.daemon_socket.clone();
-                Task::perform(
-                    async move {
-                        let mut params = serde_json::Map::new();
-                        params.insert("id".into(), Value::String(id));
-                        crate::rpc::call(&socket, "game.launch", Some(params)).await
-                    },
-                    Message::LaunchDone,
-                )
-            }
+            // 一颗按钮两种时候:该启动还是该停由 `run_action` 说了算(文案也从同一
+            // 份会话表来,所以两者不可能再说两套话)。
+            Message::ToggleRun(game_id) => self.toggle_run(game_id),
             Message::LaunchDone(result) => {
                 self.launching = None;
                 match result {
@@ -327,17 +320,6 @@ impl App {
             | Message::ConfigSourceSwitched(..)
             | Message::EnvironmentReload
             | Message::EnvironmentLoaded(..)) => self.update_settings(m),
-            Message::Stop(game_id) => {
-                let Some(session) = self.running.get(&game_id).map(|s| s.session_id.clone()) else {
-                    return Task::none();
-                };
-                let socket = self.daemon_socket.clone();
-                self.error = None;
-                Task::perform(
-                    async move { stop_session(&socket, &session).await },
-                    Message::StopDone,
-                )
-            }
             Message::StopDone(result) => {
                 if let Err(e) = result {
                     self.error = Some(e);

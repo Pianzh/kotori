@@ -75,8 +75,8 @@ export component AppWindow inherits Window {
 
     callback search-changed(string);
     callback open-game(string);
-    callback launch(string);
-    callback stop(string);
+    /// 「启动 / 停止」那一颗按钮(两个页面共用):该启动还是该停由 Rust 决定。
+    callback toggle-run(string);
 
     // ── 添加游戏 ──────────────────────────────────────────────────────────
     in-out property <string> new-name: "";
@@ -307,8 +307,7 @@ export component AppWindow inherits Window {
                             search-changed(text) => { root.search-changed(text); }
                             refresh => { root.refresh(); }
                             open-game(id) => { root.open-game(id); }
-                            launch(id) => { root.launch(id); }
-                            stop(id) => { root.stop(id); }
+                            toggle-run(id) => { root.toggle-run(id); }
                         }
 
                         if (root.tab == 0) && root.game-open : GameSettingsPage {
@@ -337,7 +336,7 @@ export component AppWindow inherits Window {
                             path-hint: root.path-hint;
                             path-pick: root.path-pick;
                             back => { root.back(); }
-                            launch => { root.launch(root.game.id); }
+                            toggle-run => { root.toggle-run(root.game.id); }
                             reset => { root.reset(); }
                             delete-requested => { root.delete-requested(); }
                             delete-cancelled => { root.delete-cancelled(); }

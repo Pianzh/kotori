@@ -60,7 +60,7 @@ export component GameSettingsPage inherits Rectangle {
     in property <PathPick> path-pick: { token: 0, target: -1, value: "" };
 
     callback back();
-    callback launch();
+    callback toggle-run();
     callback reset();
     callback delete-requested();
     callback delete-cancelled();
@@ -173,7 +173,7 @@ export component GameSettingsPage inherits Rectangle {
                 GameHeader {
                     game: root.game;
                     back => { root.back(); }
-                    launch => { root.launch(); }
+                    toggle-run => { root.toggle-run(); }
                 }
 
             // ── 路径 ──────────────────────────────────────────────────

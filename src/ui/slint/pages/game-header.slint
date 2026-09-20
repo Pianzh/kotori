@@ -10,7 +10,8 @@ import { GameItem } from "../types.slint";
 export component GameHeader inherits Rectangle {
     in property <GameItem> game;
     callback back();
-    callback launch();
+    /// 「启动 / 停止」那一颗:该干什么由 Rust 定(见 `update::run_action`)。
+    callback toggle-run();
 
     height: layout.preferred-height;
     layout := HorizontalLayout {
@@ -60,7 +61,7 @@ export component GameHeader inherits Rectangle {
                                 : (root.game.launching ? "启动中…" : "启动");
                             button-width: 96px;
                             button-enabled: !root.game.launching;
-                            clicked => { root.launch(); }
+                            clicked => { root.toggle-run(); }
                         }
                     }
                 }

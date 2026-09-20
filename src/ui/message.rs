@@ -51,7 +51,9 @@ pub enum Message {
     TabChanged(Tab),
     Refresh,
     GamesLoaded(Result<Vec<UiGame>, String>),
-    Launch(String),
+    /// 那一颗「启动 / 停止」按钮(同一颗按钮两种时候):该启动还是该停,由 Rust 看
+    /// 会话表决定(见 `App::run_action`)—— 文案与动作出自同一个判断。
+    ToggleRun(String),
     LaunchDone(Result<Value, String>),
     GameSelected(String),
     BackToList,
@@ -139,7 +141,6 @@ pub enum Message {
     /// 设置页「环境检查」的结果(`env.report`),以及用户按下的「重新检查」。
     EnvironmentLoaded(Result<Environment, String>),
     EnvironmentReload,
-    Stop(String),
     StopDone(Result<(), String>),
     Tick,
 

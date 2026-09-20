@@ -4,6 +4,7 @@
 use super::*;
 
 use crate::ui::test_support::{sync_payload, sync_status_fixture, ui_game};
+use crate::ui::update::run::{RunAction, run_action};
 
 #[test]
 fn a_late_status_reply_never_eats_what_the_user_typed() {
@@ -252,4 +253,35 @@ fn a_late_save_never_touches_another_games_draft() {
     assert_eq!(draft.game_id, "other");
     assert_eq!(draft.exe_original, draft.exe, "别人的书签不许被动");
     assert!(app.saved_msg.is_none(), "已经离开那一页了,别在这儿报");
+}
+
+/// 「启动 / 停止」那一颗按钮:**在跑的要去停,没在跑的才去启动**。
+///
+/// 用户 2026-09-20 实测报的 bug:详情页头部那颗按钮在游戏跑起来之后显示成「停止」,
+/// 点下去还在启动 —— 文案与动作各判了一次,而其中一处永远发 `game.launch`。现在两者
+/// 都看会话表(见 `update::run_action`),这条测试盯住的就是"别再分岔"。
+#[test]
+fn the_run_button_stops_a_running_game_instead_of_launching_it_again() {
+    let (mut app, _task) = App::new();
+
+    // 没在跑 → 启动:`launching` 立刻立起来(按钮随之变灰)。
+    let _ = app.update(Message::ToggleRun("demo".into()));
+    assert_eq!(app.launching.as_deref(), Some("demo"));
+    app.launching = None;
+
+    // 已经在跑 → 停。⚠ 旧代码在这里会去启动(把 `launching` 又立起来)。
+    app.running.insert(
+        "demo".into(),
+        SessionInfo {
+            session_id: "s1".into(),
+            watch_only: false,
+        },
+    );
+    let _ = app.update(Message::ToggleRun("demo".into()));
+    assert_eq!(app.launching, None, "在跑的那一款该去停,而不是再启动一次");
+
+    // 观测会话(别人启动的那一局)同样算"在跑":那颗按钮 = 停掉跟踪。
+    assert_eq!(run_action(&app.running, "demo"), RunAction::Stop);
+    app.running.clear();
+    assert_eq!(run_action(&app.running, "demo"), RunAction::Launch);
 }

@@ -13,7 +13,10 @@ import { GameItem } from "../types.slint";
 component GameRow inherits Rectangle {
     in property <GameItem> game;
     callback open();
-    callback launch();
+    /// 「启动 / 停止」那一颗:点下去该干什么由 Rust 看会话表定(见 `update::run_action`),
+    /// 界面不自己分岔 —— 从前这里与详情页头部各判一次,于是详情页那颗显示成「停止」
+    /// 却还在启动(用户 2026-09-20 报的)。
+    callback toggle-run();
 
     height: 66px;
     border-radius: Tokens.radius-card;
@@ -92,7 +95,7 @@ component GameRow inherits Rectangle {
                     : (root.game.launching ? "启动中…" : "启动");
                 button-width: 84px;
                 button-enabled: !root.game.launching;
-                clicked => { root.launch(); }
+                clicked => { root.toggle-run(); }
             }
         }
 
@@ -116,8 +119,7 @@ export component GamesPage inherits ScrollView {
     callback search-changed(string);
     callback refresh();
     callback open-game(string);
-    callback launch(string);
-    callback stop(string);
+    callback toggle-run(string);
 
     Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
 
@@ -187,9 +189,7 @@ export component GamesPage inherits ScrollView {
             GameRow {
                 game: game;
                 open => { root.open-game(game.id); }
-                launch => {
-                    if (game.state != 0) { root.stop(game.id); } else { root.launch(game.id); }
-                }
+                toggle-run => { root.toggle-run(game.id); }
             }
         }
 
