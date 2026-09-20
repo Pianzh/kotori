@@ -216,8 +216,21 @@ async fn register(sessions: &Sessions, events: &Events, session: &ScaleSession) 
 
 /// 跟到游戏退出再发 `Ended`,两条会话路径共用。
 ///
-/// `child` 是直启时我们 spawn 的进程(`None` = 观测):先等它退出,再等被盯的
-/// 进程名消失 —— 启动器交接时,我们启动的那个先退,真游戏还在跑。
+/// `child` 是直启时我们 spawn 的进程(`None` = 观测)。两条路的**开头**不一样,
+/// 也必须是两段:
+///
+/// * 直启:启动时已经确认那个进程活着(300ms 检测),所以不需要"等它出现" ——
+///   等它退出就是这一局的尽头;退出时名字还在跑说明是启动器交接(真游戏还在),
+///   继续跟到走光。这与 `gamescope.rs` 的收尾同构:那边 child 是 gamescope。
+/// * 观测:kotori 什么都没启动,用户可能还没开游戏,所以先等名字出现(有上限)
+///   再等它消失。
+///
+/// ⚠ 从前两条路共用同一个"先等出现"的开头,直启用它就错了:此时被盯的名字**就是**
+/// 它刚 spawn 的那个 exe(没配 `process_name` 时),`wait()` 返回时名字当然已经不在,
+/// 于是每次直启结束都要空等满 `APPEAR_TIMEOUT`(300 秒)才走"进程始终没出现,放弃"
+/// 那条分支 —— 而那条分支**不发 `Ended`**,退出后的自动上传因此整条不触发
+/// (Windows 上没有 gamescope,每个游戏都走直启)。
+///
 /// `prefix` 是这一局用的 wine prefix(观测恒为 `None`):游戏都走光之后关掉
 /// wine 的那摊,否则 `winedevice.exe` 会把一次注销拖成 90 秒。
 fn spawn_watch_task(
@@ -237,11 +250,9 @@ fn spawn_watch_task(
                 }
                 Err(err) => tracing::warn!("session {sid}: 等进程结束出错：{err}"),
             }
-        }
-
-        let deadline = tokio::time::Instant::now() + process::APPEAR_TIMEOUT;
-        if !name.is_empty() {
-            // 等它出现(观测模式:用户可能还没开游戏;直启:exe 可能是启动器)。
+        } else if !name.is_empty() {
+            // 观测模式:kotori 什么都没启动,用户可能还没把游戏开起来,先等它出现。
+            let deadline = tokio::time::Instant::now() + process::APPEAR_TIMEOUT;
             loop {
                 if !sessions.read().await.contains_key(&sid) {
                     return;
@@ -258,8 +269,12 @@ fn spawn_watch_task(
                 }
                 tokio::time::sleep(process::POLL_INTERVAL).await;
             }
-
             tracing::info!("session {sid}: {name} is running");
+        }
+
+        // 两条路共用的收尾:等这个名字走光。启动器交接时,我们启动的那个先退,
+        // 真游戏顶着这个名字还在跑 —— 所以这一步对直启不是多余的。
+        if !name.is_empty() {
             loop {
                 tokio::time::sleep(process::POLL_INTERVAL).await;
                 if !sessions.read().await.contains_key(&sid) {

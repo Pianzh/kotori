@@ -5,7 +5,32 @@ use std::time::{Duration, Instant};
 use serde_json::json;
 
 use crate::fixture::Fixture;
-use crate::helpers::write_script;
+use crate::helpers::{wait_until, write_script};
+
+/// Is a process named `name` in the table right now?
+///
+/// Mirrors `process::matches` on the one rule that matters here: the exe's own
+/// file name, either as `comm` or as the basename of `argv[0]`.
+fn a_process_is_named(name: &str) -> bool {
+    let base = |s: &str| {
+        s.rsplit(['/', '\\'])
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_lowercase()
+    };
+    let name = name.to_lowercase();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return false;
+    };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        let comm = std::fs::read_to_string(path.join("comm")).unwrap_or_default();
+        let cmdline = std::fs::read_to_string(path.join("cmdline")).unwrap_or_default();
+        let argv0 = cmdline.split('\0').next().unwrap_or_default();
+        base(&comm) == name || (!argv0.is_empty() && base(argv0) == name)
+    })
+}
 
 #[test]
 fn manual_add_and_wine_settings_over_ipc() {
@@ -382,4 +407,73 @@ fn watch_only_session_follows_the_process() {
         0,
         "session should end when the watched process exits"
     );
+}
+
+/// A direct launch (no gamescope) must end its session when the game exits.
+///
+/// The fake `wine` reproduces what real wine does to the process table: it
+/// `exec -a`s itself so `argv[0]` *is* the game's exe path, which is the name
+/// `process::matches` looks for. The session therefore has to end when that
+/// process goes away — and `Ended` is what makes the save upload fire.
+#[test]
+fn direct_launch_session_ends_when_the_game_exits() {
+    let mut fixture = Fixture::new("direct");
+    let bin = fixture.dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+
+    let game_dir = fixture.dir.join("DirectGame");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    let exe = game_dir.join("game.exe");
+    std::fs::write(&exe, b"").unwrap();
+
+    // Runs for 5s (well past the 300ms immediate-exit check), then exits.
+    let script =
+        "#!/bin/bash\n[ \"$1\" = \"--kotori-warmup\" ] && exit 0\nexec -a \"$1\" /bin/sleep 5\n";
+    write_script(&bin.join("wine"), script);
+    fixture.extra_path = Some(bin.clone());
+    fixture.start();
+
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Direct Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "direct-game", "{response}");
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "direct-game", "direct_launch": true }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+
+    let session_count = |fixture: &Fixture| {
+        fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+
+    let response = fixture.rpc("game.launch", json!({ "id": "direct-game" }));
+    assert!(
+        response["result"]["session_id"].is_string(),
+        "launch refused: {response}"
+    );
+    assert_eq!(session_count(&fixture), 1);
+
+    // The fixture is faithful: the process table really does hold a `game.exe`
+    // while the game runs, exactly like wine's rewritten `argv[0]`.
+    assert!(
+        wait_until(Duration::from_secs(10), || a_process_is_named("game.exe")),
+        "the fake wine never showed up as game.exe — the fixture is not faithful"
+    );
+
+    // It exits on its own after 5s; the session must follow it out — not sit
+    // there until the 300s "never appeared" timeout, which skips `Ended` and
+    // with it the exit-time save upload.
+    let ended = wait_until(Duration::from_secs(60), || session_count(&fixture) == 0);
+    if !ended {
+        let log = std::fs::read_to_string(&fixture.log).unwrap_or_default();
+        panic!(
+            "the session outlived the game it launched (still {} session(s))\n--- daemon log ---\n{log}",
+            session_count(&fixture)
+        );
+    }
 }
