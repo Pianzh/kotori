@@ -277,10 +277,18 @@ pub(super) async fn sync_restore(
     Ok(describe_sync_outcome(&value["game"]))
 }
 
-/// Live sessions, keyed by game id.
-pub(super) async fn load_status(
-    socket: &Path,
-) -> Result<std::collections::BTreeMap<String, SessionInfo>, String> {
+/// `daemon.status` 的一次回包:谁在跑,以及**配置现在放在哪**。
+///
+/// 两件事同一次往返:设置页那一组"配置放在哪 / 切一下"要的就是这条 RPC 里的
+/// 两个字段(见 `status_rpc::rpc_status`),再单独发一次只是多一个空窗。
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DaemonStatus {
+    pub(crate) sessions: std::collections::BTreeMap<String, SessionInfo>,
+    pub(crate) config: ConfigSource,
+}
+
+/// Live sessions and the config location, keyed by game id.
+pub(super) async fn load_status(socket: &Path) -> Result<DaemonStatus, String> {
     let value = crate::rpc::call(socket, "daemon.status", None).await?;
     let mut running = std::collections::BTreeMap::new();
 
@@ -305,7 +313,52 @@ pub(super) async fn load_status(
         }
     }
 
-    Ok(running)
+    let config = ConfigSource {
+        path: value
+            .get("config_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string(),
+        portable_path: value
+            .get("config_portable_path")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        pinned: value
+            .get("config_pinned")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    };
+
+    Ok(DaemonStatus {
+        sessions: running,
+        config,
+    })
+}
+
+/// 「切到便携配置 / 切到默认配置」:让 daemon 把配置搬到另一个地点。
+///
+/// 搬完它自己就记住了新路径(唯一写者),**不需要重启**。回来那句话是给用户看的:
+/// 说清搬到了哪里、被留下那份去哪了。
+pub(super) async fn set_config_source(socket: &Path, portable: bool) -> Result<String, String> {
+    let value = crate::rpc::call(
+        socket,
+        "config.set_source",
+        Some(crate::rpc::params([("portable", Value::Bool(portable))])),
+    )
+    .await?;
+
+    let path = value
+        .get("config_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    if value.get("changed").and_then(|v| v.as_bool()) != Some(true) {
+        return Ok(format!("配置本来就在 {path}"));
+    }
+    let mut message = format!("已切换，配置现在存在 {path}（不用重启）");
+    if let Some(moved) = value.get("moved").and_then(|v| v.as_str()) {
+        message.push_str(&format!("；原来那份已改名为 {moved}"));
+    }
+    Ok(message)
 }
 
 pub(super) async fn stop_session(socket: &Path, session_id: &str) -> Result<(), String> {

@@ -31,6 +31,24 @@ pub(super) fn push_settings(ui: &mut Ui) {
         |v| w.set_service_hint(v),
     );
 
+    // 配置放在哪:能切就两只按钮,不能切(路径被环境变量钉死)就灰着 —— 下面那行
+    // 小字说明为什么。七个字段永远一起变,所以一次推一个结构体(见 `ConfigInfo`)。
+    let source = &app.config_source;
+    let (message, ok) = app
+        .config_msg
+        .clone()
+        .unwrap_or_else(|| (String::new(), true));
+    let info = ConfigInfo {
+        path: source.path.clone().into(),
+        label: source.label().into(),
+        is_portable: source.is_portable(),
+        can_switch: source.can_switch(),
+        busy: app.config_switching,
+        message: message.into(),
+        message_ok: ok,
+    };
+    push_eq(w.get_config(), info, |v| w.set_config(v));
+
     push_str(w.get_wine_prefix(), &app.wine_prefix_input, |v| {
         w.set_wine_prefix(v)
     });

@@ -117,7 +117,10 @@ pub enum Message {
     ServiceStarted(Result<String, String>),
     ServiceStop,
     ServiceStopped(Result<String, String>),
-    StatusLoaded(Result<std::collections::BTreeMap<String, SessionInfo>, String>),
+    StatusLoaded(Result<DaemonStatus, String>),
+    /// 设置页:把配置切到便携 / 默认地点(`true` = 便携)。
+    ConfigSourcePicked(bool),
+    ConfigSourceSwitched(Result<String, String>),
     /// 设置页「环境检查」的结果(`env.report`),以及用户按下的「重新检查」。
     EnvironmentLoaded(Result<Environment, String>),
     EnvironmentReload,

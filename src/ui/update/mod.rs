@@ -309,6 +309,8 @@ impl App {
             | Message::RemoveSavePath(..)
             | Message::Tick
             | Message::StatusLoaded(..)
+            | Message::ConfigSourcePicked(..)
+            | Message::ConfigSourceSwitched(..)
             | Message::EnvironmentReload
             | Message::EnvironmentLoaded(..)) => self.update_settings(m),
             Message::Stop(game_id) => {

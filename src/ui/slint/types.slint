@@ -66,6 +66,18 @@ export struct SyncGameItem {
     pending: bool,
 }
 
+// 设置页「配置文件」那组:配置现在放在哪、能不能换。
+// 一个结构体而不是七个散属性 —— 它们永远一起变(见 `render/settings.rs`)。
+export struct ConfigInfo {
+    path: string,
+    label: string,
+    is-portable: bool,
+    can-switch: bool,
+    busy: bool,
+    message: string,
+    message-ok: bool,
+}
+
 // 设置页「环境检查」的一行(对应 Rust 侧 `model::EnvCheck`)。
 // `state`:0 可用 / 1 有条件 / 2 缺少;状态字由 Rust 给(`state-label`),
 // 页面只按它挑颜色 —— 措辞不在 `.slint` 里拼。

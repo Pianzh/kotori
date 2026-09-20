@@ -12,6 +12,44 @@ pub struct WineStatus {
     pub detected: Vec<String>,
 }
 
+/// 配置文件落在哪儿、能不能换(设置页「配置文件」那一组)。
+///
+/// 只有两个地点(用户 2026-09-19):**二进制同目录**(便携)与**平台默认目录**;
+/// 启动时便携优先。谁在生效由 daemon 报 —— 界面自己那份 `config::config_path()`
+/// 算出来的可能与 daemon 记的不一样(它启动时就钉住了那一个),以 daemon 为准。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConfigSource {
+    /// 现在生效的那一份。
+    pub path: String,
+    /// 便携地点(二进制同目录的 `config.toml`);取不到二进制目录时是 `None`。
+    pub portable_path: Option<String>,
+    /// 路径被 `KOTORI_CONFIG` 钉死了 —— 切换没有意义。
+    pub pinned: bool,
+}
+
+impl ConfigSource {
+    /// 现在这一份是不是便携那份。
+    pub fn is_portable(&self) -> bool {
+        self.portable_path.as_deref() == Some(self.path.as_str())
+    }
+
+    /// 一句话说清它现在在哪。
+    pub fn label(&self) -> &'static str {
+        if self.pinned {
+            "由环境变量 KOTORI_CONFIG 指定"
+        } else if self.is_portable() {
+            "便携（kotori 同目录）"
+        } else {
+            "平台默认目录"
+        }
+    }
+
+    /// 能不能切:路径没被钉死、也知道便携地点在哪、而且 daemon 报过话。
+    pub fn can_switch(&self) -> bool {
+        !self.pinned && self.portable_path.is_some() && !self.path.is_empty()
+    }
+}
+
 /// 设置页「环境检查」的一行,来自 `env.report`(探测本身在 `crate::platform`)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EnvCheck {

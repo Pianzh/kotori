@@ -54,6 +54,50 @@ fn default_config_dir() -> PathBuf {
         .join("kotori")
 }
 
+/// 便携地点:二进制同目录的 `config.toml`(便携安装把配置放在 `kotori.exe` 旁边)。
+///
+/// 取不到自己的位置时是 `None` —— 那时候"便携"这个选项根本不存在,界面不该给按钮。
+pub fn portable_config_path() -> Option<PathBuf> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join("config.toml")))
+}
+
+/// 平台默认地点 —— 与 [`config_path`] 的兜底是同一个地方。
+pub fn default_config_path() -> PathBuf {
+    default_config_dir().join("config.toml")
+}
+
+/// 配置地点是不是被环境变量钉死了(`KOTORI_CONFIG`,测试与便携脚本在用)?
+///
+/// 钉死时"切换来源"这件事没有意义 —— 下次启动还是那个路径赢。
+pub fn config_path_is_pinned() -> bool {
+    std::env::var_os("KOTORI_CONFIG").is_some()
+}
+
+/// 把生效的配置从 `current` 搬到 `target`(内容就是内存里那一份)。
+///
+/// `disable_current`:那份**被留下**的旧文件要不要让路。切到平台默认目录时必须是
+/// `true` —— "二进制同目录优先"是启动时的搜索规则,不把它挪走,下次启动它照样赢,
+/// 用户看到的是"切换成功但一切照旧"。切到便携时不用管默认那份:它本来就排在后面。
+///
+/// 让路的做法是**改名**(`config.toml.portable-bak`)而不是删:这是用户自己的配置,
+/// 搬错了还能拿回来。返回被改名的那个路径(没动就是 `None`)。
+pub fn relocate_config(
+    current: &Path,
+    target: &Path,
+    config: &Config,
+    disable_current: bool,
+) -> anyhow::Result<Option<PathBuf>> {
+    save_to(target, config)?;
+    if !disable_current || current == target || !current.is_file() {
+        return Ok(None);
+    }
+    let backup = current.with_extension("toml.portable-bak");
+    std::fs::rename(current, &backup)?;
+    Ok(Some(backup))
+}
+
 /// The search rule as a pure function: a `config.toml` sitting next to the
 /// binary wins, the platform default is the fallback.
 fn choose_config_path(exe_dir: Option<&Path>, fallback_dir: &Path) -> PathBuf {
@@ -183,6 +227,23 @@ pub fn save_to(path: &Path, config: &Config) -> anyhow::Result<()> {
     let content = toml::to_string_pretty(config)?;
     std::fs::write(path, content)?;
     Ok(())
+}
+
+/// 测试用的唯一临时目录。**给整个 crate 的测试用**(`config::test_scratch`):
+/// 好几处都要一个"绝不与别人重名、跑完能删掉"的目录,而重名这件事已经在
+/// `Scratch` 那里咬过一次(见下面的说明),没必要每个文件各写一遍。
+#[cfg(test)]
+pub(crate) fn test_scratch(tag: &str) -> PathBuf {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "kotori-scratch-{}-{tag}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
 }
 
 #[cfg(test)]

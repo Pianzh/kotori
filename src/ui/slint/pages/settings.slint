@@ -3,7 +3,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
 import { Divider, RevealItem } from "../widgets/base.slint";
-import { EnvCheckRow } from "../types.slint";
+import { ConfigInfo, EnvCheckRow } from "../types.slint";
 import { PathField } from "../widgets/path-field.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
@@ -38,6 +38,12 @@ export component SettingsPage inherits ScrollView {
     in property <bool> browse-enabled: true;
     in property <string> path-hint: "";
 
+    // ── 配置文件 ──────────────────────────────────────────────────────────
+    // 只有两个地点(用户 2026-09-19):二进制同目录(便携)/ 平台默认目录,启动时
+    // 便携优先。两处都有时用户分不清哪份在生效,这一组就是把那件事摆到明面上,
+    // 并且允许换 —— 换完**不用重启**(daemon 是唯一写者,它记住新路径)。
+    in property <ConfigInfo> config;
+
     // ── 环境检查 ──────────────────────────────────────────────────────────
     // 结果由 daemon 探(`env.report` → `crate::platform`);这一页只显示,
     // 措辞与颜色码都在 Rust 那边算好(见 `render/settings.rs`)。
@@ -54,6 +60,8 @@ export component SettingsPage inherits ScrollView {
     callback save-wine-prefix();
     callback clear-wine-prefix();
     callback env-reload();
+    // true = 切到便携那份。
+    callback config-source-picked(bool);
 
     Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
 
@@ -232,12 +240,72 @@ export component SettingsPage inherits ScrollView {
             }
         }
 
+        // ── 配置文件 ──────────────────────────────────────────────────────
+        RevealItem {
+            revealed: root.revealed;
+            step: 5;
+            bottom: 8px;
+            SectionTitle { text: "配置文件"; }
+        }
+        RevealItem {
+            revealed: root.revealed;
+            step: 5;
+            bottom: 24px;
+            Group {
+                CardRow {
+                    interactive: false;
+                    title: "配置放在哪";
+                    description: root.config.label + " · " + root.config.path;
+                    HorizontalLayout {
+                        spacing: 10px;
+                        alignment: center;
+                        StdButton {
+                            label: "切到便携配置";
+                            button-width: 118px;
+                            // 不能点只有两种原因:已经在这儿了,或者路径被环境变量钉死
+                            // (那时按钮灰着,下面那行小字说明为什么)。
+                            button-enabled: root.config.can-switch && !root.config.is-portable && !root.config.busy;
+                            clicked => { root.config-source-picked(true); }
+                        }
+                        StdButton {
+                            label: "切到默认配置";
+                            button-width: 118px;
+                            button-enabled: root.config.can-switch && root.config.is-portable && !root.config.busy;
+                            clicked => { root.config-source-picked(false); }
+                        }
+                    }
+                }
+                if root.config.message != "" : VerticalLayout {
+                    Divider { }
+                    VerticalLayout {
+                        padding: 12px;
+                        Text {
+                            text: root.config.message;
+                            font-size: 12px;
+                            color: root.config.message-ok ? Tokens.ok : Tokens.danger;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+                Divider { }
+                VerticalLayout {
+                    padding: 16px;
+                    Text {
+                        text: "便携 = 配置文件放在 kotori 程序旁边,整个目录拷到别的机器上就能用;默认则是这台机器自己的配置目录。两个地方都有配置时,**便携那份优先** —— 切换会把当前配置原样写过去,并把让路的那份改名为 .portable-bak(不删)。";
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
         // ── 环境检查 ──────────────────────────────────────────────────────
         // ⚠ 这一组**只报告、不修改**:探测跑的是 `--version` 这类只读动作,
         // 不会替你装东西、也不会搬你的凭据(见 `src/platform/mod.rs` 的文件头)。
         RevealItem {
             revealed: root.revealed;
-            step: 5;
+            step: 6;
             bottom: 8px;
             SectionTitle { text: "环境检查"; }
         }

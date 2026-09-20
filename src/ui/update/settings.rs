@@ -200,8 +200,10 @@ impl App {
                 });
                 Task::batch([poll, next])
             }
-            Message::StatusLoaded(Ok(running)) => {
-                self.running = running;
+            Message::StatusLoaded(Ok(status)) => {
+                self.running = status.sessions;
+                // 配置落点跟着同一次回包刷新 —— 别处切过(CLI、另一台界面)这边也跟上。
+                self.config_source = status.config;
                 self.daemon_connected = Some(true);
                 // 会话轮询有回应就说明它活着 —— 哪怕是别处重新起的。这时"已停止"
                 // 那块牌子必须摘掉,不然侧栏说"已连接"、设置页说过"已停止"。
@@ -216,6 +218,35 @@ impl App {
                 Task::none()
             }
 
+            // ── 配置放在哪(便携 / 平台默认) ────────────────────────────────
+            Message::ConfigSourcePicked(portable) => {
+                if self.config_switching {
+                    return Task::none();
+                }
+                self.config_switching = true;
+                self.config_msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { set_config_source(&socket, portable).await },
+                    Message::ConfigSourceSwitched,
+                )
+            }
+            Message::ConfigSourceSwitched(result) => {
+                self.config_switching = false;
+                match result {
+                    Ok(message) => {
+                        self.config_msg = Some((message, true));
+                        // 位置变了 ⇒ 重读一次状态,把新路径与按钮的可用性推回去。
+                        let socket = self.daemon_socket.clone();
+                        return Task::perform(
+                            async move { load_status(&socket).await },
+                            Message::StatusLoaded,
+                        );
+                    }
+                    Err(e) => self.config_msg = Some((format!("切换失败: {e}"), false)),
+                }
+                Task::none()
+            }
             Message::EnvironmentReload => Task::perform(
                 async { load_environment().await },
                 Message::EnvironmentLoaded,

@@ -30,7 +30,14 @@ pub struct Daemon {
     config: Arc<RwLock<Config>>,
     /// The config file this daemon owns. Remembered rather than re-resolved so
     /// a write can never land on a different file than the one we loaded.
-    config_path: Arc<PathBuf>,
+    ///
+    /// **写得进去**是因为设置页那只「切到便携 / 切到默认」的按钮:切完内存里这份
+    /// 配置不变,变的只是"以后存到哪" —— 而它是唯一写者,所以换路径也得由它来换
+    /// (见 `status_rpc::rpc_config_set_source`)。
+    config_path: Arc<RwLock<PathBuf>>,
+    /// 这台机器上"配置能从哪儿来"的两个地点。生产恒为探测结果;测试注入临时目录,
+    /// 免得去写二进制旁边那个真文件。
+    config_sources: Arc<status_rpc::ConfigSources>,
     /// Single source of truth for live sessions. There is deliberately no
     /// second session list here: a duplicate copy used to go stale and report
     /// already-exited games as running.
@@ -80,7 +87,8 @@ impl Daemon {
     fn assemble(config: Config, sync: SyncState) -> Self {
         Self {
             config: Arc::new(RwLock::new(config)),
-            config_path: Arc::new(config::config_path()),
+            config_path: Arc::new(RwLock::new(config::config_path())),
+            config_sources: Arc::new(status_rpc::ConfigSources::detect()),
             engine: Arc::new(PlatformEngine::new()),
             shutdown: Arc::new(Notify::new()),
             sync: Arc::new(sync),
@@ -91,7 +99,16 @@ impl Daemon {
     /// Own an explicit config file instead of the machine-wide one. Tests use
     /// this so they never touch `~/.config/kotori/config.toml`.
     pub fn with_config_path(mut self, path: impl Into<PathBuf>) -> Self {
-        self.config_path = Arc::new(path.into());
+        self.config_path = Arc::new(RwLock::new(path.into()));
+        self
+    }
+
+    /// 指定"便携 / 默认"两个地点。**只有测试用** —— 生产走探测
+    /// (`ConfigSources::detect`),而探测结果里那个"便携"地点是**测试二进制旁边**,
+    /// 谁也不该往那儿写。
+    #[cfg(test)]
+    pub fn with_config_sources(mut self, portable: Option<PathBuf>, default: PathBuf) -> Self {
+        self.config_sources = Arc::new(status_rpc::ConfigSources::at(portable, default));
         self
     }
 
@@ -214,6 +231,7 @@ impl Daemon {
         Arc::new(Daemon {
             config: self.config.clone(),
             config_path: self.config_path.clone(),
+            config_sources: self.config_sources.clone(),
             engine: self.engine.clone(),
             shutdown: self.shutdown.clone(),
             sync: self.sync.clone(),
@@ -302,8 +320,8 @@ impl Daemon {
         let mut guard = self.config.write().await;
         let mut candidate = guard.clone();
         let value = mutate(&mut candidate)?;
-        crate::config::save_to(&self.config_path, &candidate)
-            .map_err(|e| format!("保存配置失败: {e}"))?;
+        let path = self.config_path.read().await.clone();
+        crate::config::save_to(&path, &candidate).map_err(|e| format!("保存配置失败: {e}"))?;
         *guard = candidate;
         Ok(value)
     }

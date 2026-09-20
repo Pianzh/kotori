@@ -9,7 +9,7 @@
 import { Tokens } from "theme.slint";
 import { Gap, NavItem } from "widgets/base.slint";
 import { StdButton } from "widgets/buttons.slint";
-import { GameItem, GameDetail, SaveItem, EnvCheckRow, PathPick } from "types.slint";
+import { GameItem, GameDetail, SaveItem, ConfigInfo, EnvCheckRow, PathPick } from "types.slint";
 import { AppNav } from "app-nav.slint";
 import { GamesPage } from "pages/games.slint";
 import { GameSettingsPage } from "pages/game-settings.slint";
@@ -229,6 +229,8 @@ export component AppWindow inherits Window {
     in-out property <bool> env-loaded: false;
     // 必需项齐了没有 —— 顶上那句话是绿是红由 Rust 算好(`Environment::ok`)。
     in-out property <bool> env-ok: true;
+    // 设置页「配置文件」:放在哪、能不能换(措辞由 Rust 算,见 render/settings.rs)。
+    in-out property <ConfigInfo> config: { path: "", label: "", is-portable: false, can-switch: false, busy: false, message: "", message-ok: true };
 
     callback service-start();
     callback service-stop();
@@ -236,6 +238,7 @@ export component AppWindow inherits Window {
     callback env-reload();
     callback save-wine-prefix();
     callback clear-wine-prefix();
+    callback config-source-picked(bool);
 
     VerticalLayout {
         spacing: 0px;
@@ -469,6 +472,8 @@ export component AppWindow inherits Window {
                             env-distro: root.env-distro;
                             env-loaded: root.env-loaded;
                             env-ok: root.env-ok;
+                            config <=> root.config;
+                            config-source-picked(portable) => { root.config-source-picked(portable); }
                             env-reload => { root.env-reload(); }
                             service-start => { root.service-start(); }
                             service-stop => { root.service-stop(); }

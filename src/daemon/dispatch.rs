@@ -31,6 +31,17 @@ impl Daemon {
                 shutdown: true,
             },
             "config.reload" => respond(id, self.rpc_reload_config().await),
+            "config.set_source" => {
+                let portable = req
+                    .params
+                    .as_ref()
+                    .and_then(|p| p.get("portable"))
+                    .and_then(|v| v.as_bool());
+                match portable {
+                    Some(portable) => respond(id, self.rpc_config_set_source(portable).await),
+                    None => rpc_err(id, -32602, "缺少参数: portable(真假)".to_string()),
+                }
+            }
             "wine.status" => respond(id, self.rpc_wine_status().await),
             "env.report" => respond(id, self.rpc_env_report().await),
             "wine.set_prefix" => {

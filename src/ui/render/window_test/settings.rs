@@ -53,6 +53,31 @@ pub(super) fn settings_page(mut ui: Ui) {
     render(&mut ui);
     ui.app.wine_msg = Some("保存失败: 这不是一个 wine prefix（缺少 drive_c）".into());
     render(&mut ui);
+
+    // 配置放在哪:三种样子都渲染一遍 —— 便携 / 默认 / 被环境变量钉死(两只按钮都
+    // 灰着),外加一句切换回话。
+    ui.app.config_source = ConfigSource {
+        path: "/home/user/.config/kotori/config.toml".into(),
+        portable_path: Some("/opt/kotori/config.toml".into()),
+        pinned: false,
+    };
+    render(&mut ui);
+    ui.app.config_source.path = "/opt/kotori/config.toml".into();
+    ui.app.config_msg = Some((
+        "已切换，配置现在存在 /opt/kotori/config.toml（不用重启）".into(),
+        true,
+    ));
+    render(&mut ui);
+    ui.app.config_msg = Some(("切换失败: 权限不够".into(), false));
+    render(&mut ui);
+    ui.app.config_source = ConfigSource {
+        path: "/opt/kotori/config.toml".into(),
+        portable_path: None,
+        pinned: true,
+    };
+    render(&mut ui);
+    ui.app.config_source = ConfigSource::default();
+    render(&mut ui);
     // 环境检查:三种状态各来一行,免得"缺少"那一行的红字没人看过。
     ui.app.environment = Some(Environment {
         distro: "Arch Linux".into(),
@@ -165,6 +190,18 @@ pub(super) fn settings_page(mut ui: Ui) {
     assert_eq!(draft().scale_ratio, "1.25");
     window.invoke_fullscreen_toggled(false);
     assert!(!draft().fullscreen);
+
+    // 配置来源:点一下 = 开始切(旗立起来挡住第二次点击),顺手清掉上一句回话 ——
+    // 界面不会停在上一次的结果上。(真正那趟 RPC 由 `update_settings` 发出去,
+    // 这里只看消息有没有落地。)
+    with_ui(|ui| ui.app.config_msg = Some(("切换失败: 权限不够".into(), false)));
+    window.invoke_config_source_picked(false);
+    assert_app(&|app| assert!(app.config_switching));
+    assert_app(&|app| assert_eq!(app.config_msg, None));
+    with_ui(|ui| {
+        ui.app.config_switching = false;
+        ui.app.config_msg = None;
+    });
 
     // 启动方式与自动追踪是**两件不相干的事**(用户 2026-09-20:仅观测是状态,
     // 不是启动方式的替代品):开追踪不该动"直接启动"。

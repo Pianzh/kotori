@@ -69,6 +69,12 @@ pub struct App {
     pub(super) pick_token: i32,
     /// 设置页「环境检查」的结果;`None` = 还没问过。
     pub(super) environment: Option<Environment>,
+    /// 设置页「配置文件」:daemon 报的落点与"能不能换"。
+    pub(super) config_source: ConfigSource,
+    /// 正在切(挡住连点两次)。
+    pub(super) config_switching: bool,
+    /// 切换的结果:一句话 + 是好消息还是坏消息。
+    pub(super) config_msg: Option<(String, bool)>,
     /// Automatic reconnect bookkeeping.
     pub(super) retry_attempts: u32,
     /// Live sessions by game id (refreshed periodically).
@@ -121,6 +127,9 @@ impl App {
                 picked_path: None,
                 pick_token: 0,
                 environment: None,
+                config_source: ConfigSource::default(),
+                config_switching: false,
+                config_msg: None,
                 retry_attempts: 0,
                 running: std::collections::BTreeMap::new(),
                 sync_status: None,
