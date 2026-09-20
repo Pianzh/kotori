@@ -339,21 +339,27 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// wine 的命令行里 exe 常常是 Windows 形状 —— 认得出 `Z:` 就等于拿到了本机路径。
+    /// 命令行里那个 exe 换成本机路径:绝对路径原样、`Z:` 换根、相对路径靠 cwd 拼、
+    /// 别的盘符不猜(它在某个 prefix 里,而这里不知道是哪个)。
     #[cfg(unix)]
     #[test]
-    fn wine_style_paths_become_unix_paths() {
+    fn command_line_paths_become_unix_paths() {
+        let path = |argv0: &str, cwd: Option<&str>| unix::unix_exe_path(argv0, cwd);
         assert_eq!(
-            unix::unix_exe_path(r"Z:\run\media\disk\Game\game.exe").as_deref(),
+            path(r"Z:\run\media\disk\Game\game.exe", None).as_deref(),
             Some("/run/media/disk/Game/game.exe")
         );
         assert_eq!(
-            unix::unix_exe_path("/games/demo/game.exe").as_deref(),
+            path("/games/demo/game.exe", None).as_deref(),
             Some("/games/demo/game.exe")
         );
-        // 别的盘符在某个 prefix 里,而这里不知道是哪个 —— 不猜。
-        assert_eq!(unix::unix_exe_path(r"C:\Games\demo\game.exe"), None);
-        assert_eq!(unix::unix_exe_path("game.exe"), None);
+        // 相对路径:进程自己的 cwd 说了算;读不到 cwd 就不猜。
+        assert_eq!(
+            path("target/probe/game.exe", Some("/home/user/kotori")).as_deref(),
+            Some("/home/user/kotori/target/probe/game.exe")
+        );
+        assert_eq!(path("target/probe/game.exe", None), None);
+        assert_eq!(path(r"C:\Games\demo\game.exe", None), None);
     }
 
     /// 自己这个进程当然活着,`/proc` 里不存在的号则不是 —— 两边的平台实现都只是

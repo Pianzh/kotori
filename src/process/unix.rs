@@ -66,11 +66,14 @@ pub fn pickable() -> Vec<Pickable> {
             let argv0 = entry.cmdline.split('\0').next().unwrap_or_default().trim();
             let game_like =
                 name.to_lowercase().ends_with(".exe") || argv0.to_lowercase().ends_with(".exe");
+            // 相对路径要靠**进程自己的 cwd** 才能变成可用的路径,而 cwd 只在真要
+            // 挑进程时才读(快照那条路每 2 秒跑一次,不能顺手多读一遍)。
+            let cwd = std::fs::read_link(format!("/proc/{}/cwd", entry.pid)).ok();
             game_like.then(|| Pickable {
                 pid: entry.pid,
                 name,
                 title: String::new(),
-                exe: unix_exe_path(argv0),
+                exe: unix_exe_path(argv0, cwd.as_deref().and_then(|dir| dir.to_str())),
             })
         })
         .collect()
@@ -82,10 +85,17 @@ pub fn pickable() -> Vec<Pickable> {
 /// * `Z:\run\media\…\game.exe` → `/run/media/…/game.exe`(`Z:` 在 wine 里就是 `/`);
 /// * 别的盘符(`C:\…` 在某个 prefix 里,而这里不知道是哪个 prefix) → `None`,
 ///   让人自己填 —— 猜错比不猜更难查。
-pub(super) fn unix_exe_path(argv0: &str) -> Option<String> {
+pub(super) fn unix_exe_path(argv0: &str, cwd: Option<&str>) -> Option<String> {
     let text = argv0.trim();
     if text.starts_with('/') {
         return Some(text.to_string());
+    }
+    // 相对路径(有些启动器就这么写):拿进程自己的 cwd 拼出来。读不到 cwd 就不猜。
+    if !text.is_empty()
+        && !text.contains(':')
+        && let Some(cwd) = cwd.map(str::trim).filter(|dir| dir.starts_with('/'))
+    {
+        return Some(format!("{}/{}", cwd.trim_end_matches('/'), text));
     }
     let (drive, rest) = text.split_once(':')?;
     if !drive.eq_ignore_ascii_case("z") {
