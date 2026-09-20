@@ -203,9 +203,26 @@ jobs:
           # tag 名里带 `-` 的一律当**预发布**(v0.1.0-rc1、v0.0.2-test);纯数字的
           # (v0.1.0)才是正式版。用数组而不是拼字符串,免得空参数被当成一个空文件名。
           ARGS=(--title "$GITHUB_REF_NAME" --generate-notes)
-          case "$GITHUB_REF_NAME" in *-*) ARGS+=(--prerelease) ;; esac
+          # ⚠ 判"预发布"的规矩(2026-09-20 改):tag 名里带 `-`(v0.1.0-rc1) **或者**
+          # 是 `v0.0.x` —— 这个项目的 0.0.x 从来都是"第 N 次 Windows 测试发布"
+          # (v0.0.1 / v0.0.2 / v0.0.3 三次都是发布后**手工**补的预发布标记与那句测试
+          # 说明,漏补就落成正式版)。现在它自动了。
+          NOTES_EXTRA=""
+          case "$GITHUB_REF_NAME" in
+            *-*|v0.0.*)
+              ARGS+=(--prerelease)
+              NOTES_EXTRA='
+
+          ---
+
+          ### 这是一次**测试构建**
+
+          它是给真机验证用的,不是稳定版:装上跑一跑,有问题直接说,不必当正式版的 bug
+          走流程。'
+              ;;
+          esac
           gh release create "$GITHUB_REF_NAME" dist/* "${ARGS[@]}" \
-            --notes '### 下载哪个
+            --notes "### 下载哪个
 
           - `kotori-windows-x64.zip` —— **解压即用**。MSVC 运行库已静态链接进
             `kotori.exe`,不需要另装 VC++ 可再发行组件;包里内置了 `kopia.exe`
@@ -218,4 +235,4 @@ jobs:
           GPL-3.0:https://github.com/Pianzh/kotori —— 本仓库就是这些二进制对应的源码。
           随包的 kopia 是独立程序(Apache-2.0),取自
           https://github.com/kopia/kopia/releases 。
-          '
+          ${NOTES_EXTRA}"
