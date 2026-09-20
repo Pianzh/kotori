@@ -57,19 +57,38 @@ impl Daemon {
                     .retain(|id, _| ids.contains(id.as_str()));
 
                 let live = this.engine.list_sessions().await;
+                // 这一轮已经"认领"过的进程名。⚠ 光看 `live` 不够:同一轮里先开的
+                // 那个会话还没进 `live`(它是在循环开始前取的),于是同一个进程会被
+                // 第二款游戏再认一次 —— 用户库里就有两款 exe 都叫 `Game.exe`
+                // (2026-09-20 实测:一轮里开出两个会话)。
+                let mut claimed: Vec<String> = live
+                    .iter()
+                    .filter_map(|session| session.process_name.clone())
+                    .collect();
                 for game in candidates {
                     // 用户亲手停掉的那一款:同一个进程实例还在就闭嘴
                     // (见 `Daemon::ignored_watch`)。
                     if this.this_run_was_stopped(&game).await {
                         continue;
                     }
-                    if live.iter().any(|session| {
-                        session.game_id.as_deref() == Some(game.id.as_str())
-                            || session
-                                .process_name
-                                .as_deref()
-                                .is_some_and(|name| crate::process::same_name(name, &game.name))
-                    }) {
+                    if live
+                        .iter()
+                        .any(|session| session.game_id.as_deref() == Some(game.id.as_str()))
+                    {
+                        continue;
+                    }
+                    // 同一个进程名只能归一款:进程名认不出是哪一款时(比如两款游戏
+                    // 都叫 `Game.exe`)按 id 排序取第一个,并在日志里说清这是歧义 ——
+                    // 用户给它们各填一个「跟随的进程」就能消除。
+                    if let Some(other) = claimed
+                        .iter()
+                        .find(|name| crate::process::same_name(name, &game.name))
+                    {
+                        tracing::warn!(
+                            "进程 {} 同时匹配多款开着自动追踪的游戏,这一轮只跟 {};给它们填「跟随的进程」可以消除歧义",
+                            game.name,
+                            other
+                        );
                         continue;
                     }
                     let seen = *first_seen
@@ -88,6 +107,7 @@ impl Daemon {
                                 game.id,
                                 game.name
                             );
+                            claimed.push(game.name.clone());
                             first_seen.remove(&game.id);
                         }
                         Err(error) => {
@@ -124,10 +144,14 @@ impl Daemon {
         };
 
         let running = crate::process::Snapshot::take();
-        wanted
+        let mut found: Vec<Watched> = wanted
             .into_iter()
             .filter(|game| running.matches(&game.name))
-            .collect()
+            .collect();
+        // 名字有歧义时(同一轮里好几款都匹配)"取第一个"得有个确定的说法 ——
+        // 配置里是 HashMap,遍历顺序每次都可能不同。
+        found.sort_by(|left, right| left.id.cmp(&right.id));
+        found
     }
 
     /// 用户是不是刚亲手停掉了**这一次运行**?

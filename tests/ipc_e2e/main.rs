@@ -21,3 +21,4 @@ mod daemon;
 mod library;
 mod session;
 mod sync;
+mod watch;
