@@ -42,6 +42,12 @@ pub struct DaemonConfig {
     pub socket_path: PathBuf,
     #[serde(default = "default_log_level")]
     pub log_level: String,
+    /// 一次性迁移的标记:存量配置里那些 `auto_watch = false` 已经按新默认翻过一遍了。
+    ///
+    /// 它是"**这份配置过了哪一次迁移**"的记录,不是给用户看的开关 —— 见
+    /// [`Config::normalize`]。缺省 `false`(老配置里没有这个键)。
+    #[serde(default)]
+    pub auto_watch_migrated: bool,
 }
 
 /// Machine-wide wine settings shared by all games.
@@ -250,6 +256,18 @@ impl Config {
     /// rest of the code can rely on the invariants. Runs on every load, and
     /// the result is written back the next time the config is saved.
     pub fn normalize(&mut self) {
+        // 一次性迁移(用户 2026-09-20):`auto_watch` 的默认值从"关"变成"开",而存量
+        // 配置里那些 `watch_only = false` 是**旧默认值**写的、不是用户的选择 —— 不翻
+        // 的话"默认打开"对老用户等于没发生(他库里 42 款会全部保持关着)。
+        //
+        // 标记落在配置里,所以只发生一次:之后用户自己关掉的不会被再翻回来。
+        if !self.daemon.auto_watch_migrated {
+            for game in self.games.values_mut() {
+                game.auto_watch = true;
+            }
+            self.daemon.auto_watch_migrated = true;
+        }
+
         for game in self.games.values_mut() {
             game.normalize();
         }
@@ -312,6 +330,9 @@ impl Default for DaemonConfig {
         Self {
             socket_path: default_socket_path(),
             log_level: default_log_level(),
+            // `false` = "这份配置还没过那次迁移";新装的用户第一次加载就会翻成 true
+            // (库里本来没有游戏,翻不翻都一样)。
+            auto_watch_migrated: false,
         }
     }
 }

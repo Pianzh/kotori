@@ -67,6 +67,36 @@ watch_only = false
     assert!(!written.contains("watch_only"), "{written}");
 }
 
+/// 一次性迁移:`auto_watch` 的默认值从"关"变成"开",而存量配置里那些
+/// `watch_only = false` 是**旧默认值**写的、不是用户的选择 —— 不翻的话"默认打开"
+/// 对老用户等于没发生。
+///
+/// 关键是**只翻一次**:标记落在配置里,用户之后自己关掉的不会被再翻回来。
+#[test]
+fn the_auto_watch_default_flips_old_configs_once_and_only_once() {
+    let text = r#"
+[games.old]
+name = "旧配置"
+exe_path = "/games/old/game.exe"
+watch_only = false
+"#;
+    let mut config: Config = toml::from_str(text).unwrap();
+    assert!(
+        !config.games["old"].auto_watch,
+        "serde 那一层照读旧名字里的 false"
+    );
+
+    config.normalize();
+    assert!(config.games["old"].auto_watch, "迁移把它翻成新默认");
+    assert!(config.daemon.auto_watch_migrated, "标记要落进配置里");
+
+    // 写出去、再读回来(标记已经在文件里了):用户手动关掉之后不许被翻回来。
+    let mut again: Config = toml::from_str(&toml::to_string(&config).unwrap()).unwrap();
+    again.games.get_mut("old").unwrap().auto_watch = false;
+    again.normalize();
+    assert!(!again.games["old"].auto_watch, "迁移只发生一次");
+}
+
 /// 自动追踪要盯谁:`process_name` 优先,没写就按 exe 文件名(与直启那条路一致)。
 #[test]
 fn the_watched_process_name_falls_back_to_the_exe_file_name() {

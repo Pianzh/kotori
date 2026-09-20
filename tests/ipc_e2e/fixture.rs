@@ -49,6 +49,9 @@ impl Fixture {
 [daemon]
 socket_path = "{}"
 log_level = "info"
+# 这份配置是"已经过了自动追踪那次迁移"的(见 `Config::normalize`):夹具里的游戏都由
+# 测试自己启动,组件要的是确定性,不要后台那圈轮询插进来。
+auto_watch_migrated = true
 
 [games.demo]
 name = "Demo"
