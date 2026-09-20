@@ -86,7 +86,20 @@ pub struct GameConfig {
     /// required for watch-only games.
     #[serde(default)]
     pub process_name: Option<String>,
+    /// 手写配置可以整段省略:省略时用给新游戏的那份默认档(见
+    /// [`ScaleProfile::default_for`])。它曾经是必填,而少写一个必填字段的代价
+    /// 不是"用默认值",是**整份配置被判解析失败**——见下面 `created_at` 的说明。
+    #[serde(default = "ScaleProfile::default_for")]
     pub scale_profile: ScaleProfile,
+    /// 手写配置可以省略:省略时按"读到的这一刻"记(不参与排序,纯粹是个时间戳)。
+    ///
+    /// 它从前也是必填,而这个项目的"解析失败"处置是**把用户的文件改名**成
+    /// `config.toml.corrupt` 再拿默认值继续跑(免得坏配置把应用卡死)。两者撞在
+    /// 一起就有个很难查的现象:**便携安装**(`config.toml` 放在 exe 旁边,见
+    /// [`config_path`])里少写一个字段,那份配置就被改名搬走,于是**下次启动在
+    /// exe 旁边找不到配置,静默切回平台默认目录** —— 用户只看到"我的配置没了"。
+    /// 手写一个最小条目(只要 `name` 与 `exe_path`)因此必须能跑通。
+    #[serde(default = "chrono::Utc::now")]
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -274,209 +287,6 @@ impl Default for DaemonConfig {
         }
     }
 }
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// 界面拿字符串装 kind,配置拿 serde 装 —— 两种写法必须一模一样。
-    #[test]
-    fn as_str_matches_what_serde_writes() {
-        for kind in [
-            SavePathKind::Windows,
-            SavePathKind::Relative,
-            SavePathKind::Absolute,
-        ] {
-            let written = serde_json::to_value(kind).unwrap();
-            assert_eq!(written, serde_json::Value::from(kind.as_str()), "{kind:?}");
-        }
-    }
-
-    fn temp_path(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "kotori-test-{}-{}-{}",
-            tag,
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir.join("config.toml")
-    }
-
-    fn sample_config() -> Config {
-        let mut config = Config::default();
-        config.games.insert(
-            "demo".into(),
-            GameConfig {
-                name: "demo".into(),
-                game_dir: PathBuf::from("/games/demo"),
-                exe_path: PathBuf::from("/games/demo/game.exe"),
-                launch_args: Vec::new(),
-                watch_only: false,
-                direct_launch: false,
-                process_name: None,
-                save_paths: vec![SavePath::inferred("%APPDATA%\\Demo\\save")],
-                scale_profile: ScaleProfile {
-                    algorithm: ScaleAlgorithm::Nis { sharpness: 4 },
-                    framerate_limit: Some(60),
-                    // Explicitly *not* the defaults, so the round trip below proves
-                    // non-default values survive being written and read back.
-                    force_fullscreen: true,
-                    output_width: Some(2560),
-                    output_height: Some(1440),
-                    ..ScaleProfile::default_for()
-                },
-                wine_prefix: None,
-                created_at: chrono::Utc::now(),
-            },
-        );
-        config
-    }
-
-    #[test]
-    fn config_round_trips_through_toml() {
-        let path = temp_path("roundtrip");
-        let config = sample_config();
-
-        save_to(&path, &config).unwrap();
-        let loaded = paths::load_from(&path).unwrap();
-
-        assert_eq!(loaded.games.len(), 1);
-        let game = &loaded.games["demo"];
-        assert_eq!(
-            game.scale_profile.algorithm,
-            ScaleAlgorithm::Nis { sharpness: 4 }
-        );
-        assert_eq!(game.scale_profile.framerate_limit, Some(60));
-        assert_eq!(game.scale_profile.output_width, Some(2560));
-        assert!(game.scale_profile.force_fullscreen);
-        assert_eq!(game.save_paths.len(), 1);
-
-        std::fs::remove_dir_all(path.parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn missing_file_falls_back_to_defaults() {
-        let path = temp_path("missing").with_file_name("does-not-exist.toml");
-        assert!(!path.exists());
-        // load_from is strict; the lenient behaviour lives in `load()` and is
-        // covered by `corrupt_config_is_backed_up`.
-        assert!(paths::load_from(&path).is_err());
-    }
-
-    #[test]
-    fn corrupt_config_is_backed_up() {
-        let path = temp_path("corrupt");
-        std::fs::write(&path, "this is not = valid toml {{{").unwrap();
-
-        let parsed = paths::load_from(&path);
-        assert!(parsed.is_err());
-
-        // Emulate `load()`'s backup step without touching the real config path.
-        let backup = path.with_extension("toml.corrupt");
-        std::fs::rename(&path, &backup).unwrap();
-        assert!(backup.exists());
-        assert!(!path.exists());
-
-        std::fs::remove_dir_all(path.parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn legacy_lanczos_config_no_longer_parses() {
-        // Lanczos was never a real gamescope filter; documents the intentional
-        // break so a stale config surfaces loudly instead of silently bilinear.
-        let toml = r#"
-[daemon]
-socket_path = "/tmp/kotori.sock"
-log_level = "info"
-
-[games.old]
-name = "old"
-exe_path = "/games/old/game.exe"
-save_paths = []
-created_at = "2026-01-01T00:00:00Z"
-
-[games.old.scale_profile]
-name = "默认"
-internal_width = 1280
-internal_height = 720
-output_width = 2560
-output_height = 1440
-force_fullscreen = true
-algorithm = "Lanczos"
-"#;
-        assert!(toml::from_str::<Config>(toml).is_err());
-    }
-
-    #[test]
-    fn partial_game_config_uses_serde_defaults() {
-        // Missing optional fields must not break loading an older config.
-        let toml = r#"
-[games.minimal]
-name = "minimal"
-exe_path = "/games/minimal/game.exe"
-created_at = "2026-01-01T00:00:00Z"
-
-[games.minimal.scale_profile]
-name = "默认"
-algorithm = "Integer"
-internal_width = 1280
-internal_height = 720
-output_width = 2560
-output_height = 1440
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        let game = &config.games["minimal"];
-        assert!(game.save_paths.is_empty());
-        assert_eq!(game.wine_prefix, None);
-        assert_eq!(game.scale_profile.framerate_limit, None);
-        assert!(!game.scale_profile.force_fullscreen);
-        // Profiles written before scaling ratios existed: no ratio, and the
-        // window is free to drive the output size.
-        assert_eq!(game.scale_profile.scale_ratio, None);
-        assert_eq!(config.daemon.socket_path, default_socket_path());
-    }
-
-    #[test]
-    fn a_config_that_still_carries_follow_window_still_loads() {
-        // `follow_window` was never read by anything (see HANDOVER: the switch
-        // was empty), so the field is gone as of 2026-09-15. Every config on
-        // disk still has the key — loading must keep working, and the next
-        // write must stop emitting it.
-        let toml = r#"
-[games.old]
-name = "old"
-exe_path = "/games/old/game.exe"
-created_at = "2026-01-01T00:00:00Z"
-
-[games.old.scale_profile]
-name = "默认"
-algorithm = "Integer"
-follow_window = false
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.games.contains_key("old"));
-
-        let written = toml::to_string(&config).unwrap();
-        assert!(!written.contains("follow_window"), "{written}");
-    }
-
-    #[test]
-    fn a_sync_config_that_still_carries_encryption_still_loads() {
-        // 加密随 crypt 层一起没了（2026-09-16）。磁盘上每一份旧配置都还写着
-        // 这个键 —— 整份配置必须照常加载，下一次写回也不能再带上它。
-        // （`SyncConfig` 自己的字段级测试在 `config::sync` 里。）
-        let toml = r#"
-[sync]
-enabled = true
-bucket = "kotori-saves"
-encryption = true
-"#;
-        let config: Config = toml::from_str(toml).unwrap();
-        assert!(config.sync.enabled);
-        // 没写 `engine` 键的配置拿到的是**当下的默认值**（2026-09-18 起是 kopia）。
-        assert_eq!(config.sync.engine, SyncEngine::Kopia);
-
-        let written = toml::to_string(&config).unwrap();
-        assert!(!written.contains("encryption"), "{written}");
-    }
-}
+mod tests;

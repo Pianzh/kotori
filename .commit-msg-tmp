@@ -1,0 +1,20 @@
+fix: 手写配置只剩 name 与 exe_path 是必填,便携配置不再被静默搬走
+
+GameConfig 的 scale_profile 与 created_at 从前是必填,而少写一个必填字段的
+代价不是"用默认值":Config::load_at 对解析失败的处置是**把用户的文件改名**
+成 config.toml.corrupt 再回落默认值。它撞上 A7 就是个很难查的现象 —— 便携
+安装把 config.toml 放在 exe 旁边,一旦解析失败那份配置就被搬走,于是下次启动
+在 exe 旁边找不到配置,静默切回平台默认目录,而用户只看到"我的配置没了"。
+
+两处都改成手写可省:scale_profile 用 ScaleProfile::default_for()(给新游戏的
+那份默认档),created_at 用 Utc::now()(它不参与排序,纯粹是个时间戳)。现在
+一个游戏条目只要 name 与 exe_path。
+
+验证:新增单测(最小条目能解析,且默认不是 1970);并端到端跑了一遍真 daemon:
+只写 [games.portable-probe] 的 name/exe_path 的配置被二进制同目录选中
+(config_path 指它、games=1),没有 .corrupt、日志里 0 次解析失败。全量 314
+单测 + 14 e2e 通过,clippy -D warnings 干净。
+
+顺带:新写入把 config/mod.rs 顶过 500 行软线,按 AGENTS.md 在同一次改动里把
+测试拆到 config/tests.rs(mod.rs 291 行),与 game/、display/、wine/ 的既有
+做法一致。
