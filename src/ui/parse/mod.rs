@@ -15,6 +15,7 @@ use super::*;
 
 mod environment;
 mod games;
+mod process;
 mod reconnect;
 mod save_paths;
 mod scale;
@@ -23,6 +24,7 @@ mod wine;
 
 pub(super) use environment::*;
 pub(super) use games::*;
+pub(super) use process::*;
 pub(super) use reconnect::*;
 pub(super) use save_paths::*;
 pub(super) use scale::*;

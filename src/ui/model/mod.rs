@@ -11,15 +11,18 @@
 
 mod environment;
 mod game;
+mod picker;
 mod session;
 mod sync;
 
 pub use environment::{ConfigSource, WineStatus};
 pub use game::{SavePathDraft, UiGame};
+pub use picker::{PickerPurpose, ProcessRow};
 pub use session::SessionInfo;
 pub use sync::{SyncGameRow, SyncStatus};
 
 pub(super) use environment::{EnvCheck, Environment};
 pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, SAVE_PATH_KINDS, SaveAttempt};
+pub(super) use picker::ProcessPicker;
 pub(super) use session::{MAX_AUTO_RETRIES, STATUS_POLL};
 pub(super) use sync::{CredentialStore, SyncForm, engine_switched_note};

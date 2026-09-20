@@ -1,0 +1,155 @@
+// 「从正在运行的进程里挑」:居中的浮层(搜索框 + 可滚动列表)。
+//
+// 两个入口共用同一份列表 —— 详情页的「跟当前这一局（PID）」与添加游戏页的
+// 「从运行中的进程添加」 —— 所以它挂在**窗口根上**(app.slint),而不是各页自己画。
+//
+// 为什么居中而不是下拉:下拉要把触发控件的 `absolute-position` 传上来当锚点,两个宿主
+// 各传一次,写错了浮层就跑到屏幕外面,而这件事没有任何检查能拦住;居中没有这个自由度。
+//
+// 列表可能上百行,所以**必须**带搜索框且可滚动。过滤在 Rust 侧做(候选是打开时取的
+// 那一份快照,每敲一个字都去问 daemon 太吵)。
+
+import { ScrollView } from "std-widgets.slint";
+import { Tokens } from "../theme.slint";
+import { Divider } from "base.slint";
+import { TextField } from "controls.slint";
+import { StdButton } from "buttons.slint";
+import { ProcessPickRow } from "../types.slint";
+
+// 浮层的状态与回调放在一个**全局**里,而不是窗口根上 —— 它不属于任何一页(详情页与
+// 添加游戏页共用),挂根属性就得让每个页面把七八个属性再转发一遍,而 `app.slint` 那条
+// "纯接线"的硬线正是这么被撑破的(`Tokens` 是同一个套路)。
+export global ProcessPickerState {
+    in-out property <[ProcessPickRow]> rows: [];
+    // 输入框自己持有它(见 game-settings.slint 文件头那条规矩),所以是 in-out。
+    in-out property <string> query: "";
+    in-out property <bool> open: false;
+    /// 一句话状态:读取中 / 出错 / 被搜索词滤掉多少。空串 = 什么都别说。
+    in-out property <string> message: "";
+    in-out property <bool> loading: false;
+    in-out property <string> title: "选择进程";
+
+    callback query-changed(string);
+    callback picked(int);
+    callback closed();
+    // 两个入口:页面那颗按钮直接喊这里,不必再经窗口转发。
+    callback pick-for-follow();
+    callback pick-for-new-game();
+}
+
+export component ProcessPicker inherits Rectangle {
+    width: 100%;
+    height: 100%;
+
+    // 遮罩:点空白处收起。
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000073;
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { ProcessPickerState.closed(); }
+        }
+    }
+
+    card := Rectangle {
+        width: 600px;
+        height: min(460px, root.height - 40px);
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: Tokens.radius-card;
+        background: Tokens.flyout;
+        border-width: 1px;
+        border-color: Tokens.flyout-stroke;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: ProcessPickerState.title;
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Tokens.text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                StdButton {
+                    label: "关闭";
+                    button-width: 68px;
+                    clicked => { ProcessPickerState.closed(); }
+                }
+            }
+
+            TextField {
+                width: 100%;
+                text <=> ProcessPickerState.query;
+                edited(text) => { ProcessPickerState.query-changed(text); }
+                placeholder: "按进程名、窗口标题或 PID 搜…";
+            }
+
+            if ProcessPickerState.loading || ProcessPickerState.message != "" : Text {
+                text: ProcessPickerState.message;
+                font-size: 12px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+
+            if !ProcessPickerState.loading && ProcessPickerState.rows.length == 0 : Text {
+                text: "没有可以挑的进程。游戏开起来之后再打开这里 —— 只列看着像游戏的那些(Windows 上是有可见窗口的进程)。";
+                font-size: 12px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 2px;
+                    for row[index] in ProcessPickerState.rows : Rectangle {
+                        height: 44px;
+                        border-radius: 4px;
+                        background: row-ta.has-hover ? #ffffff0f : #00000000;
+                        animate background { duration: 90ms; }
+
+                        VerticalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 5px;
+                            padding-bottom: 5px;
+                            spacing: 1px;
+                            Text {
+                                // 窗口标题才是用户认得出的东西;没有标题就退回进程名。
+                                text: row.title != "" ? row.title : row.name;
+                                font-size: 13px;
+                                color: Tokens.text;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: row.exe != "" ? row.name + "  ·  PID " + row.pid + "  ·  " + row.exe : row.name + "  ·  PID " + row.pid;
+                                font-size: 11px;
+                                color: Tokens.text-3;
+                                overflow: elide;
+                            }
+                        }
+
+                        row-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { ProcessPickerState.picked(index); }
+                        }
+                    }
+                }
+            }
+
+            Divider { }
+            Text {
+                text: "「跟这一局」用 PID 认这一次运行;「添加游戏」用 exe 路径建一条档案。PID 只对当前这一局有效,进程一退就作废。";
+                font-size: 11px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

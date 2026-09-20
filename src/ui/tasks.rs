@@ -374,6 +374,12 @@ pub(super) async fn stop_session(socket: &Path, session_id: &str) -> Result<(), 
     Ok(())
 }
 
+/// 「从正在运行的进程里挑」的候选:打开浮层时取一次(过滤在内存里做)。
+pub(super) async fn load_processes(socket: &Path) -> Result<Vec<ProcessRow>, String> {
+    let value = crate::rpc::call(socket, "process.list", None).await?;
+    parse_processes(&value)
+}
+
 /// 「跟这一局」:让 daemon 盯住用户挑的那个 pid(只对这一次运行有意义,不写配置)。
 pub(super) async fn observe_process(
     socket: &Path,

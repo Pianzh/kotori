@@ -72,6 +72,14 @@ pub enum Message {
     /// 点「跟这一局」。
     FollowThisRun,
     FollowDone(Result<String, String>),
+    /// 打开「从运行中的进程里挑」浮层(两个入口共用,差别在 `PickerPurpose`)。
+    ProcessPickerOpen(PickerPurpose),
+    /// 候选到了(打开时那一次 `process.list`)。
+    ProcessesLoaded(Result<Vec<ProcessRow>, String>),
+    ProcessQueryChanged(String),
+    /// 挑了**过滤后**那一份里的第 index 行。
+    ProcessPicked(usize),
+    ProcessPickerClose,
     FullscreenToggled(bool),
     FramerateChanged(String),
     ExePathChanged(String),

@@ -42,6 +42,7 @@ impl Daemon {
                     None => rpc_err(id, -32602, "缺少参数: portable(真假)".to_string()),
                 }
             }
+            "process.list" => respond(id, self.rpc_process_list().await),
             "wine.status" => respond(id, self.rpc_wine_status().await),
             "env.report" => respond(id, self.rpc_env_report().await),
             "wine.set_prefix" => {

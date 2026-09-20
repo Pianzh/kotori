@@ -7,7 +7,8 @@ import { Tokens } from "../theme.slint";
 import { Divider, RevealItem } from "../widgets/base.slint";
 import { PathField } from "../widgets/path-field.slint";
 import { TextField } from "../widgets/controls.slint";
-import { AccentButton } from "../widgets/buttons.slint";
+import { AccentButton, StdButton } from "../widgets/buttons.slint";
+import { ProcessPickerState } from "../widgets/process-picker.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 
 export component AddPage inherits ScrollView {
@@ -68,6 +69,16 @@ export component AddPage inherits ScrollView {
             step: 2;
             bottom: 24px;
             Group {
+                CardRow {
+                    title: "从正在运行的进程添加";
+                    description: "游戏开着的时候直接挑它:名字、可执行文件与根目录会替你填好,确认后点「添加游戏」。";
+                    StdButton {
+                        label: "挑选进程…";
+                        button-width: 104px;
+                        clicked => { ProcessPickerState.pick-for-new-game(); }
+                    }
+                }
+                Divider { }
                 CardRow {
                     title: "可执行文件";
                     description: "exe 的完整路径。选完这里,下面两项会自动填。";

@@ -30,6 +30,9 @@ pub(super) struct Ui {
     /// to be held here and handed over as a model.
     pub(super) games: Rc<VecModel<GameItem>>,
     pub(super) saves: Rc<VecModel<SaveItem>>,
+    /// 「从正在运行的进程里挑」浮层里那些行。整表只在内容变了时重建(见
+    /// `render::push_process_picker`)。
+    pub(super) process_rows: Rc<VecModel<ProcessPickRow>>,
     /// What the save list was last built from, so a rebuild can be told apart
     /// from an edit (see [`render::push_saves`]).
     pub(super) saves_built: Vec<SaveItem>,
@@ -108,8 +111,12 @@ pub(super) fn run() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Handle::current();
     let games = Rc::new(VecModel::<GameItem>::default());
     let saves = Rc::new(VecModel::<SaveItem>::default());
+    let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
     window.set_games(games.clone().into());
     window.set_saves(saves.clone().into());
+    window
+        .global::<ProcessPickerState>()
+        .set_rows(process_rows.clone().into());
 
     let (app, boot) = App::new();
     let ui = Rc::new(RefCell::new(Ui {
@@ -118,6 +125,7 @@ pub(super) fn run() -> anyhow::Result<()> {
         runtime,
         games,
         saves,
+        process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,
         detail_seed: 0,

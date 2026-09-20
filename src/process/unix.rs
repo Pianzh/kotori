@@ -3,7 +3,7 @@
 //! 与 `windows.rs` 的 Toolhelp 快照互为对方的平台实现,共用 `mod.rs` 的匹配逻辑;
 //! 那 15 字节的 `comm` 截断只存在于这一侧(坑见 `mod.rs` 文件头)。
 
-use super::{ProcEntry, collect_descendants, is_plumbing, matches};
+use super::{Pickable, ProcEntry, collect_descendants, is_plumbing, matches};
 
 /// PIDs of running processes whose name matches `name`.
 pub fn find_pids(name: &str) -> Vec<i32> {
@@ -50,6 +50,49 @@ pub fn snapshot() -> Vec<ProcEntry> {
             })
         })
         .collect()
+}
+
+/// 可以挑的进程:命令行或进程名以 `.exe` 结尾的那些(wine 跑的游戏)。
+///
+/// Linux 这边**拿不到窗口标题**,所以名字本身就是用户唯一的线索 —— 好在
+/// `/proc/<pid>/cmdline` 里 wine 会把 exe 的完整路径写出来(常常是 `Z:\...\game.exe`
+/// 这种 Windows 形状,见 [`unix_exe_path`]),那正是"添加游戏"要填的东西。
+pub fn pickable() -> Vec<Pickable> {
+    snapshot()
+        .into_iter()
+        .filter(|entry| !is_plumbing(&entry.name))
+        .filter_map(|entry| {
+            let name = entry.display_name();
+            let argv0 = entry.cmdline.split('\0').next().unwrap_or_default().trim();
+            let game_like =
+                name.to_lowercase().ends_with(".exe") || argv0.to_lowercase().ends_with(".exe");
+            game_like.then(|| Pickable {
+                pid: entry.pid,
+                name,
+                title: String::new(),
+                exe: unix_exe_path(argv0),
+            })
+        })
+        .collect()
+}
+
+/// 命令行里那个 exe 换成本机路径。
+///
+/// * 本来就是绝对 Unix 路径 → 原样;
+/// * `Z:\run\media\…\game.exe` → `/run/media/…/game.exe`(`Z:` 在 wine 里就是 `/`);
+/// * 别的盘符(`C:\…` 在某个 prefix 里,而这里不知道是哪个 prefix) → `None`,
+///   让人自己填 —— 猜错比不猜更难查。
+pub(super) fn unix_exe_path(argv0: &str) -> Option<String> {
+    let text = argv0.trim();
+    if text.starts_with('/') {
+        return Some(text.to_string());
+    }
+    let (drive, rest) = text.split_once(':')?;
+    if !drive.eq_ignore_ascii_case("z") {
+        return None;
+    }
+    let rest = rest.trim_start_matches(['\\', '/']).replace('\\', "/");
+    (!rest.is_empty()).then(|| format!("/{rest}"))
 }
 
 /// 这个 pid 还活着吗?Linux 上就是"`/proc/<pid>` 还在不在"。

@@ -69,6 +69,9 @@ pub struct App {
     pub(super) pick_token: i32,
     /// 设置页「环境检查」的结果;`None` = 还没问过。
     pub(super) environment: Option<Environment>,
+    /// 「从正在运行的进程里挑」:两个入口共用同一份状态(浮层在窗口根上)。
+    /// ⚠ 名字带 `process_`,因为 `picker` 已经是「浏览…」那个文件对话框了。
+    pub(super) process_picker: ProcessPicker,
     /// 详情页「跟这一局」那一栏里的 pid(**不进草稿、不写配置**)。
     pub(super) follow_pid_input: String,
     /// 正在跟(挡住连点两次)。
@@ -131,6 +134,7 @@ impl App {
                 picked_path: None,
                 pick_token: 0,
                 environment: None,
+                process_picker: ProcessPicker::default(),
                 follow_pid_input: String::new(),
                 following: false,
                 config_source: ConfigSource::default(),

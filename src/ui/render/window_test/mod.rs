@@ -31,8 +31,12 @@ fn ui() -> Ui {
         .expect("建一个 tokio runtime 只为拿 Handle");
     let games = Rc::new(VecModel::<GameItem>::default());
     let saves = Rc::new(VecModel::<SaveItem>::default());
+    let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
     window.set_games(games.clone().into());
     window.set_saves(saves.clone().into());
+    window
+        .global::<ProcessPickerState>()
+        .set_rows(process_rows.clone().into());
 
     Ui {
         app: App::new().0,
@@ -40,6 +44,7 @@ fn ui() -> Ui {
         runtime: runtime.handle().clone(),
         games,
         saves,
+        process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,
         detail_seed: 0,
@@ -172,6 +177,57 @@ fn library_and_sync_pages_render_without_a_display() {
     }];
     render(&mut ui);
     ui.app.games = vec![ui_game()];
+
+    // 「从运行中的进程里挑」:浮层开 → 候选到 → 搜索 → 挑一个 → 添加游戏那三个框
+    // 被填好(挑进程那条路的正面)。
+    ui.app.process_picker.open(PickerPurpose::NewGame);
+    render(&mut ui);
+    assert!(
+        ui.window.global::<ProcessPickerState>().get_open(),
+        "浮层该开着"
+    );
+    ui.app.process_picker.loaded(vec![ProcessRow {
+        pid: 4321,
+        name: "Game.exe".into(),
+        title: "BLACKSOULS Ⅱ".into(),
+        exe: "/games/blacksouls/Game.exe".into(),
+    }]);
+    render(&mut ui);
+    assert_eq!(
+        ui.window
+            .global::<ProcessPickerState>()
+            .get_rows()
+            .row_count(),
+        1
+    );
+    let _ = ui.app.update(Message::ProcessPicked(0));
+    render(&mut ui);
+    assert!(
+        !ui.window.global::<ProcessPickerState>().get_open(),
+        "挑完就该收起来"
+    );
+    assert_eq!(ui.app.new_exe, "/games/blacksouls/Game.exe");
+    assert_eq!(
+        ui.app.new_game_dir, "/games/blacksouls",
+        "根目录跟着 exe 填"
+    );
+    assert_eq!(
+        ui.app.new_name, "BLACKSOULS Ⅱ",
+        "窗口标题比 exe 文件名认得出"
+    );
+    assert!(
+        ui.app
+            .create_msg
+            .as_deref()
+            .unwrap_or("")
+            .contains("已按进程"),
+        "{:?}",
+        ui.app.create_msg
+    );
+    ui.app.new_exe.clear();
+    ui.app.new_game_dir.clear();
+    ui.app.new_name.clear();
+    ui.app.create_msg = None;
 
     // 添加游戏:空表单 → 填好 → 有回话。
     show_tab(&mut ui, Tab::Add);

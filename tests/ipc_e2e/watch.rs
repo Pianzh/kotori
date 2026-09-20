@@ -268,3 +268,65 @@ fn observing_one_pid_picks_exactly_that_game() {
         fixture.logs()
     );
 }
+
+/// `process.list`:两个入口(「跟这一局」「从进程添加游戏」)共用的候选列表。
+///
+/// 它必须**短**:只列看着像游戏的进程 —— 把上百个后台进程倒给用户等于什么也没说。
+/// 而每一条都要带着"能直接拿来用"的东西:PID(跟这一局)与 exe 路径(建条目)。
+#[test]
+fn the_process_list_offers_usable_candidates_only() {
+    let mut fixture = Fixture::new("pickable");
+    fixture.start();
+
+    let dir = fixture.dir.join("running");
+    std::fs::create_dir_all(&dir).unwrap();
+    let exe = dir.join("kotori-pickable-probe.exe");
+    std::fs::copy("/bin/sleep", &exe).expect("copy /bin/sleep");
+    let mut child = std::process::Command::new(&exe)
+        .arg("30")
+        .spawn()
+        .expect("spawn the probe");
+    let pid = child.id() as i64;
+
+    let listed = |fixture: &Fixture| -> Vec<serde_json::Value> {
+        fixture.rpc("process.list", json!({}))["result"]["processes"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default()
+    };
+
+    assert!(
+        wait_until(Duration::from_secs(10), || listed(&fixture)
+            .iter()
+            .any(|entry| entry["pid"] == pid)),
+        "刚起的进程没出现在候选里\n--- daemon log ---\n{}",
+        fixture.logs()
+    );
+
+    let entry = listed(&fixture)
+        .into_iter()
+        .find(|entry| entry["pid"] == pid)
+        .unwrap();
+    assert_eq!(entry["name"], "kotori-pickable-probe.exe");
+    // exe 路径要能直接填进「添加游戏」(Linux 这边来自 argv0)。
+    assert_eq!(entry["exe"], exe.to_string_lossy().as_ref());
+
+    // wine 那层管道进程不该混进来 —— 挑了它毫无意义。
+    for entry in listed(&fixture) {
+        let name = entry["name"].as_str().unwrap_or_default();
+        assert!(
+            !matches!(name, "wineserver" | "wine" | "gamescope"),
+            "管道进程混进候选了: {entry}"
+        );
+    }
+
+    // 进程退掉之后就不该再列它(列表是"此刻"的快照)。
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(
+        wait_until(Duration::from_secs(10), || !listed(&fixture)
+            .iter()
+            .any(|entry| entry["pid"] == pid)),
+        "退掉的进程还在候选里"
+    );
+}

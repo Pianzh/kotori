@@ -51,8 +51,12 @@ fn a_click_lands_on_the_control_under_the_pointer() {
         .expect("建一个 tokio runtime 只为拿 Handle");
     let games = Rc::new(VecModel::<GameItem>::default());
     let saves = Rc::new(VecModel::<SaveItem>::default());
+    let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
     window.set_games(games.clone().into());
     window.set_saves(saves.clone().into());
+    window
+        .global::<ProcessPickerState>()
+        .set_rows(process_rows.clone().into());
 
     let mut ui = Ui {
         app: App::new().0,
@@ -60,6 +64,7 @@ fn a_click_lands_on_the_control_under_the_pointer() {
         runtime: runtime.handle().clone(),
         games,
         saves,
+        process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,
         detail_seed: 0,

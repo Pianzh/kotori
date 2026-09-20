@@ -68,6 +68,18 @@ export struct SyncGameItem {
     pending: bool,
 }
 
+// 设置页 Wine 那一组的**只读**信息(prefix 输入框自己单独一条 —— 它是 in-out,
+// 用户要能编辑)。六个字段永远一起变,所以一次推一个结构体(见 `ConfigInfo`)。
+export struct WineInfo {
+    message: string,
+    message-ok: bool,
+    /// 当前生效的 prefix。
+    effective: string,
+    default-prefix: string,
+    environment: string,
+    detected: [string],
+}
+
 // 设置页「配置文件」那组:配置现在放在哪、能不能换。
 // 一个结构体而不是七个散属性 —— 它们永远一起变(见 `render/settings.rs`)。
 export struct ConfigInfo {
@@ -91,6 +103,16 @@ export struct EnvCheckRow {
     impact: string,
     // 按发行版给的安装命令;空 = 这一行没什么可装的。
     install: string,
+}
+
+// 「从正在运行的进程里挑」浮层里的一行(对应 Rust 侧 `model::ProcessRow`)。
+export struct ProcessPickRow {
+    pid: int,
+    name: string,
+    // 窗口标题:Windows 有,Linux 通常拿不到(空串)。
+    title: string,
+    // exe 的完整路径;空 = 拿不到,用户自己在界面上补。
+    exe: string,
 }
 
 // 「浏览…」刚挑回来的那个值:告诉单游戏设置页"往哪个框里填"。

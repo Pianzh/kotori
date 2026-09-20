@@ -9,7 +9,7 @@
 //! 的路子(`PLATFORMS.md` §2.2)将来可以换掉轮询,但观测接口先保持与 Linux 一致,
 //! 让 `watch_only` 与收尾判定先用起来。
 
-use super::{ProcEntry, collect_descendants, is_plumbing, matches};
+use super::{Pickable, ProcEntry, collect_descendants, is_plumbing, matches};
 
 /// One process as the snapshot reports it: pid, parent pid, full exe name.
 struct Entry {
@@ -27,6 +27,96 @@ pub fn snapshot() -> Vec<ProcEntry> {
             pid: entry.pid,
             name: entry.name,
             cmdline: String::new(),
+        })
+        .collect()
+}
+
+/// 可以挑的进程:**有可见顶层窗口**的那些。
+///
+/// Windows 上"进程表"里有上百项(svchost、RuntimeBroker……),把它们倒给用户等于
+/// 什么也没说。用户认得出的是**窗口**:一个可见的、没有属主的顶层窗口就是一个正在
+/// 玩的游戏(属主非空的是对话框/工具窗,子窗口根本不在 `EnumWindows` 的结果里)。
+///
+/// 顺带把窗口标题带上 —— 那是"哪一款游戏"最直接的答案,而 exe 路径用来直接添加游戏。
+pub fn pickable() -> Vec<Pickable> {
+    use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GW_OWNER, GetWindow, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IsWindowVisible,
+    };
+
+    /// `EnumWindows` 的回调:收"可见、无属主、有标题"的顶层窗口,lparam 是那个 `Vec`。
+    unsafe extern "system" fn collect(hwnd: HWND, param: LPARAM) -> windows_sys::core::BOOL {
+        // SAFETY: 调用方保证 param 指向一个活着的 Vec<(u32, String)>,而 EnumWindows
+        // 是同步的 —— 回调期间它一直在。
+        let found = unsafe { &mut *(param as *mut Vec<(u32, String)>) };
+        let visible = unsafe { IsWindowVisible(hwnd) } != 0;
+        let owned = !unsafe { GetWindow(hwnd, GW_OWNER) }.is_null();
+        if visible && !owned {
+            let mut pid = 0u32;
+            unsafe { GetWindowThreadProcessId(hwnd, &mut pid) };
+            let len = unsafe { GetWindowTextLengthW(hwnd) };
+            if pid != 0 && len > 0 {
+                let mut buffer = vec![0u16; len as usize + 1];
+                let written =
+                    unsafe { GetWindowTextW(hwnd, buffer.as_mut_ptr(), buffer.len() as i32) };
+                if written > 0 {
+                    let title = String::from_utf16_lossy(&buffer[..written as usize]);
+                    found.push((pid, title.trim().to_string()));
+                }
+            }
+        }
+        1
+    }
+
+    let mut windows: Vec<(u32, String)> = Vec::new();
+    unsafe { EnumWindows(Some(collect), &mut windows as *mut _ as LPARAM) };
+
+    // 一个进程可能开着好几个窗口(主窗口 + 无属主的浮窗):留标题最长的那一个。
+    let own = std::process::id();
+    let names: std::collections::HashMap<i32, String> = process_table()
+        .into_iter()
+        .map(|entry| (entry.pid, entry.name))
+        .collect();
+    let mut seen: Vec<(u32, String)> = Vec::new();
+    for (pid, title) in windows {
+        if pid == own {
+            continue;
+        }
+        match seen.iter_mut().find(|(seen_pid, _)| *seen_pid == pid) {
+            Some(entry) if title.chars().count() > entry.1.chars().count() => entry.1 = title,
+            Some(_) => {}
+            None => seen.push((pid, title)),
+        }
+    }
+
+    seen.into_iter()
+        .map(|(pid, title)| {
+            let pid = pid as i32;
+            // 拿 exe 路径:权限不够(系统进程)是常态,那就是 `None`,不是错误。
+            // SAFETY: 句柄拿到就必须关;缓冲区是活的 Vec,`size` 由 API 回写。
+            let exe = unsafe {
+                let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid as u32);
+                if handle.is_null() {
+                    None
+                } else {
+                    let mut buffer = vec![0u16; 4096];
+                    let mut size = buffer.len() as u32;
+                    let ok =
+                        QueryFullProcessImageNameW(handle, 0, buffer.as_mut_ptr(), &mut size) != 0;
+                    CloseHandle(handle);
+                    (ok && size > 0).then(|| String::from_utf16_lossy(&buffer[..size as usize]))
+                }
+            };
+            Pickable {
+                pid,
+                name: names.get(&pid).cloned().unwrap_or_else(|| title.clone()),
+                title,
+                exe,
+            }
         })
         .collect()
 }

@@ -9,13 +9,16 @@
 import { Tokens } from "theme.slint";
 import { Gap, NavItem } from "widgets/base.slint";
 import { StdButton } from "widgets/buttons.slint";
-import { GameItem, GameDetail, SaveItem, ConfigInfo, EnvCheckRow, PathPick } from "types.slint";
+import { GameItem, GameDetail, SaveItem, ConfigInfo, EnvCheckRow, PathPick, ProcessPickRow, WineInfo } from "types.slint";
 import { AppNav } from "app-nav.slint";
 import { GamesPage } from "pages/games.slint";
 import { GameSettingsPage } from "pages/game-settings.slint";
 import { AddPage } from "pages/add.slint";
 import { SyncPage } from "pages/sync.slint";
 import { SettingsPage } from "pages/settings.slint";
+import { ProcessPicker, ProcessPickerState } from "widgets/process-picker.slint";
+// 再导出一次是**给 Rust 看的**:只有主文件导出过的全局才生成 `window.global::<…>()`。
+export { ProcessPickerState }
 
 export component AppWindow inherits Window {
     title: "Kotori";
@@ -221,12 +224,7 @@ export component AppWindow inherits Window {
     in-out property <bool> service-message-ok: true;
     in-out property <string> service-hint: "";
     in-out property <string> wine-prefix: "";
-    in-out property <string> wine-message: "";
-    in-out property <bool> wine-message-ok: true;
-    in-out property <string> wine-effective: "";
-    in-out property <string> wine-default: "";
-    in-out property <string> wine-environment: "";
-    in-out property <[string]> wine-detected: [];
+    in-out property <WineInfo> wine: { message: "", message-ok: true, effective: "", default-prefix: "", environment: "", detected: [] };
     // 设置页「环境检查」:一行一个依赖,措辞与状态码都由 Rust 算好。
     in-out property <[EnvCheckRow]> env-checks: [];
     in-out property <string> env-summary: "";
@@ -468,12 +466,7 @@ export component AppWindow inherits Window {
                             service-message-ok: root.service-message-ok;
                             service-hint: root.service-hint;
                             wine-prefix <=> root.wine-prefix;
-                            wine-msg: root.wine-message;
-                            wine-msg-ok: root.wine-message-ok;
-                            wine-effective: root.wine-effective;
-                            wine-default: root.wine-default;
-                            wine-environment: root.wine-environment;
-                            wine-detected: root.wine-detected;
+                            wine <=> root.wine;
                             browse-enabled: root.browse-enabled;
                             path-hint: root.path-hint;
                             is-windows: root.is-windows;
@@ -492,6 +485,11 @@ export component AppWindow inherits Window {
                             save-wine-prefix => { root.save-wine-prefix(); }
                             clear-wine-prefix => { root.clear-wine-prefix(); }
                         }
+
+                        // 「从正在运行的进程里挑」浮层:状态在 `ProcessPickerState` 里
+                        // (两个入口共用,不属于任何一页)。画在内容区最后一层 —— 页面
+                        // 在它下面点不到,左侧导航还看得见。
+                        if ProcessPickerState.open : ProcessPicker { }
                     }
                 }
             }

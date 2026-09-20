@@ -3,7 +3,7 @@
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
 import { Divider, RevealItem } from "../widgets/base.slint";
-import { ConfigInfo, EnvCheckRow } from "../types.slint";
+import { ConfigInfo, EnvCheckRow, WineInfo } from "../types.slint";
 import { PathField } from "../widgets/path-field.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
@@ -28,12 +28,7 @@ export component SettingsPage inherits ScrollView {
     //    这几个框摆在那儿只会让人以为填错了什么(用户 2026-09-18:「wine 目录多余」)。
     in property <bool> is-windows: false;
     in-out property <string> wine-prefix: "";
-    in property <string> wine-msg: "";
-    in property <bool> wine-msg-ok: true;
-    in property <string> wine-effective: "";
-    in property <string> wine-default: "";
-    in property <string> wine-environment: "";
-    in property <[string]> wine-detected: [];
+    in property <WineInfo> wine;
     // 「浏览…」:系统里有没有可用的文件对话框(没有就灰掉按钮),以及没有时的理由。
     in property <bool> browse-enabled: true;
     in property <string> path-hint: "";
@@ -206,14 +201,14 @@ export component SettingsPage inherits ScrollView {
                         }
                     }
                 }
-                if root.wine-msg != "" : VerticalLayout {
+                if root.wine.message != "" : VerticalLayout {
                     Divider { }
                     VerticalLayout {
                         padding: 12px;
                         Text {
-                            text: root.wine-msg;
+                            text: root.wine.message;
                             font-size: 12px;
-                            color: root.wine-msg-ok ? Tokens.ok : Tokens.danger;
+                            color: root.wine.message-ok ? Tokens.ok : Tokens.danger;
                             wrap: word-wrap;
                         }
                     }
@@ -222,15 +217,15 @@ export component SettingsPage inherits ScrollView {
                 VerticalLayout {
                     padding: 16px;
                     spacing: 3px;
-                    Text { text: "当前生效:" + root.wine-effective; font-size: 12px; color: Tokens.text-3; wrap: word-wrap; }
-                    Text { text: "默认位置:" + root.wine-default; font-size: 11px; color: Tokens.text-3; wrap: word-wrap; }
-                    Text { text: "WINEPREFIX 环境变量:" + root.wine-environment; font-size: 11px; color: Tokens.text-3; wrap: word-wrap; }
+                    Text { text: "当前生效:" + root.wine.effective; font-size: 12px; color: Tokens.text-3; wrap: word-wrap; }
+                    Text { text: "默认位置:" + root.wine.default-prefix; font-size: 11px; color: Tokens.text-3; wrap: word-wrap; }
+                    Text { text: "WINEPREFIX 环境变量:" + root.wine.environment; font-size: 11px; color: Tokens.text-3; wrap: word-wrap; }
                     Text {
-                        text: root.wine-detected.length == 0 ? "没有在常见位置发现 wine prefix" : "自动探测到的 prefix:";
+                        text: root.wine.detected.length == 0 ? "没有在常见位置发现 wine prefix" : "自动探测到的 prefix:";
                         font-size: 11px;
                         color: Tokens.text-3;
                     }
-                    for prefix in root.wine-detected : Text {
+                    for prefix in root.wine.detected : Text {
                         text: "· " + prefix;
                         font-size: 11px;
                         color: Tokens.text-3;

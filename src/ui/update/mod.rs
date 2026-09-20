@@ -7,6 +7,7 @@
 use super::*;
 
 mod add;
+mod picker;
 mod settings;
 mod sync;
 
@@ -42,6 +43,12 @@ impl App {
                 }
                 Task::none()
             }
+            // 「从正在运行的进程里挑」那一族消息在 `update/picker.rs`(两个入口共用)。
+            m @ (Message::ProcessPickerOpen(..)
+            | Message::ProcessesLoaded(..)
+            | Message::ProcessQueryChanged(..)
+            | Message::ProcessPicked(..)
+            | Message::ProcessPickerClose) => self.update_picker(m),
             Message::Refresh => {
                 self.error = None;
                 self.loading = true;

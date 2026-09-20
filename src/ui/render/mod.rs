@@ -36,6 +36,7 @@ mod window_test;
 pub(super) fn render(ui: &mut Ui) {
     push_shell(ui);
     push_browse(ui);
+    push_process_picker(ui);
     push_games(ui);
     push_detail(ui);
     push_add(ui);
@@ -95,6 +96,38 @@ fn connection_label(app: &App) -> (String, i32) {
         Some(false) => ("未连接".to_string(), 2),
         None => ("检测中…".to_string(), 0),
     }
+}
+
+/// 「从正在运行的进程里挑」那个浮层:开没开、搜索词、以及**过滤后**的那些行。
+///
+/// 两个入口共用同一份状态,所以这里只有一个 push —— 页面不知道它存在,只是把
+/// "打开"这件事发上来(见 `game-launch.slint` 与 `add.slint` 上那颗按钮)。
+fn push_process_picker(ui: &mut Ui) {
+    let app = &ui.app;
+    // 浮层的状态在一个 Slint 全局里(不属于任何一页,两个入口共用),见
+    // `widgets/process-picker.slint`。
+    let w = ui.window.global::<ProcessPickerState>();
+    let picker = &app.process_picker;
+
+    push_bool(w.get_open(), picker.is_open(), |v| w.set_open(v));
+    push_str(w.get_title(), picker.title(), |v| w.set_title(v));
+    push_str(w.get_message(), &picker.message(), |v| w.set_message(v));
+    push_bool(w.get_loading(), picker.loading(), |v| w.set_loading(v));
+    push_str(w.get_query(), picker.query(), |v| w.set_query(v));
+
+    // 整表只在内容变了时重建(规矩 2):3 秒一次的状态轮询也会走到这里,而重建
+    // 会让用户正在滚的那一屏跳回顶部。
+    let rows: Vec<ProcessPickRow> = picker
+        .rows()
+        .iter()
+        .map(|row| ProcessPickRow {
+            pid: row.pid,
+            name: row.name.clone().into(),
+            title: row.title.clone().into(),
+            exe: row.exe.clone().into(),
+        })
+        .collect();
+    push_model(&ui.process_rows, rows);
 }
 
 /// Push only when the value differs — see rule 1 at the top of the file.

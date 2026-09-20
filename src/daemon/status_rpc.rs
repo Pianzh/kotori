@@ -131,6 +131,29 @@ impl Daemon {
         serde_json::to_value(&report).map_err(|e| e.to_string())
     }
 
+    /// 「从正在运行的进程里挑」:能挑的进程一览。
+    ///
+    /// 两个入口共用(详情页的「跟当前这一局」与添加游戏页的「从运行中的进程添加」),
+    /// 所以列表**刻意短**:只列那些看着像游戏的(见 [`crate::process::Pickable`])。
+    /// 界面上还会按搜索词再过滤一遍 —— 过滤在客户端做,每敲一个字不必来问一次。
+    pub(super) async fn rpc_process_list(&self) -> Result<Value, String> {
+        /// 上限只是防御:候选再多也不该把一条 IPC 回包撑爆。
+        const MOST: usize = 500;
+        let processes: Vec<Value> = crate::process::pickable_processes()
+            .into_iter()
+            .take(MOST)
+            .map(|process| {
+                json!({
+                    "pid": process.pid,
+                    "name": process.name,
+                    "title": process.title,
+                    "exe": process.exe,
+                })
+            })
+            .collect();
+        Ok(json!({ "processes": processes }))
+    }
+
     pub(super) async fn rpc_wine_status(&self) -> Result<Value, String> {
         let config = self.config.read().await;
         let detected = crate::wine::detect_prefixes(Path::new(""));

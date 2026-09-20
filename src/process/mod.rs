@@ -19,11 +19,11 @@ use std::collections::HashMap;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-pub use unix::{descendants, find_pids, live_game_processes, pid_is_alive, snapshot};
+pub use unix::{descendants, find_pids, live_game_processes, pickable, pid_is_alive, snapshot};
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{descendants, find_pids, live_game_processes, pid_is_alive, snapshot};
+pub use windows::{descendants, find_pids, live_game_processes, pickable, pid_is_alive, snapshot};
 
 /// `C:\games\x\Game.exe` / `/usr/bin/wine` -> `game.exe` / `wine`
 pub fn normalize_process_name(name: &str) -> String {
@@ -153,6 +153,37 @@ impl Snapshot {
     }
 }
 
+/// 「从正在运行的进程里挑」的一个候选。
+///
+/// 两个地方共用同一份列表:详情页的「跟当前这一局(PID)」,以及添加游戏页的
+/// 「从运行中的进程添加」。列表**刻意短**:不是把上百个进程倒给用户,而是只留
+/// 那些"看着像游戏"的(Windows 侧 = 有可见顶层窗口的进程,Linux 侧 = `.exe`)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Pickable {
+    pub pid: i32,
+    /// 显示用的进程名(完整的那一份,见 [`ProcEntry::display_name`])。
+    pub name: String,
+    /// 窗口标题 —— 用户真正认得出的东西(Windows 有;Linux 这边通常拿不到)。
+    pub title: String,
+    /// 可执行文件的完整路径;做不出来就是 `None`(用户自己在界面上补)。
+    pub exe: Option<String>,
+}
+
+/// 此刻可以挑的进程。见 [`Pickable`]。
+pub fn pickable_processes() -> Vec<Pickable> {
+    let mut found = pickable();
+    // 认得出的排前面(有标题的更认得出),其余按名字 —— 两个入口都吃这一份顺序。
+    found.sort_by(|left, right| {
+        right
+            .title
+            .is_empty()
+            .cmp(&left.title.is_empty())
+            .then_with(|| left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+            .then_with(|| left.pid.cmp(&right.pid))
+    });
+    found
+}
+
 /// 这个 pid 现在还活着吗?
 ///
 /// 与 [`is_running`] 的区别在**钥匙**:名字能存进配置、下一局还认得出来,而 pid 只对
@@ -262,6 +293,68 @@ pub(crate) fn collect_descendants(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 能挑的进程里必须有自己刚起的那个 `.exe` 模样的小东西 —— 而且**不能**有
+    /// wine 那层管道进程(`wineserver` 之类,用户挑了它毫无意义)。
+    #[cfg(unix)]
+    #[test]
+    fn the_pickable_list_keeps_game_shaped_processes_only() {
+        let dir = std::env::temp_dir().join(format!("kotori-pickable-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("kotori-pickable-probe.exe");
+        std::fs::copy("/bin/sleep", &exe).unwrap();
+        let mut child = std::process::Command::new(&exe)
+            .arg("30")
+            .spawn()
+            .expect("spawn the probe");
+        let pid = child.id() as i32;
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let found = loop {
+            if let Some(entry) = pickable_processes()
+                .into_iter()
+                .find(|entry| entry.pid == pid)
+            {
+                break entry;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "刚起的进程没出现在可挑列表里"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        assert_eq!(found.name, "kotori-pickable-probe.exe");
+        // argv0 是绝对路径,所以 exe 能直接填进「添加游戏」。
+        assert_eq!(found.exe.as_deref(), Some(exe.to_string_lossy().as_ref()));
+        assert!(
+            !pickable_processes()
+                .iter()
+                .any(|entry| entry.name == "wineserver"),
+            "wine 的管道进程不该出现在候选里"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// wine 的命令行里 exe 常常是 Windows 形状 —— 认得出 `Z:` 就等于拿到了本机路径。
+    #[cfg(unix)]
+    #[test]
+    fn wine_style_paths_become_unix_paths() {
+        assert_eq!(
+            unix::unix_exe_path(r"Z:\run\media\disk\Game\game.exe").as_deref(),
+            Some("/run/media/disk/Game/game.exe")
+        );
+        assert_eq!(
+            unix::unix_exe_path("/games/demo/game.exe").as_deref(),
+            Some("/games/demo/game.exe")
+        );
+        // 别的盘符在某个 prefix 里,而这里不知道是哪个 —— 不猜。
+        assert_eq!(unix::unix_exe_path(r"C:\Games\demo\game.exe"), None);
+        assert_eq!(unix::unix_exe_path("game.exe"), None);
+    }
 
     /// 自己这个进程当然活着,`/proc` 里不存在的号则不是 —— 两边的平台实现都只是
     /// "查一下",所以这条在两个平台上都成立。
