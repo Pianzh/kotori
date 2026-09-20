@@ -57,9 +57,9 @@ fn library_empty(app: &App, visible: usize) -> String {
         String::new()
     }
 }
-/// One library row. `state` is 0 未运行 / 1 运行中 / 2 仅监视 — the last one
-/// means a live session that is only being watched, which is a different thing
-/// from a game *configured* as watch-only (that is `watch_only`).
+/// One library row. `state` is 0 未运行 / 1 运行中 / 2 仅观测 —— 最后一个说的是
+/// **正在被跟的那一局**(会话本身只盯进程),与"这一款配了自动追踪"是两件事
+/// (后者是 `auto_watch`,见 `GameItem::auto_watch`)。
 pub(super) fn game_item(game: &UiGame, app: &App) -> GameItem {
     let state = match app.running.get(&game.id) {
         Some(session) if session.watch_only => 2,
@@ -72,7 +72,7 @@ pub(super) fn game_item(game: &UiGame, app: &App) -> GameItem {
         exe: game.exe.clone().into(),
         ratio: ratio_label(game.scale_ratio).into(),
         state,
-        watch_only: game.watch_only,
+        auto_watch: game.auto_watch,
         launching: app.launching.as_deref() == Some(game.id.as_str()),
         process: game.process_name.clone().into(),
     }
@@ -89,13 +89,13 @@ mod tests {
     use super::*;
     use crate::ui::test_support::ui_game;
     #[test]
-    fn the_library_row_reports_a_live_session_and_the_watch_only_flag_apart() {
+    fn the_library_row_reports_a_live_session_and_the_auto_watch_flag_apart() {
         let game = ui_game();
         let mut app = App::new().0;
 
-        // 只是"配置成仅监视",不是"正在被监视"。
+        // 只是"开着自动追踪",不是"正在被跟"。
         let mut configured = game.clone();
-        configured.watch_only = true;
+        configured.auto_watch = true;
         assert_eq!(game_item(&configured, &app).state, 0);
 
         app.running.insert(

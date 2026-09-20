@@ -166,15 +166,16 @@ pub(super) fn settings_page(mut ui: Ui) {
     window.invoke_fullscreen_toggled(false);
     assert!(!draft().fullscreen);
 
-    // 启动方式:两把开关互斥(第三态是都关 = 缩放启动)。
+    // 启动方式与自动追踪是**两件不相干的事**(用户 2026-09-20:仅观测是状态,
+    // 不是启动方式的替代品):开追踪不该动"直接启动"。
     assert!(!draft().direct_launch);
     window.invoke_direct_launch_toggled(true);
     assert!(draft().direct_launch);
-    window.invoke_watch_only_toggled(true);
-    assert!(draft().watch_only);
-    assert!(!draft().direct_launch, "开仅观测要自动关掉直接启动");
-    window.invoke_watch_only_toggled(false);
-    assert!(!draft().watch_only);
+    window.invoke_auto_watch_toggled(true);
+    assert!(draft().auto_watch);
+    assert!(draft().direct_launch, "开自动追踪不该关掉直接启动");
+    window.invoke_auto_watch_toggled(false);
+    assert!(!draft().auto_watch);
 
     // 存档位置:加一行 → 换形态 → 删掉。新行默认相对(推荐顺序第一位);手动把
     // kind 选成 absolute 后再敲令牌文本,自动推断会把它改回 windows(用户

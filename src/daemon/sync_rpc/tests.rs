@@ -41,7 +41,7 @@ pub(super) fn daemon(keyring: Keyring) -> Daemon {
             launch_args: Vec::new(),
             save_paths: vec![SavePath::inferred("savedata")],
             wine_prefix: None,
-            watch_only: false,
+            auto_watch: false,
             direct_launch: false,
             process_name: None,
             scale_profile: ScaleProfile::default_for(),

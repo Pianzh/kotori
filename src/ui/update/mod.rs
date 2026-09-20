@@ -301,7 +301,7 @@ impl App {
             | Message::WinePrefixSaved(..)
             | Message::GameDirChanged(..)
             | Message::DirectLaunchToggled(..)
-            | Message::WatchOnlyToggled(..)
+            | Message::AutoWatchToggled(..)
             | Message::SavePathKindChanged(..)
             | Message::SavePathChanged(..)
             | Message::SavePathExcludeChanged(..)

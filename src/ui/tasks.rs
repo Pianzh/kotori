@@ -366,8 +366,8 @@ pub(super) async fn save_profile(draft: Draft) -> Result<(), String> {
     if draft.direct_launch != draft.direct_launch_original {
         params.push(("direct_launch", Value::Bool(draft.direct_launch)));
     }
-    if draft.watch_only != draft.watch_only_original {
-        params.push(("watch_only", Value::Bool(draft.watch_only)));
+    if draft.auto_watch != draft.auto_watch_original {
+        params.push(("auto_watch", Value::Bool(draft.auto_watch)));
     }
 
     crate::rpc::call(

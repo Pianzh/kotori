@@ -46,10 +46,13 @@ pub(in crate::ui) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     .unwrap_or("")
                     .to_string(),
                 save_paths: parse_save_paths(g.get("save_paths")),
-                watch_only: g
-                    .get("watch_only")
+                // 读 `auto_watch`;**旧 daemon 还在跑**时它只报 `watch_only`,
+                // 那也认(daemon 是长命进程,界面比它新是常态)。
+                auto_watch: g
+                    .get("auto_watch")
+                    .or_else(|| g.get("watch_only"))
                     .and_then(|v| v.as_bool())
-                    .unwrap_or(false),
+                    .unwrap_or(true),
                 direct_launch: g
                     .get("direct_launch")
                     .and_then(|v| v.as_bool())
@@ -255,7 +258,7 @@ mod tests {
                 "name": "W",
                 "game_dir": "/games/w",
                 "exe_path": "/games/w/game.exe",
-                "watch_only": true,
+                "auto_watch": true,
                 "process_name": "game.exe",
                 "save_paths": [
                     { "kind": "windows", "path": "%APPDATA%\\W", "exclude": ["*.log", "tmp/"] }
@@ -265,7 +268,7 @@ mod tests {
         });
 
         let game = parse_games(&value).unwrap().remove(0);
-        assert!(game.watch_only);
+        assert!(game.auto_watch);
         assert_eq!(game.process_name, "game.exe");
         assert_eq!(game.save_paths.len(), 1);
         assert_eq!(game.save_paths[0].kind, "windows");

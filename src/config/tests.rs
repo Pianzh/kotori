@@ -35,6 +35,68 @@ exe_path = "/games/probe/game.exe"
     assert!(game.created_at.timestamp() > 1_700_000_000);
 }
 
+/// 自动追踪**默认开**(用户 2026-09-19:「仅观测默认打开」),旧名字 `watch_only`
+/// 仍然读得进来。
+///
+/// 默认值这条特别要紧:手写配置的人不会为了"让别人启动的那一局也被记下来"去写一行
+/// 开关,而漏掉它的代价是**库里什么都不留**(退出后的上传挂在会话结束上)。
+#[test]
+fn auto_watch_defaults_on_and_still_answers_to_its_old_name() {
+    let config: Config = toml::from_str(
+        r#"
+[games.quiet]
+name = "没写开关"
+exe_path = "/games/quiet/game.exe"
+
+[games.old]
+name = "旧名字"
+exe_path = "/games/old/game.exe"
+watch_only = false
+"#,
+    )
+    .expect("两种写法都应该能解析");
+
+    assert!(config.games["quiet"].auto_watch, "缺省就是开");
+    assert!(
+        !config.games["old"].auto_watch,
+        "旧名字写的 false 要照旧算数"
+    );
+    // 写出去用的是新名字(旧名字只在读的时候认)。
+    let written = toml::to_string(&config).unwrap();
+    assert!(written.contains("auto_watch"), "{written}");
+    assert!(!written.contains("watch_only"), "{written}");
+}
+
+/// 自动追踪要盯谁:`process_name` 优先,没写就按 exe 文件名(与直启那条路一致)。
+#[test]
+fn the_watched_process_name_falls_back_to_the_exe_file_name() {
+    let game = |process_name: Option<&str>| GameConfig {
+        name: "探针".into(),
+        game_dir: PathBuf::from("/games/probe"),
+        exe_path: PathBuf::from("/games/probe/Game.exe"),
+        launch_args: Vec::new(),
+        save_paths: Vec::new(),
+        wine_prefix: None,
+        auto_watch: true,
+        direct_launch: false,
+        process_name: process_name.map(str::to_string),
+        scale_profile: ScaleProfile::default_for(),
+        created_at: chrono::Utc::now(),
+    };
+
+    assert_eq!(game(None).watch_name().as_deref(), Some("Game.exe"));
+    assert_eq!(
+        game(Some("launcher.exe")).watch_name().as_deref(),
+        Some("launcher.exe")
+    );
+    // 空白进程名当作没写,别拿它去跟任何东西比。
+    assert_eq!(game(Some("   ")).watch_name().as_deref(), Some("Game.exe"));
+    // exe 也取不出名字(理论上不该发生),就只能等用户自己点启动。
+    let mut nameless = game(None);
+    nameless.exe_path = PathBuf::from("/");
+    assert_eq!(nameless.watch_name(), None);
+}
+
 /// 界面拿字符串装 kind,配置拿 serde 装 —— 两种写法必须一模一样。
 #[test]
 fn as_str_matches_what_serde_writes() {
@@ -68,7 +130,7 @@ fn sample_config() -> Config {
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),
             launch_args: Vec::new(),
-            watch_only: false,
+            auto_watch: false,
             direct_launch: false,
             process_name: None,
             save_paths: vec![SavePath::inferred("%APPDATA%\\Demo\\save")],

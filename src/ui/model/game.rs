@@ -36,8 +36,9 @@ pub struct UiGame {
     /// 传给这个 exe 的额外参数(存的是原始 argv,页面里拼成一行显示)。
     pub launch_args: Vec<String>,
     pub save_paths: Vec<SavePathDraft>,
-    /// Watch-only games are started by the user; kotori follows the process.
-    pub watch_only: bool,
+    /// 自动追踪:游戏不必由 kotori 启动,进程一出现就跟着记一局(见
+    /// `GameConfig::auto_watch`)。它与"能不能启动"无关。
+    pub auto_watch: bool,
     /// Launched **without** gamescope (user choice on Linux; the only kind of
     /// launch on Windows).
     pub direct_launch: bool,
@@ -82,12 +83,12 @@ pub(in crate::ui) struct Draft {
     pub(in crate::ui) launch_args_original: String,
     pub(in crate::ui) save_paths: Vec<SavePathDraft>,
     pub(in crate::ui) save_paths_original: Vec<SavePathDraft>,
-    /// 启动方式:直接启动(不走缩放)。「仅观测」与它互斥,两把开关的互斥逻辑
-    /// 在 update 层(开一个自动关另一个)。
+    /// 启动方式:直接启动(不走缩放)。它与「自动追踪」**互不相干** ——
+    /// 后者说的是"别人启动的那一局也要跟"。
     pub(in crate::ui) direct_launch: bool,
     pub(in crate::ui) direct_launch_original: bool,
-    pub(in crate::ui) watch_only: bool,
-    pub(in crate::ui) watch_only_original: bool,
+    pub(in crate::ui) auto_watch: bool,
+    pub(in crate::ui) auto_watch_original: bool,
     pub(in crate::ui) algo: String,
     pub(in crate::ui) sharpness: u32,
     pub(in crate::ui) internal_w: String,
@@ -122,8 +123,8 @@ impl Draft {
             save_paths_original: game.save_paths.clone(),
             direct_launch: game.direct_launch,
             direct_launch_original: game.direct_launch,
-            watch_only: game.watch_only,
-            watch_only_original: game.watch_only,
+            auto_watch: game.auto_watch,
+            auto_watch_original: game.auto_watch,
             algo: if ScaleAlgorithm::ALL.contains(&game.algo.as_str()) {
                 game.algo.clone()
             } else {

@@ -31,9 +31,11 @@ import { GameSyncGroup } from "game-sync.slint";
 export component GameSettingsPage inherits Rectangle {
     // 会话状态(是否在跑)→ 由 Rust 每次刷新推,所以这里读的是实时值。
     in property <GameItem> game;
-    // 启动方式(直接启动 / 仅观测),由 render 从草稿推;Switch 只上报"用户点了"。
+    // 启动方式(直接启动)与自动追踪,由 render 从草稿推;Switch 只上报"用户点了"。
+    // ⚠ 两者**互不相干**:追踪说的是"别人启动的那一局也要跟",不是一种启动方式
+    // (用户 2026-09-20 纠正:仅观测是**状态**,不该拿来当开关的名字)。
     in property <bool> game-direct-launch;
-    in property <bool> game-watch-only;
+    in property <bool> game-auto-watch;
     // 已存值 + 抄写令牌。
     in property <GameDetail> stored;
     in property <int> seed: 0;
@@ -63,7 +65,7 @@ export component GameSettingsPage inherits Rectangle {
     callback delete-cancelled();
     callback delete-confirmed();
     callback direct-launch-toggled(bool);
-    callback watch-only-toggled(bool);
+    callback auto-watch-toggled(bool);
 
     callback game-dir-changed(string);
     callback exe-changed(string);
@@ -249,16 +251,42 @@ export component GameSettingsPage inherits Rectangle {
                         }
                     }
                     Divider { }
-                    CardRow {
-                        title: "仅观测";
-                        description: "游戏由你自己启动(快捷方式 / 启动器都行),kotori 只盯着进程,它退出后照常上传存档。";
-                        Switch {
-                            checked: root.game-watch-only;
-                            toggled => { root.watch-only-toggled(self.checked); }
+                    VerticalLayout {
+                        padding: 16px;
+                        Text {
+                            text: "上面这条路管的是 kotori 怎么把它跑起来。游戏不是从这里启动的,下面「自动追踪」照样算数。";
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
                         }
                     }
-                    if root.game-watch-only : Divider { }
-                    if root.game-watch-only : CardRow {
+                }
+            }
+
+            // ── 自动追踪 ─────────────────────────────────────────────
+            // 它是**独立开关**,不在「启动方式」里面:开着它照样能从上面点启动,
+            // 两条路发现的是同一局游戏(会话表按 game_id 去重)。
+            RevealItem {
+                revealed: root.revealed;
+                step: 3;
+                bottom: 8px;
+                SectionTitle { text: "自动追踪"; }
+            }
+            RevealItem {
+                revealed: root.revealed;
+                step: 3;
+                bottom: 24px;
+                Group {
+                    CardRow {
+                        title: "自动追踪";
+                        description: "不必从 kotori 启动:双击图标 / 启动器 / Steam 拉起来的那一局,kotori 也会盯住进程,游戏退出后照常上传存档(状态栏显示成「仅观测」)。";
+                        Switch {
+                            checked: root.game-auto-watch;
+                            toggled => { root.auto-watch-toggled(self.checked); }
+                        }
+                    }
+                    if root.game-auto-watch : Divider { }
+                    if root.game-auto-watch : CardRow {
                         title: "跟随的进程";
                         Text {
                             text: root.game.process == "" ? "（未设置进程名,按 exe 文件名认）" : root.game.process;

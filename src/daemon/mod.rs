@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
 #[cfg(unix)]
 use tokio::signal::unix::{SignalKind, signal};
@@ -11,13 +11,14 @@ use tokio::sync::{Notify, RwLock};
 use crate::config::{self, Config};
 use crate::scale::{LaunchSpec, PlatformEngine, ScaleEngine, ScaleSession, SessionKind};
 
+mod dispatch;
 mod game_rpc;
 mod ipc;
 mod protocol;
 mod scale_rpc;
 mod status_rpc;
 mod sync_rpc;
-use protocol::{GamePatch, NewGame, Reply, param_str, respond, rpc_err, rpc_ok};
+mod watch;
 use sync_rpc::SyncState;
 
 pub use ipc::ensure_running;
@@ -37,6 +38,13 @@ pub struct Daemon {
     shutdown: Arc<Notify>,
     /// Keyring handle and the last sync result per game.
     sync: Arc<SyncState>,
+    /// 用户亲手「停止」掉的自动追踪:`game_id` → **那一刻**这个进程名对应的 pid。
+    ///
+    /// 后台那圈轮询不许把同一次运行再认回来(否则点一次「停止」,两秒后会话自己长
+    /// 回来),但下一个进程实例(新 pid)照样跟 —— 按 pid 记而不是按"名字消失过"记,
+    /// 是因为游戏退出到用户重开可能快过一个轮询周期,而"没观察到空档"不该让这一款
+    /// 从此不再被追踪。
+    ignored_watch: Arc<RwLock<std::collections::HashMap<String, Vec<i32>>>>,
 }
 
 impl Daemon {
@@ -76,6 +84,7 @@ impl Daemon {
             engine: Arc::new(PlatformEngine::new()),
             shutdown: Arc::new(Notify::new()),
             sync: Arc::new(sync),
+            ignored_watch: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
 
@@ -115,6 +124,8 @@ impl Daemon {
         }
 
         self.spawn_sync_events();
+        // 自动追踪:不是 kotori 启动的游戏也要有一局记录(见 `watch`)。
+        self.spawn_process_watch();
 
         // A logout or a shutdown stops this daemon with SIGTERM, and that is the
         // one exit where the games have to go with it. They live in the same
@@ -206,6 +217,7 @@ impl Daemon {
             engine: self.engine.clone(),
             shutdown: self.shutdown.clone(),
             sync: self.sync.clone(),
+            ignored_watch: self.ignored_watch.clone(),
         })
     }
 
@@ -278,188 +290,6 @@ impl Daemon {
         }
 
         Ok(())
-    }
-
-    async fn handle_request(&self, raw: &str) -> Reply {
-        let req: protocol::rpc::Request = match serde_json::from_str(raw) {
-            Ok(req) => req,
-            Err(e) => return rpc_err(Value::Null, -32700, format!("parse error: {e}")),
-        };
-        if req.jsonrpc != "2.0" {
-            return rpc_err(
-                req.id,
-                -32600,
-                format!("unsupported jsonrpc version: {:?}", req.jsonrpc),
-            );
-        }
-
-        let id = req.id.clone();
-        match req.method.as_str() {
-            "daemon.status" => respond(id, self.rpc_status().await),
-            "daemon.shutdown" => Reply {
-                body: rpc_ok(id, json!({ "success": true })).body,
-                shutdown: true,
-            },
-            "config.reload" => respond(id, self.rpc_reload_config().await),
-            "wine.status" => respond(id, self.rpc_wine_status().await),
-            "env.report" => respond(id, self.rpc_env_report().await),
-            "wine.set_prefix" => {
-                let value = match req.params.as_ref().and_then(|p| p.get("prefix")) {
-                    Some(v) => v.clone(),
-                    None => return rpc_err(id, -32602, "缺少参数: prefix".to_string()),
-                };
-                respond(id, self.rpc_set_wine_prefix(value).await)
-            }
-
-            "game.list" => respond(id, self.rpc_game_list().await),
-            "game.remove" => match param_str(&req.params, "id") {
-                Ok(game_id) => respond(id, self.rpc_game_remove(game_id).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "game.create" => {
-                match serde_json::from_value::<NewGame>(Value::Object(
-                    req.params.clone().unwrap_or_default(),
-                )) {
-                    Ok(new_game) => respond(id, self.rpc_game_create(new_game).await),
-                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
-                }
-            }
-            "game.update" => {
-                let game_id = match param_str(&req.params, "id") {
-                    Ok(v) => v.to_string(),
-                    Err(e) => return rpc_err(id, -32602, e),
-                };
-                let mut patch_fields = req.params.clone().unwrap_or_default();
-                patch_fields.remove("id");
-                if patch_fields.is_empty() {
-                    return rpc_err(
-                        id,
-                        -32602,
-                        "game.update 需要至少一个要修改的字段".to_string(),
-                    );
-                }
-                match serde_json::from_value::<GamePatch>(Value::Object(patch_fields)) {
-                    Ok(patch) => respond(id, self.rpc_game_update(&game_id, patch).await),
-                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
-                }
-            }
-            "game.launch" => match param_str(&req.params, "id") {
-                Ok(game_id) => respond(id, self.rpc_game_launch(game_id).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "game.wait" => match param_str(&req.params, "session_id") {
-                Ok(sid) => respond(id, self.rpc_game_wait(sid).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "game.stop" => match param_str(&req.params, "session_id") {
-                Ok(sid) => respond(id, self.rpc_game_stop(sid).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "scale.get_status" => match param_str(&req.params, "session_id") {
-                Ok(sid) => respond(id, self.rpc_scale_status(sid).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "scale.toggle_fsr" => match param_str(&req.params, "session_id") {
-                Ok(sid) => respond(id, self.rpc_scale_toggle_fsr(sid).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "scale.toggle_integer" => match param_str(&req.params, "session_id") {
-                Ok(sid) => respond(id, self.rpc_scale_toggle_integer(sid).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "scale.adjust_sharpness" => match param_str(&req.params, "session_id") {
-                Ok(sid) => {
-                    let delta = req
-                        .params
-                        .as_ref()
-                        .and_then(|p| p.get("delta"))
-                        .and_then(|v| v.as_i64())
-                        .unwrap_or(0) as i32;
-                    respond(id, self.rpc_scale_adjust_sharpness(sid, delta).await)
-                }
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "scale.action" => match (
-                param_str(&req.params, "session_id"),
-                param_str(&req.params, "action"),
-            ) {
-                (Ok(sid), Ok(action)) => match crate::scale::ScaleAction::from_id(action) {
-                    Some(action) => respond(id, self.rpc_scale_action(sid, action).await),
-                    None => rpc_err(id, -32602, format!("未知的缩放动作：{action}")),
-                },
-                (Err(e), _) | (_, Err(e)) => rpc_err(id, -32602, e),
-            },
-            "sync.status" => respond(id, self.rpc_sync_status().await),
-            "sync.set_settings" => {
-                match serde_json::from_value::<sync_rpc::SettingsPatch>(Value::Object(
-                    req.params.clone().unwrap_or_default(),
-                )) {
-                    Ok(patch) => respond(id, self.rpc_sync_set_settings(patch).await),
-                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
-                }
-            }
-            "sync.set_credentials" => {
-                match serde_json::from_value::<sync_rpc::Credentials>(Value::Object(
-                    req.params.clone().unwrap_or_default(),
-                )) {
-                    Ok(credentials) => respond(id, self.rpc_sync_set_credentials(credentials)),
-                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
-                }
-            }
-            "sync.set_kopia_password" => {
-                match serde_json::from_value::<sync_rpc::Password>(Value::Object(
-                    req.params.clone().unwrap_or_default(),
-                )) {
-                    Ok(password) => respond(id, self.rpc_sync_set_kopia_password(password)),
-                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
-                }
-            }
-            "sync.unlock" => {
-                match serde_json::from_value::<sync_rpc::Password>(Value::Object(
-                    req.params.clone().unwrap_or_default(),
-                )) {
-                    Ok(password) => respond(id, self.rpc_sync_unlock(password)),
-                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
-                }
-            }
-            "sync.set_master_password" => {
-                match serde_json::from_value::<sync_rpc::Password>(Value::Object(
-                    req.params.clone().unwrap_or_default(),
-                )) {
-                    Ok(password) => respond(id, self.rpc_sync_set_master_password(password)),
-                    Err(e) => rpc_err(id, -32602, format!("参数无效: {e}")),
-                }
-            }
-            "sync.clear_master_password" => respond(id, self.rpc_sync_clear_master_password()),
-            "sync.lock" => respond(id, self.rpc_sync_lock()),
-            "sync.test" => respond(id, self.rpc_sync_test().await),
-            "sync.now" => {
-                let game_id = req
-                    .params
-                    .as_ref()
-                    .and_then(|p| p.get("id"))
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string);
-                respond(id, self.rpc_sync_now(game_id.as_deref()).await)
-            }
-            "sync.versions" => match param_str(&req.params, "id") {
-                Ok(game_id) => respond(id, self.rpc_sync_versions(game_id).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            "sync.restore" => match param_str(&req.params, "id") {
-                Ok(game_id) => {
-                    let version = req
-                        .params
-                        .as_ref()
-                        .and_then(|p| p.get("version"))
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string);
-                    respond(id, self.rpc_sync_restore(game_id, version.as_deref()).await)
-                }
-                Err(e) => rpc_err(id, -32602, e),
-            },
-            other => rpc_err(id, -32601, format!("method not found: {other}")),
-        }
     }
 
     /// Apply a mutation to the config atomically: the change is made on a copy,

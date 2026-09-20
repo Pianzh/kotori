@@ -89,7 +89,7 @@ component GameRow inherits Rectangle {
             AccentButton {
                 label: root.game.state != 0
                     ? "停止"
-                    : (root.game.launching ? "启动中…" : (root.game.watch-only ? "监视" : "启动"));
+                    : (root.game.launching ? "启动中…" : "启动");
                 button-width: 84px;
                 button-enabled: !root.game.launching;
                 clicked => { root.launch(); }

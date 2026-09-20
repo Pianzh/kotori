@@ -81,6 +81,19 @@ pub fn is_running(name: &str) -> bool {
     !find_pids(name).is_empty()
 }
 
+/// 两个名字是不是"同一个进程"?按 [`matches`] 那套规矩比(去掉目录、大小写不敏感、
+/// 也认 15 字节截断形式)。
+///
+/// 给"自动追踪"那条路用:它要在**会话表**里认出"这一款已经有会话了",而会话里记的
+/// 进程名可能来自配置(`process_name`),也可能是 exe 文件名 —— 两者都得能对上。
+pub fn same_name(left: &str, right: &str) -> bool {
+    let left = normalize_process_name(left);
+    let right = normalize_process_name(right);
+    !left.is_empty()
+        && !right.is_empty()
+        && (left == right || left == truncated(&right) || right == truncated(&left))
+}
+
 /// Poll interval used while waiting for a watched game.
 pub const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -253,6 +266,22 @@ mod tests {
         let started = std::time::Instant::now();
         wait_until_gone("kotori-definitely-not-running").await;
         assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+
+    /// 自动追踪靠它回答"这一款是不是已经有会话了":会话里记的名字来自配置或 exe
+    /// 文件名,两个写法都得能对上,而空名字不许跟任何东西相等(否则第一次轮询就会
+    /// 把每个游戏都当成"已经在跟")。
+    #[test]
+    fn two_spellings_of_the_same_process_name_match() {
+        assert!(same_name("game.exe", "C:\\games\\demo\\game.exe"));
+        assert!(same_name("Game.EXE", "game.exe"));
+        // `/proc/<pid>/comm` 只留 15 字节,长名字在进程表里就是这个截断形式
+        // (名字全是 ASCII,所以按字节切与内核一致)。
+        let long = "VeryLongGameName.exe";
+        assert!(same_name(long, &long[..15]));
+        assert!(!same_name("game.exe", "game2.exe"));
+        assert!(!same_name("", "game.exe"));
+        assert!(!same_name("game.exe", ""));
     }
 
     #[test]

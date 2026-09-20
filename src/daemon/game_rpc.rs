@@ -112,7 +112,8 @@ impl Daemon {
                     launch_args: Vec::new(),
                     save_paths: Vec::new(),
                     wine_prefix: None,
-                    watch_only: false,
+                    // 默认开着自动追踪:用户自己起来的那一局也不漏(见 `GameConfig::auto_watch`)。
+                    auto_watch: true,
                     direct_launch: false,
                     process_name: None,
                     scale_profile: crate::config::ScaleProfile::default_for(),
@@ -203,8 +204,8 @@ impl Daemon {
                 game.process_name = process_name.clone().filter(|name| !name.trim().is_empty());
             }
 
-            if let Some(watch_only) = patch.watch_only {
-                game.watch_only = watch_only;
+            if let Some(auto_watch) = patch.auto_watch {
+                game.auto_watch = auto_watch;
             }
 
             if let Some(direct_launch) = patch.direct_launch {
@@ -241,39 +242,11 @@ impl Daemon {
         // (see `sync_pull_before_launch`). `None` means sync had nothing to do.
         let pulled = self.sync_pull_before_launch(id).await;
 
-        // Watch-only: kotori never launches these, it just follows the process
-        // so clients (and save sync) know when the game runs.
-        if !game.is_launchable() {
-            let Some(name) = game.process_name.as_deref() else {
-                return Err(format!(
-                    "「{}」是「仅观测」模式，但没有填写要观测的进程名；请在详情页里补上",
-                    game.name
-                ));
-            };
-            let spec = LaunchSpec {
-                game_id: id,
-                exe: "",
-                args: &[],
-                game_dir: &game_dir,
-                wine_prefix: None,
-                profile: &game.scale_profile,
-                process_name: Some(name),
-                watch_only: true,
-                direct_launch: false,
-            };
-            let session = self
-                .engine
-                .start_session(&spec)
-                .await
-                .map_err(|e| e.to_string())?;
-            return Ok(json!({
-                "session_id": session.session_id,
-                "watch_only": true,
-                "process_name": name,
-                "game_dir": game_dir,
-                "sync_pull": pulled,
-            }));
-        }
+        // ⚠ 这里**没有**"仅观测的游戏不许启动"那条分支了。开着自动追踪只是说
+        // "别人启动的那一局也要跟",它跟"谁把它启动起来"无关;从前那句
+        // 「是「仅观测」模式」是拿跟踪当成启动方式的替代品(用户 2026-09-20 纠正)。
+        // 自动追踪由 `daemon::watch` 的后台循环负责,与这条路径互不干涉:
+        // 它看到本会话已经存在就不会再开一个。
 
         tracing::info!(
             "launching {} (cwd={} prefix={} ← {})",
@@ -327,6 +300,19 @@ impl Daemon {
             .stop_session(&session)
             .await
             .map_err(|e| e.to_string())?;
+        // 观测会话是后台循环自己认出来的,而那个循环还会再看到同一个进程 ——
+        // 不记一笔的话,用户点一次「停止」两秒后就被那个循环撤销了。这一笔在进程
+        // 走光时自动清掉(见 `daemon::watch`),所以只是"这一局别再跟了"。
+        if session.watch_only
+            && let Some(game_id) = &session.game_id
+            && let Some(name) = session.process_name.as_deref()
+        {
+            let pids = crate::process::find_pids(name);
+            self.ignored_watch
+                .write()
+                .await
+                .insert(game_id.clone(), pids);
+        }
         Ok(json!({ "success": true }))
     }
 }

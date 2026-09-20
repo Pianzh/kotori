@@ -152,7 +152,7 @@ mod test_support {
             exe: "/games/demo/game.exe".into(),
             launch_args: Vec::new(),
             save_paths: Vec::new(),
-            watch_only: false,
+            auto_watch: false,
             direct_launch: false,
             process_name: String::new(),
             profile_name: "默认".into(),

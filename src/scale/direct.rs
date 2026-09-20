@@ -1,6 +1,9 @@
-//! 无 gamescope 的两类会话:**观测**(watch_only,什么都不启动)与**直接启动**
+//! 无 gamescope 的两类会话:**观测**(只盯进程,什么都不启动)与**直接启动**
 //! (不走缩放,把游戏跑起来)。两个引擎共用 —— 会话登记、watcher 与 `Ended`
 //! 事件只写一遍,而退出后自动上传恰恰挂在 `Ended` 上,两端的直启都必须发它。
+//!
+//! 观测会话由 `daemon::watch` 的后台循环发起(**进程已经确认在跑**),所以这里没有
+//! "等它出现"那一段 —— 理由与踩过的坑写在 `spawn_watch_task` 的文档里。
 //!
 //! 平台差异只在那一个 spawn:Linux 直启 = wine(收尾时还要 `wineserver -k`),
 //! Windows 直启 = 裸 exe(游戏窗口要显示,不套 `CREATE_NO_WINDOW`)。其余——
@@ -22,6 +25,8 @@ type Events = broadcast::Sender<SessionEvent>;
 
 /// Track a game the user starts themselves: kotori launches nothing, the
 /// session simply follows `process_name` for as long as it runs.
+///
+/// **调用方必须是"已经看到它在跑"的那一方**(今天只有 `daemon::watch`)。
 pub(super) async fn start_watch_session(
     sessions: &Sessions,
     events: &Events,
@@ -29,7 +34,7 @@ pub(super) async fn start_watch_session(
 ) -> Result<ScaleSession, ScaleError> {
     let Some(name) = spec.process_name.filter(|name| !name.trim().is_empty()) else {
         return Err(ScaleError::ProtocolError(
-            "「仅观测」模式必须指定要观测的进程名".to_string(),
+            "观测会话必须知道要盯哪个进程名".to_string(),
         ));
     };
 
@@ -216,20 +221,20 @@ async fn register(sessions: &Sessions, events: &Events, session: &ScaleSession) 
 
 /// 跟到游戏退出再发 `Ended`,两条会话路径共用。
 ///
-/// `child` 是直启时我们 spawn 的进程(`None` = 观测)。两条路的**开头**不一样,
-/// 也必须是两段:
+/// `child` 是直启时我们 spawn 的进程(`None` = 观测)。两条路的开头不一样,但都很短:
 ///
-/// * 直启:启动时已经确认那个进程活着(300ms 检测),所以不需要"等它出现" ——
-///   等它退出就是这一局的尽头;退出时名字还在跑说明是启动器交接(真游戏还在),
-///   继续跟到走光。这与 `gamescope.rs` 的收尾同构:那边 child 是 gamescope。
-/// * 观测:kotori 什么都没启动,用户可能还没开游戏,所以先等名字出现(有上限)
-///   再等它消失。
+/// * 直启:启动时已经确认那个进程活着(300ms 检测),所以只等它退出 —— 退出时名字
+///   还在跑说明是启动器交接(真游戏还在),继续跟到走光。这与 `gamescope.rs` 的收尾
+///   同构:那边 child 是 gamescope。
+/// * 观测:**我们开始跟它的时候,它已经确定在跑了** —— 会话是 `daemon::watch` 的
+///   后台循环在进程表里看到它之后才开的(用户从前得手点一次「启动」,那一按也只是
+///   让 daemon 开始盯)。所以这里同样没有"等它出现"这一步。
 ///
-/// ⚠ 从前两条路共用同一个"先等出现"的开头,直启用它就错了:此时被盯的名字**就是**
-/// 它刚 spawn 的那个 exe(没配 `process_name` 时),`wait()` 返回时名字当然已经不在,
-/// 于是每次直启结束都要空等满 `APPEAR_TIMEOUT`(300 秒)才走"进程始终没出现,放弃"
-/// 那条分支 —— 而那条分支**不发 `Ended`**,退出后的自动上传因此整条不触发
-/// (Windows 上没有 gamescope,每个游戏都走直启)。
+/// ⚠ 这个函数曾经有过一段"先等名字出现(上限 300 秒)"的开头,两条路共用,而它错在
+/// 两个地方:直启用它会每次结束都空等满 300 秒,并且走那条"进程始终没出现,放弃"
+/// 的分支 —— 那条分支**不发 `Ended`**,而 `Ended` 是退出后自动上传的唯一触发器
+/// (Windows 上没有 gamescope,每个游戏都走直启,整条链因此是断的)。**没有"等出现"
+/// 就没有这条分支**,这也是它现在敢删掉的理由:观测会话的发起人已经确认过它活着。
 ///
 /// `prefix` 是这一局用的 wine prefix(观测恒为 `None`):游戏都走光之后关掉
 /// wine 的那摊,否则 `winedevice.exe` 会把一次注销拖成 90 秒。
@@ -250,26 +255,6 @@ fn spawn_watch_task(
                 }
                 Err(err) => tracing::warn!("session {sid}: 等进程结束出错：{err}"),
             }
-        } else if !name.is_empty() {
-            // 观测模式:kotori 什么都没启动,用户可能还没把游戏开起来,先等它出现。
-            let deadline = tokio::time::Instant::now() + process::APPEAR_TIMEOUT;
-            loop {
-                if !sessions.read().await.contains_key(&sid) {
-                    return;
-                }
-                if process::is_running(&name) {
-                    break;
-                }
-                if tokio::time::Instant::now() >= deadline {
-                    tracing::warn!("session {sid}: {name} never appeared, giving up");
-                    sessions.write().await.remove(&sid);
-                    // Deliberately no `Ended`: nothing ever ran, so a client
-                    // must not treat this as "a game finished, sync it".
-                    return;
-                }
-                tokio::time::sleep(process::POLL_INTERVAL).await;
-            }
-            tracing::info!("session {sid}: {name} is running");
         }
 
         // 两条路共用的收尾:等这个名字走光。启动器交接时,我们启动的那个先退,

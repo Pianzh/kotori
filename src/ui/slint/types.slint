@@ -4,7 +4,7 @@
 // 而不是 wire 上的 JSON —— 视图不该认识 JSON(parse.rs 已经把那层做完了)。
 // Rust 侧用 `From` 从 model 类型构造它们,见 `src/ui/render.rs`。
 
-// 游戏库里的一行。`state` 0 = 未运行、1 = 运行中、2 = 仅监视(会话在跑)。
+// 游戏库里的一行。`state` 0 = 未运行、1 = 运行中、2 = 仅观测(跟着别人启动的那一局)。
 export struct GameItem {
     id: string,
     name: string,
@@ -13,9 +13,11 @@ export struct GameItem {
     // 但列宽靠 min-width 保留,否则这一列为空的行会把按钮列挤错位。
     ratio: string,
     state: int,
-    watch-only: bool,
+    // 自动追踪开着(见 `GameConfig::auto_watch`)。⚠ 它**不是**「不能启动」——
+    // 它只说"别人启动的那一局也要跟",所以按钮文案与它无关。
+    auto-watch: bool,
     launching: bool,
-    // 仅观测的游戏跟的进程名(单游戏设置页会显示出来,否则用户无从知道 kotori 在盯什么)。
+    // 自动追踪盯的进程名(单游戏设置页会显示出来,否则用户无从知道 kotori 在盯什么)。
     process: string,
 }
 

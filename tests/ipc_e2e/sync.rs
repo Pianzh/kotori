@@ -223,19 +223,30 @@ fn save_sync_follows_the_game_lifecycle() {
     let watched_name = watched.file_name().unwrap().to_string_lossy().to_string();
     let response = fixture.rpc(
         "game.update",
-        json!({ "id": "life-game", "watch_only": true, "process_name": watched_name }),
+        json!({ "id": "life-game", "auto_watch": true, "process_name": watched_name }),
     );
     assert_eq!(response["result"]["success"], true, "{response}");
 
-    let session = fixture.rpc("game.launch", json!({ "id": "life-game" }));
-    assert_eq!(session["result"]["watch_only"], true, "{session}");
-
+    // ⚠ 这里**不点「启动」**:自动追踪的意义就是"不是 kotori 启动的那一局也要跟"
+    // (用户 2026-09-20),后台那圈轮询会自己认出它。
     let mut child = std::process::Command::new(&watched)
         .arg("30")
         .spawn()
         .expect("spawn the watched process");
-    // Let the engine notice it, then play "for a while".
-    std::thread::sleep(Duration::from_secs(3));
+    let watched_session = |fixture: &Fixture| {
+        fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["game_id"] == "life-game")
+    };
+    assert!(
+        wait_until(Duration::from_secs(20), || watched_session(&fixture)),
+        "daemon 没有自己认出这个进程\n--- daemon log ---\n{}",
+        fixture.logs()
+    );
+
+    // Then play "for a while".
     std::fs::write(saves.join("save.dat"), b"progress-made").unwrap();
 
     child.kill().unwrap();

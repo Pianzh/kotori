@@ -71,14 +71,20 @@ pub struct GameConfig {
     /// Per-game wine prefix; overrides the global [`WineConfig::prefix`].
     #[serde(default)]
     pub wine_prefix: Option<PathBuf>,
-    /// kotori never launches this game (the user starts it themselves, or a
-    /// launcher does). Save sync still works by watching `process_name`.
-    #[serde(default)]
-    pub watch_only: bool,
+    /// 自动追踪:游戏**不必**由 kotori 启动。只要它的进程出现(自己双击、Steam、
+    /// 启动器拉起来的都算),kotori 就跟着记一局,游戏退出后照常上传存档。
+    ///
+    /// 它描述的是「怎么发现一局游戏」,**与"谁把它启动起来"无关** —— 从前的字段叫
+    /// `watch_only`,语义是"kotori 永不启动这款游戏",于是"跟踪"和"启动"变成互斥的
+    /// 两件事。用户 2026-09-20 指出那是错的:开着追踪照样可以从 kotori 点「启动」,
+    /// 两条路发现的是同一局游戏,不该互相排斥。旧名字仍然读得进来(`alias`),默认
+    /// **开**。
+    #[serde(default = "default_auto_watch", alias = "watch_only")]
+    pub auto_watch: bool,
     /// Launch the exe **without** gamescope: plain wine on Linux, the exe
     /// itself on Windows (where this is the only kind of launch there is).
-    /// 与 [`GameConfig::watch_only`] 互斥（那里优先）：一个说"kotori 不启动"，
-    /// 一个说"启动，但不套缩放"。
+    /// 与 [`GameConfig::auto_watch`] 无关:后者说"别人启动的也要跟",它说"kotori
+    /// 启动时不套缩放"。
     #[serde(default)]
     pub direct_launch: bool,
     /// Process name to watch so save sync knows when the game is running.
@@ -269,10 +275,29 @@ impl GameConfig {
         }
     }
 
-    /// Can kotori launch this game itself, or is it watch-only?
-    pub fn is_launchable(&self) -> bool {
-        !self.watch_only
+    /// 自动追踪时要盯的进程名:`process_name` 优先,没写就用 exe 自己的文件名
+    /// (与直启那条路一致 —— wine 会把 `argv[0]` 改成它)。
+    ///
+    /// 两个都取不出来(配置里没有 exe、也没有进程名)时返回 `None`:没有名字就没法
+    /// 认人,这一款只能等用户自己来点「启动」。
+    pub fn watch_name(&self) -> Option<String> {
+        self.process_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                self.exe_path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().trim().to_string())
+                    .filter(|name| !name.is_empty())
+            })
     }
+}
+
+/// [`GameConfig::auto_watch`] 缺省值:开。
+fn default_auto_watch() -> bool {
+    true
 }
 
 fn default_log_level() -> String {

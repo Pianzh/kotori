@@ -10,7 +10,8 @@
 //!
 //! * `start_session`（用户点「启动」）= **直接启动**：这台机器没有 gamescope
 //!   可套，点击启动就是直接把 exe 跑起来（用户 2026-09-19：不再报错）；
-//! * `watch_only`（「仅观测」的游戏）= 只盯进程，与 Linux 同一条路径；
+//! * `spec.watch_only`（**观测会话**）= 只盯进程，与 Linux 同一条路径。它由
+//!   `daemon::watch` 发起（进程已经在跑），不是一种"启动方式"；
 //! * `Ended` 事件照发 —— 退出后的存档上传因此在 Windows 上工作。
 //!
 //! 缩放动作（`scale.action`）仍然全部回 [`ScaleError::Unsupported`]：那是

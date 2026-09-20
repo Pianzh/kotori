@@ -39,7 +39,7 @@ pub(super) fn game(game_dir: &str, exe: &str) -> GameConfig {
         launch_args: Vec::new(),
         save_paths: Vec::new(),
         wine_prefix: None,
-        watch_only: false,
+        auto_watch: false,
         direct_launch: false,
         process_name: None,
         scale_profile: ScaleProfile::default_for(),

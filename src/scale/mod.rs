@@ -70,7 +70,7 @@ pub use unsupported::UnsupportedScaleEngine as PlatformEngine;
 pub struct LaunchSpec<'a> {
     /// Id of the game this session belongs to.
     pub game_id: &'a str,
-    /// Executable to run (through wine). Unused when `watch_only`.
+    /// Executable to run (through wine). Unused for a watch session.
     pub exe: &'a str,
     /// Extra arguments for that executable.
     pub args: &'a [String],
@@ -82,10 +82,11 @@ pub struct LaunchSpec<'a> {
     /// Scaling to apply to this launch.
     pub profile: &'a ScaleProfile,
     /// Process whose lifetime defines the session. Needed to make a session
-    /// outlive a launcher, and required when `watch_only`.
+    /// outlive a launcher, and required for a watch session.
     pub process_name: Option<&'a str>,
-    /// Do not launch anything: only track `process_name`. Used for games the
-    /// user starts themselves (the norm on Windows).
+    /// Do not launch anything: only track `process_name`. 由 `daemon::watch`
+    /// 在"用户自己把游戏启动了"时发起(见 [`crate::config::GameConfig::auto_watch`])——
+    /// 它是一种**会话**,不是一种启动方式。
     pub watch_only: bool,
     /// Launch **without** gamescope: plain wine on Linux, the exe itself on
     /// Windows. Session tracking still runs (process name → `Ended`), which is

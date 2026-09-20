@@ -87,7 +87,7 @@ mod tests {
                 SavePath::inferred("%APPDATA%\\Demo\\save"),
             ],
             wine_prefix: None,
-            watch_only: false,
+            auto_watch: false,
             direct_launch: false,
             process_name: None,
             scale_profile: ScaleProfile::default_for(),
@@ -126,7 +126,7 @@ mod tests {
             // A typo here would mean "upload the whole disk".
             save_paths: vec![SavePath::new(SavePathKind::Absolute, "/")],
             wine_prefix: None,
-            watch_only: false,
+            auto_watch: false,
             direct_launch: false,
             process_name: None,
             scale_profile: ScaleProfile::default_for(),

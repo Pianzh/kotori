@@ -55,6 +55,9 @@ name = "Demo"
 exe_path = "/games/demo/game.exe"
 save_paths = ["/games/demo/save"]
 created_at = "2026-01-01T00:00:00Z"
+# 自动追踪默认是**开**的(见 `GameConfig::auto_watch`),而这个夹具里的游戏都是
+# 测试自己启动的 —— 显式关掉,免得后台那圈轮询往断言里塞进一个多余的会话。
+auto_watch = false
 
 [games.demo.scale_profile]
 name = "自定义"

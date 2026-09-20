@@ -63,7 +63,8 @@ fn manual_add_and_wine_settings_over_ipc() {
     let created = game(&fixture, "my-game");
     assert_eq!(created["name"], "My Game");
     assert_eq!(created["game_dir"], game_dir.to_string_lossy().as_ref());
-    assert_eq!(created["watch_only"], false);
+    // 新游戏默认**开着**自动追踪(用户 2026-09-19:「仅观测默认打开」)。
+    assert_eq!(created["auto_watch"], true);
     assert!(created["save_paths"].as_array().unwrap().is_empty());
     // 新游戏的窗口尺寸**留空**(＝启动时按屏幕算,见 `ScaleProfile::output_size_for`):
     // 档案里不再记录某台机器的分辨率,换显示器/换机器都不用重扫。`null` 就是"自动"。
@@ -105,44 +106,29 @@ fn manual_add_and_wine_settings_over_ipc() {
         "{response}"
     );
 
-    // --- watch-only games are never launched by kotori ---------------------
+    // --- 自动追踪是一只开关,不是一种"启动方式" -----------------------------
     let response = fixture.rpc(
         "game.update",
-        json!({ "id": "my-game", "watch_only": true, "process_name": "MyGame.exe" }),
+        json!({ "id": "my-game", "auto_watch": true, "process_name": "MyGame.exe" }),
     );
     assert_eq!(response["result"]["success"], true, "{response}");
     let updated = game(&fixture, "my-game");
-    assert_eq!(updated["watch_only"], true);
+    assert_eq!(updated["auto_watch"], true);
     assert_eq!(updated["process_name"], "MyGame.exe");
 
-    // Launching a watch-only game starts *following* its process instead.
+    // ⚠ 开着自动追踪**不妨碍**启动(用户 2026-09-20 纠正:从前那一按会变成"只观测")。
+    // 这一局真跑起来要真 wine / gamescope,而测试机不一定有 —— 所以只钉住"不再是
+    // 那句「仅观测模式」":它要么真的去启动(报缺 wine/gamescope,或者干脆起来了),
+    // 要么失败在别的地方,但不会因为这只开关被拒。
     let response = fixture.rpc("game.launch", json!({ "id": "my-game" }));
-    assert_eq!(response["result"]["watch_only"], true, "{response}");
-    assert_eq!(response["result"]["process_name"], "MyGame.exe");
-    let session = response["result"]["session_id"]
-        .as_str()
-        .unwrap()
-        .to_string();
-
-    let status = fixture.rpc("daemon.status", json!({}));
-    let sessions = status["result"]["sessions"].as_array().unwrap();
-    assert_eq!(sessions.len(), 1, "{status}");
-    assert_eq!(sessions[0]["game_id"], "my-game");
-    assert_eq!(sessions[0]["watch_only"], true);
-    assert_eq!(sessions[0]["process_name"], "MyGame.exe");
-    assert!(sessions[0]["gamescope_pid"].is_null());
-
-    // Stopping a watch-only session drops it (nothing to kill).
-    let response = fixture.rpc("game.stop", json!({ "session_id": session }));
-    assert_eq!(response["result"]["success"], true, "{response}");
+    let message = response["error"]["message"].as_str().unwrap_or_default();
     assert!(
-        fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+        !message.contains("仅观测"),
+        "自动追踪不该挡住启动:{response}"
     );
 
-    // A watch-only game without a process name cannot be tracked.
+    // 没写进程名也不报错:自动追踪按 exe 文件名认人(`GameConfig::watch_name`),
+    // 认出与否由后台那圈轮询决定(那条路见 `auto_watch_follows_...`)。
     let response = fixture.rpc(
         "game.create",
         json!({ "name": "Watchless", "exe_path": exe, "game_dir": game_dir }),
@@ -150,17 +136,9 @@ fn manual_add_and_wine_settings_over_ipc() {
     assert_eq!(response["result"]["id"], "watchless", "{response}");
     let response = fixture.rpc(
         "game.update",
-        json!({ "id": "watchless", "watch_only": true }),
+        json!({ "id": "watchless", "auto_watch": true }),
     );
     assert_eq!(response["result"]["success"], true, "{response}");
-    let response = fixture.rpc("game.launch", json!({ "id": "watchless" }));
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("没有填写要观测的进程名"),
-        "{response}"
-    );
 
     // --- save paths are validated by resolving them ------------------------
     let response = fixture.rpc(
@@ -338,10 +316,12 @@ fn launch_builds_the_expected_gamescope_command() {
     assert_eq!(parts[2], "--windowed", "launch args are passed through");
 }
 
-/// Watch-only sessions follow a real process: they must survive while it runs
-/// and disappear once it exits.
+/// 自动追踪:游戏**不是** kotori 启动的,daemon 也要自己认出这一局,并在它退出后
+/// 收掉会话(`Ended` 就是"退出后上传存档"的触发器)。
+///
+/// 这一条正是用户 2026-09-20 要的行为 —— 从前的版本要求先手点一次「启动」。
 #[test]
-fn watch_only_session_follows_the_process() {
+fn auto_watch_follows_a_game_kotori_did_not_launch() {
     let mut fixture = Fixture::new("watch");
     fixture.start();
 
@@ -363,21 +343,20 @@ fn watch_only_session_follows_the_process() {
     assert_eq!(response["result"]["id"], "watch-game", "{response}");
     let response = fixture.rpc(
         "game.update",
-        json!({ "id": "watch-game", "watch_only": true, "process_name": watched_name }),
+        json!({ "id": "watch-game", "auto_watch": true, "process_name": watched_name }),
     );
     assert_eq!(response["result"]["success"], true, "{response}");
 
-    // Nothing is running yet, so the session is created but still waiting.
-    let response = fixture.rpc("game.launch", json!({ "id": "watch-game" }));
-    assert_eq!(response["result"]["watch_only"], true, "{response}");
-
+    // ⚠ 这里**故意不点「启动」**。自动追踪的意思就是"不是 kotori 启动的那一局
+    // 也要跟"(用户 2026-09-20) —— 从前必须手点一次「启动」(那一按什么都不启动,
+    // 只是让 daemon 开始盯),于是双击图标玩的那一局在库里什么都不留。
     let session_count = |fixture: &Fixture| {
         fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
             .as_array()
             .unwrap()
             .len()
     };
-    assert_eq!(session_count(&fixture), 1);
+    assert_eq!(session_count(&fixture), 0, "还没开游戏,不该有会话");
 
     // Start the game ourselves — kotori never launches it.
     let mut child = std::process::Command::new(&watched)
@@ -385,13 +364,48 @@ fn watch_only_session_follows_the_process() {
         .spawn()
         .expect("spawn the watched process");
 
-    // Give the watcher a couple of poll intervals; the session must still be
-    // there while the game runs.
+    // 后台那圈轮询要自己发现它(两个周期 + 余量)。
+    assert!(
+        wait_until(Duration::from_secs(20), || session_count(&fixture) == 1),
+        "daemon 没有自己认出这个进程\n--- daemon log ---\n{}",
+        fixture.logs()
+    );
+
+    // 在游戏跑着的时候,会话必须一直在。
     std::thread::sleep(Duration::from_secs(5));
     assert_eq!(
         session_count(&fixture),
         1,
         "watching must survive a live game"
+    );
+
+    // 用户点「停止」= 这一局别再跟了。**它不能被后台那圈轮询自己撤销** ——
+    // 会话是循环认出来的,不记一笔的话两秒后就会长回来。
+    let session_id = fixture.rpc("daemon.status", json!({}))["result"]["sessions"][0]["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let response = fixture.rpc("game.stop", json!({ "session_id": session_id }));
+    assert_eq!(response["result"]["success"], true, "{response}");
+    assert_eq!(session_count(&fixture), 0, "{response}");
+    std::thread::sleep(Duration::from_secs(2 * 3));
+    assert_eq!(
+        session_count(&fixture),
+        0,
+        "点过停止的观测会话不许自己长回来"
+    );
+
+    // 进程走光之后解禁 —— 下一局照样自动跟(停止是"这一局",不是永久的)。
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let mut child = std::process::Command::new(&watched)
+        .arg("30")
+        .spawn()
+        .expect("spawn the watched process again");
+    assert!(
+        wait_until(Duration::from_secs(20), || session_count(&fixture) == 1),
+        "下一局没有被重新认出来\n--- daemon log ---\n{}",
+        fixture.logs()
     );
 
     // Quitting the game ends the session.

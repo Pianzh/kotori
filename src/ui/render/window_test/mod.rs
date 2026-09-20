@@ -164,9 +164,9 @@ fn library_and_sync_pages_render_without_a_display() {
     }
     ui.app.saved_msg = None;
 
-    // 仅观测的游戏(页面上会多一节,内容来自 process_name)。
+    // 开着自动追踪的游戏(页面上"跟随的进程"那一行会显示出来)。
     ui.app.games = vec![UiGame {
-        watch_only: true,
+        auto_watch: true,
         process_name: "game.exe".into(),
         ..ui_game()
     }];

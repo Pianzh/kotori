@@ -159,7 +159,9 @@ fn game_entry(dir: &Path, exe: PathBuf) -> GameConfig {
         launch_args: Vec::new(),
         save_paths: Vec::new(),
         wine_prefix: None,
-        watch_only: false,
+        // 新游戏默认**自动追踪**(用户 2026-09-19:「仅观测默认打开」):用户自己双击
+        // 起来的那一局也照样记,不要求他非得从 kotori 点启动。
+        auto_watch: true,
         direct_launch: false,
         process_name: None,
         scale_profile: ScaleProfile::default_for(),

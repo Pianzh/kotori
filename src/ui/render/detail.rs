@@ -41,9 +41,9 @@ pub(super) fn push_detail(ui: &mut Ui) {
         |v| w.set_game_direct_launch(v),
     );
     push_bool(
-        w.get_game_watch_only(),
-        app.draft.as_ref().map(|d| d.watch_only).unwrap_or(false),
-        |v| w.set_game_watch_only(v),
+        w.get_game_auto_watch(),
+        app.draft.as_ref().map(|d| d.auto_watch).unwrap_or(false),
+        |v| w.set_game_auto_watch(v),
     );
 
     if let Some(game) = app.selected_game() {

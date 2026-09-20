@@ -3,4 +3,3 @@
 715	src/scale/gamescope.rs
 603	src/secrets/encrypted.rs
 524	src/scale/x11.rs
-514	src/daemon/mod.rs

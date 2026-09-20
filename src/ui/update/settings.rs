@@ -114,20 +114,14 @@ impl App {
             Message::DirectLaunchToggled(value) => {
                 if let Some(draft) = &mut self.draft {
                     draft.direct_launch = value;
-                    // 两把开关互斥:直接启动与仅观测是同一个"启动方式"的三种态
-                    // 里的两档(第三档是两个都关 = 缩放启动)。
-                    if value {
-                        draft.watch_only = false;
-                    }
                 }
                 self.schedule_auto_save()
             }
-            Message::WatchOnlyToggled(value) => {
+            // 自动追踪与启动方式**不互斥**(用户 2026-09-20):它只说"不是 kotori
+            // 启动的那一局也要跟",开着它照样能从上面点启动。
+            Message::AutoWatchToggled(value) => {
                 if let Some(draft) = &mut self.draft {
-                    draft.watch_only = value;
-                    if value {
-                        draft.direct_launch = false;
-                    }
+                    draft.auto_watch = value;
                 }
                 self.schedule_auto_save()
             }

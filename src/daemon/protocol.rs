@@ -69,7 +69,10 @@ pub(super) struct GamePatch {
     pub(super) save_paths: Option<Vec<crate::config::SavePath>>,
     #[serde(default, deserialize_with = "double_option")]
     pub(super) wine_prefix: Option<Option<PathBuf>>,
-    pub(super) watch_only: Option<bool>,
+    /// 自动追踪。旧名字 `watch_only` 仍然收得下(见 `GameConfig::auto_watch`)——
+    /// 界面上那只开关改叫「自动追踪」,而配置里曾经叫这个名字。
+    #[serde(alias = "watch_only")]
+    pub(super) auto_watch: Option<bool>,
     pub(super) direct_launch: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     pub(super) process_name: Option<Option<String>>,
@@ -116,8 +119,12 @@ mod tests {
     /// 所以最容易犯的错是"多包一层",它从前会被静默忽略 —— 这里把它钉住。
     #[test]
     fn a_patch_key_the_daemon_does_not_know_is_rejected() {
-        let known = json!({ "name": "示例游戏", "watch_only": true });
+        let known = json!({ "name": "示例游戏", "auto_watch": true });
         assert!(serde_json::from_value::<GamePatch>(known).is_ok());
+
+        // 旧名字走 alias,别在升级后被拒(存量客户端 / 手写脚本还在用它)。
+        let old_name = json!({ "watch_only": true });
+        assert!(serde_json::from_value::<GamePatch>(old_name).is_ok());
 
         let nested = json!({ "patch": { "name": "示例游戏" } });
         let error = serde_json::from_value::<GamePatch>(nested).unwrap_err();
@@ -131,8 +138,8 @@ mod tests {
     /// 「键不在 = 不动这个字段」这条语义不能被误伤。
     #[test]
     fn an_absent_key_leaves_its_field_alone() {
-        let patch: GamePatch = serde_json::from_value(json!({ "watch_only": true })).unwrap();
-        assert_eq!(patch.watch_only, Some(true));
+        let patch: GamePatch = serde_json::from_value(json!({ "auto_watch": true })).unwrap();
+        assert_eq!(patch.auto_watch, Some(true));
         assert!(patch.name.is_none());
         assert!(patch.profile.is_none());
     }
