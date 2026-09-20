@@ -193,9 +193,19 @@ mod tests {
     struct Scratch(PathBuf);
 
     impl Scratch {
+        /// `tag` 只用来让失败信息看得懂,唯一性靠那个计数器:同一进程里两个测试
+        /// 用同一个 tag 是常态(好几个测试都拿"default"当兜底目录),光靠 tag +
+        /// 进程 id 会让它们指向同一个路径 —— 一个的 `remove_dir_all` 插进另一个的
+        /// `mkdir → is_dir` 之间,`create_dir_all` 就会返回 `AlreadyExists`
+        /// (实测在 CI 上红过一次)。目录在 `Drop` 里就删了,计数器不会重复。
         fn new(tag: &str) -> Self {
-            let dir =
-                std::env::temp_dir().join(format!("kotori-paths-{}-{tag}", std::process::id()));
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "kotori-paths-{}-{tag}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             Self(dir)
