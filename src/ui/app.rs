@@ -348,7 +348,8 @@ impl App {
 
         match target {
             PathTarget::NewGameDir => self.new_game_dir = text,
-            PathTarget::NewExe => self.new_exe = text,
+            // 浏览 exe 也必须触发联动 —— 走 `set_new_exe`,别直接赋值(见那里的说明)。
+            PathTarget::NewExe => self.set_new_exe(text),
             PathTarget::WinePrefix => {
                 self.wine_prefix_input = text;
                 // 用户亲手选的路径不许被随后回来的 `wine.status` 盖掉。

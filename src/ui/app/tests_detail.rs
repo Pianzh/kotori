@@ -75,6 +75,52 @@ fn a_picked_path_lands_on_its_own_field_and_schedules_a_save() {
     assert!(app.wine_prefix_dirty);
 }
 
+/// 用户 2026-09-20 的实测反馈:点「浏览…」挑回 exe 之后,下面两个框必须自己填好。
+///
+/// 从前只有**手打**那条路触发联动(`Message::NewExeChanged`),浏览是
+/// `apply_picked_path` 里的一句直接赋值 —— 于是"手动敲路径会自动填,点浏览反而不填",
+/// 而点浏览恰恰是最常用的那条路。
+#[test]
+fn browsing_for_an_exe_fills_the_dir_and_the_name_too() {
+    let (mut app, _task) = App::new();
+
+    app.apply_picked_path(PathTarget::NewExe, Path::new("/games/new/game.exe"));
+    assert_eq!(app.new_exe, "/games/new/game.exe");
+    assert_eq!(app.new_game_dir, "/games/new");
+    assert_eq!(app.new_name, "game");
+
+    // 再挑一次(换目录):上一次自动填的值跟着更新,不卡在旧路径上。
+    app.apply_picked_path(PathTarget::NewExe, Path::new("/games/other/3days_chs.exe"));
+    assert_eq!(app.new_game_dir, "/games/other");
+    assert_eq!(app.new_name, "3days_chs");
+
+    // 用户自己改过的名字不再被覆盖;根目录没被动过,照旧跟着 exe 走。
+    app.new_name = "我改过的名字".into();
+    app.apply_picked_path(PathTarget::NewExe, Path::new("/games/third/Game.exe"));
+    assert_eq!(app.new_name, "我改过的名字");
+    assert_eq!(app.new_game_dir, "/games/third");
+}
+
+/// 两个框留空也能添加:名字取 exe 文件名、根目录取 exe 所在目录(用户
+/// 2026-09-20「或者说把这两个输入框改成可选,不填时自动填充」)。
+///
+/// 推不出名字时不许装作成功 —— 给一句话,别发 RPC(否则会在库里留下一条无名条目)。
+#[test]
+fn an_empty_name_and_dir_are_filled_in_from_the_exe_on_submit() {
+    let (mut app, _task) = App::new();
+    app.new_exe = "/games/new/3days.exe".into();
+    let _ = app.update(Message::CreateRequested);
+    assert!(app.creating, "两个框留空应当照常提交");
+    assert_eq!(app.create_msg, None);
+
+    let (mut app, _task) = App::new();
+    app.new_exe = "/".into();
+    let _ = app.update(Message::CreateRequested);
+    assert!(!app.creating, "推不出名字就别提交");
+    let message = app.create_msg.clone().unwrap_or_default();
+    assert!(message.contains("游戏名"), "要说清缺的是名字:{message}");
+}
+
 /// 没有对话框的机器上按钮不能点,而且要说清为什么(用户 2026-09-13:"没有就不能用")。
 #[test]
 fn browsing_is_refused_when_the_machine_has_no_dialog() {

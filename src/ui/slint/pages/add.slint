@@ -50,7 +50,7 @@ export component AddPage inherits ScrollView {
                 spacing: 4px;
                 Text { text: "添加游戏"; font-size: 28px; font-weight: 600; color: Tokens.text; }
                 Text {
-                    text: "手动填写。游戏根目录是启动时的工作目录,也是存档相对路径的基准;留空则取可执行文件所在目录。";
+                    text: "手动填写。选好可执行文件之后,下面的根目录与游戏名会自动填好(每点一次「浏览…」都会跟着更新),不合适就地改。";
                     font-size: 14px;
                     color: Tokens.text-3;
                 }
@@ -70,7 +70,7 @@ export component AddPage inherits ScrollView {
             Group {
                 CardRow {
                     title: "可执行文件";
-                    description: "exe 的完整路径。";
+                    description: "exe 的完整路径。选完这里,下面两项会自动填。";
                     PathField {
                         field-width: 340px;
                         text <=> root.new-exe;
@@ -83,7 +83,7 @@ export component AddPage inherits ScrollView {
                 Divider { }
                 CardRow {
                     title: "游戏根目录";
-                    description: "启动时的工作目录,也是 relative 存档路径的基准。";
+                    description: "启动时的工作目录,也是 relative 存档路径的基准。留空 = 取 exe 所在目录。";
                     PathField {
                         field-width: 340px;
                         text <=> root.new-game-dir;
@@ -96,7 +96,7 @@ export component AddPage inherits ScrollView {
                 Divider { }
                 CardRow {
                     title: "游戏名";
-                    description: "库里显示的名字。";
+                    description: "库里显示的名字。留空 = 取 exe 的文件名(去掉扩展名)。";
                     TextField {
                         field-width: 300px;
                         text <=> root.new-name;

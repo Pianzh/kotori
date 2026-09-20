@@ -18,33 +18,32 @@ impl App {
                 Task::none()
             }
             Message::NewExeChanged(value) => {
-                self.new_exe = value.clone();
-                // exe 一变,根目录与名字跟着自动填(用户 2026-09-19):根目录 = exe
-                // 所在目录,名字 = exe 文件名。字段为空、或者还等于上次自动填的值
-                // (= 用户没动过)才重填;用户自己改过的值不动。
-                let (dir, name) = autofill_from_exe(&value);
-                if let Some(dir) = &dir
-                    && (self.new_game_dir.is_empty() || self.new_game_dir == self.auto_filled_dir)
-                {
-                    self.new_game_dir = dir.clone();
-                }
-                self.auto_filled_dir = dir.unwrap_or_default();
-                if let Some(name) = &name
-                    && (self.new_name.is_empty() || self.new_name == self.auto_filled_name)
-                {
-                    self.new_name = name.clone();
-                }
-                self.auto_filled_name = name.unwrap_or_default();
+                self.set_new_exe(value);
                 Task::none()
             }
             Message::CreateRequested => {
-                let name = self.new_name.trim().to_string();
                 let exe = self.new_exe.trim().to_string();
-                let game_dir = self.new_game_dir.trim().to_string();
-                if name.is_empty() || exe.is_empty() {
-                    self.create_msg = Some("游戏名和可执行文件都必须填写".to_string());
+                if exe.is_empty() {
+                    self.create_msg = Some("可执行文件必须填写".to_string());
                     return Task::none();
                 }
+                // 根目录与游戏名都可以不填 —— 不填就按 exe 自己推(用户 2026-09-19
+                // 「不填时自动填充」)。浏览回来的路径早就在 `set_new_exe` 里填过一遍,
+                // 这里是"用户从头到尾没碰过那两个框"时的兜底。
+                let (dir, stem) = autofill_from_exe(&exe);
+                let name = match self.new_name.trim() {
+                    "" => stem.unwrap_or_default(),
+                    typed => typed.to_string(),
+                };
+                if name.is_empty() {
+                    self.create_msg =
+                        Some("游戏名填不上:路径里看不出文件名,请自己写一个".to_string());
+                    return Task::none();
+                }
+                let game_dir = match self.new_game_dir.trim() {
+                    "" => dir.unwrap_or_default(),
+                    typed => typed.to_string(),
+                };
                 self.creating = true;
                 self.create_msg = None;
                 self.error = None;
@@ -81,6 +80,32 @@ impl App {
             }
             _ => unreachable!("update_add 只接添加游戏那批消息"),
         }
+    }
+
+    /// exe 那一栏被写入了新值 —— **手打和「浏览…」挑回来都走这里**。
+    ///
+    /// 从前只有手打走联动(消息 `NewExeChanged`),而浏览是从 `app.rs` 的
+    /// `apply_picked_path` 直接赋值进来的,**两条路一个填一个不填** —— 用户点了
+    /// 浏览反而看不到下面两个框被填好(用户 2026-09-20 实测反馈)。现在两条路
+    /// 共用这一个入口,想漏也漏不掉。
+    ///
+    /// 联动规则:根目录 = exe 所在目录,名字 = exe 文件名。字段为空、或者还等于
+    /// 上次自动填的值(= 用户没动过)才重填;用户自己改过的值不动。
+    pub(in crate::ui) fn set_new_exe(&mut self, value: String) {
+        self.new_exe = value;
+        let (dir, name) = autofill_from_exe(&self.new_exe);
+        if let Some(dir) = &dir
+            && (self.new_game_dir.is_empty() || self.new_game_dir == self.auto_filled_dir)
+        {
+            self.new_game_dir = dir.clone();
+        }
+        self.auto_filled_dir = dir.unwrap_or_default();
+        if let Some(name) = &name
+            && (self.new_name.is_empty() || self.new_name == self.auto_filled_name)
+        {
+            self.new_name = name.clone();
+        }
+        self.auto_filled_name = name.unwrap_or_default();
     }
 }
 
