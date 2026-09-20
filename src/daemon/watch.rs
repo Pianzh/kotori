@@ -101,21 +101,32 @@ impl Daemon {
     }
 
     /// 这一刻值得自动追踪的游戏 —— **只挑进程真的在跑的**。
+    ///
+    /// 进程表只读一遍(`Snapshot`):42 款游戏逐个 `is_running` 就是每 2 秒 42 遍
+    /// 遍历,而这件事每 2 秒发生一次、永远不停。
     async fn auto_watch_candidates(&self) -> Vec<Watched> {
-        let config = self.config.read().await;
-        config
-            .games
-            .iter()
-            .filter(|(_, game)| game.auto_watch)
-            .filter_map(|(id, game)| {
-                let name = game.watch_name()?;
-                crate::process::is_running(&name).then(|| Watched {
-                    id: id.clone(),
-                    name,
-                    game_dir: game.effective_game_dir(),
-                    profile: game.scale_profile.clone(),
+        let wanted: Vec<Watched> = {
+            let config = self.config.read().await;
+            config
+                .games
+                .iter()
+                .filter(|(_, game)| game.auto_watch)
+                .filter_map(|(id, game)| {
+                    let name = game.watch_name()?;
+                    Some(Watched {
+                        id: id.clone(),
+                        name,
+                        game_dir: game.effective_game_dir(),
+                        profile: game.scale_profile.clone(),
+                    })
                 })
-            })
+                .collect()
+        };
+
+        let running = crate::process::Snapshot::take();
+        wanted
+            .into_iter()
+            .filter(|game| running.matches(&game.name))
             .collect()
     }
 

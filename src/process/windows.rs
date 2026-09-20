@@ -18,6 +18,15 @@ struct Entry {
     name: String,
 }
 
+/// 一份进程表快照:`(exe 名, 命令行)`。Windows 这边拿不到命令行,给空串 ——
+/// 匹配逻辑对空命令行本来就不做额外判断(见 `mod.rs` 的 `matches`)。
+pub fn snapshot() -> Vec<(String, String)> {
+    process_table()
+        .into_iter()
+        .map(|entry| (entry.name, String::new()))
+        .collect()
+}
+
 /// One consistent pass over the process table.
 fn process_table() -> Vec<Entry> {
     use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};

@@ -19,11 +19,11 @@ use std::collections::HashMap;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-pub use unix::{descendants, find_pids, live_game_processes};
+pub use unix::{descendants, find_pids, live_game_processes, snapshot};
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{descendants, find_pids, live_game_processes};
+pub use windows::{descendants, find_pids, live_game_processes, snapshot};
 
 /// `C:\games\x\Game.exe` / `/usr/bin/wine` -> `game.exe` / `wine`
 pub fn normalize_process_name(name: &str) -> String {
@@ -79,6 +79,34 @@ fn matches(needle: &str, seen: &str, cmdline: &str) -> bool {
 /// Is a process with this name running?
 pub fn is_running(name: &str) -> bool {
     !find_pids(name).is_empty()
+}
+
+/// 某一刻的进程表快照:一次取,然后回答很多个名字。
+///
+/// 逐个名字调 [`is_running`] 是**每个名字读一遍进程表** —— 自动追踪要盯配置里
+/// 每一款开着追踪的游戏,42 款就是每 2 秒读 42 遍 `/proc`(Windows 那边是 42 次
+/// Toolhelp 快照)。这里只取一次,匹配在内存里做。
+///
+/// 每条记的是"进程名"与"命令行首项":匹配规则两样都看(wine 会把 `argv[0]` 改写成
+/// Windows 路径),而它们在不同平台上的来历不同 —— 见各自的 `snapshot`。
+pub struct Snapshot {
+    entries: Vec<(String, String)>,
+}
+
+impl Snapshot {
+    /// 取一份当下的快照。
+    pub fn take() -> Self {
+        Self {
+            entries: snapshot(),
+        }
+    }
+
+    /// 有没有哪个进程匹配 `name`?规则与 [`is_running`] 完全一致([`matches`])。
+    pub fn matches(&self, name: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|(comm, argv0)| matches(name, comm, argv0))
+    }
 }
 
 /// 两个名字是不是"同一个进程"?按 [`matches`] 那套规矩比(去掉目录、大小写不敏感、

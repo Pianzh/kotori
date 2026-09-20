@@ -33,6 +33,29 @@ pub fn find_pids(name: &str) -> Vec<i32> {
     pids
 }
 
+/// 一份进程表快照:`(comm, cmdline)` 逐条。见 [`super::Snapshot`]。
+pub fn snapshot() -> Vec<(String, String)> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|n| n.parse::<i32>().is_ok())
+        })
+        .map(|entry| {
+            let dir = entry.path();
+            (
+                std::fs::read_to_string(dir.join("comm")).unwrap_or_default(),
+                std::fs::read_to_string(dir.join("cmdline")).unwrap_or_default(),
+            )
+        })
+        .collect()
+}
+
 /// `(pid, ppid, comm)` for every process this user can see. `comm` arrives
 /// with a trailing newline — trimmed here, because the name is what callers
 /// compare and display.
