@@ -19,11 +19,11 @@ use std::collections::HashMap;
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-pub use unix::{descendants, find_pids, live_game_processes, snapshot};
+pub use unix::{descendants, find_pids, live_game_processes, pid_is_alive, snapshot};
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{descendants, find_pids, live_game_processes, snapshot};
+pub use windows::{descendants, find_pids, live_game_processes, pid_is_alive, snapshot};
 
 /// `C:\games\x\Game.exe` / `/usr/bin/wine` -> `game.exe` / `wine`
 pub fn normalize_process_name(name: &str) -> String {
@@ -81,16 +81,53 @@ pub fn is_running(name: &str) -> bool {
     !find_pids(name).is_empty()
 }
 
-/// 某一刻的进程表快照:一次取,然后回答很多个名字。
+/// 进程表里的一条。
+///
+/// `name` 是平台报出来的进程名(`/proc/<pid>/comm`,只留 15 字节;Windows 是 Toolhelp
+/// 的完整 exe 名),`cmdline` 是**NUL 分隔的整条命令行**(**Linux 有,Windows 拿不到,
+/// 给空串**)——匹配规则两样都看,因为 wine 会把 `argv[0]` 改写成 Windows 路径。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcEntry {
+    pub pid: i32,
+    pub name: String,
+    pub cmdline: String,
+}
+
+impl ProcEntry {
+    /// 这条跟 `name` 是不是同一个进程(规则与 [`is_running`] 一致)。
+    pub fn matches(&self, name: &str) -> bool {
+        matches(name, &self.name, &self.cmdline)
+    }
+
+    /// **显示给用户**的名字。
+    ///
+    /// 优先命令行首项的文件名:它是完整的。平台报的那个 `comm` 在 Linux 上只留
+    /// 15 字节(内核的 `TASK_COMM_LEN`),`kotori-observe-proc` 会变成
+    /// `kotori-observe-` —— 拿它当"跟的是谁"报给用户,人家会以为跟错了东西
+    /// (2026-09-20 实测就是这么显示出来的)。
+    pub fn display_name(&self) -> String {
+        // 命令行是 NUL 分隔的,只有**第一个字段**是 argv[0](后面是参数)。
+        let argv0 = self.cmdline.split('\0').next().unwrap_or_default().trim();
+        let base = argv0
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or_default()
+            .trim_matches('"')
+            .trim();
+        if !base.is_empty() {
+            return base.to_string();
+        }
+        self.name.trim().to_string()
+    }
+}
+
+/// 某一刻的进程表快照:一次取,然后回答很多个名字(或很多个 pid)。
 ///
 /// 逐个名字调 [`is_running`] 是**每个名字读一遍进程表** —— 自动追踪要盯配置里
 /// 每一款开着追踪的游戏,42 款就是每 2 秒读 42 遍 `/proc`(Windows 那边是 42 次
 /// Toolhelp 快照)。这里只取一次,匹配在内存里做。
-///
-/// 每条记的是"进程名"与"命令行首项":匹配规则两样都看(wine 会把 `argv[0]` 改写成
-/// Windows 路径),而它们在不同平台上的来历不同 —— 见各自的 `snapshot`。
 pub struct Snapshot {
-    entries: Vec<(String, String)>,
+    entries: Vec<ProcEntry>,
 }
 
 impl Snapshot {
@@ -103,10 +140,26 @@ impl Snapshot {
 
     /// 有没有哪个进程匹配 `name`?规则与 [`is_running`] 完全一致([`matches`])。
     pub fn matches(&self, name: &str) -> bool {
+        self.entries.iter().any(|entry| entry.matches(name))
+    }
+
+    /// 这个 pid 现在叫什么名字(给用户看的那一份,见 [`ProcEntry::display_name`])?
+    /// 不在表里就是"它已经不在了"。
+    pub fn name_of(&self, pid: i32) -> Option<String> {
         self.entries
             .iter()
-            .any(|(comm, argv0)| matches(name, comm, argv0))
+            .find(|entry| entry.pid == pid)
+            .map(ProcEntry::display_name)
     }
+}
+
+/// 这个 pid 现在还活着吗?
+///
+/// 与 [`is_running`] 的区别在**钥匙**:名字能存进配置、下一局还认得出来,而 pid 只对
+/// 当前这一次运行有意义(进程一退,内核迟早会把这个号发给别人)。"从运行中的进程里挑"
+/// 那条路用它 —— 用户指的就是"现在跑着的那一个",精确到不会认错同名的另一款。
+pub fn pid_alive(pid: i32) -> bool {
+    pid > 0 && pid_is_alive(pid)
 }
 
 /// 两个名字是不是"同一个进程"?按 [`matches`] 那套规矩比(去掉目录、大小写不敏感、
@@ -209,6 +262,15 @@ pub(crate) fn collect_descendants(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 自己这个进程当然活着,`/proc` 里不存在的号则不是 —— 两边的平台实现都只是
+    /// "查一下",所以这条在两个平台上都成立。
+    #[test]
+    fn pids_can_be_asked_who_is_alive() {
+        assert!(pid_alive(std::process::id() as i32));
+        assert!(!pid_alive(i32::MAX), "这么个号不该存在");
+        assert!(!pid_alive(0), "0 不是进程");
+    }
 
     #[test]
     fn normalizes_windows_and_unix_paths() {

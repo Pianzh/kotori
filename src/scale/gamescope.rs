@@ -481,6 +481,7 @@ impl ScaleEngine for GamescopeScaleEngine {
             started_at: std::time::Instant::now(),
             process_group: Some(pgid),
             process_name: spec.process_name.map(str::to_string),
+            follow_pid: None,
             output_size: spec.profile.output_size_for(screen),
             wine_prefix: spec.wine_prefix.map(Path::to_path_buf),
             watch_only: false,

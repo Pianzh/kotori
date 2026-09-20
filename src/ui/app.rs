@@ -69,6 +69,10 @@ pub struct App {
     pub(super) pick_token: i32,
     /// 设置页「环境检查」的结果;`None` = 还没问过。
     pub(super) environment: Option<Environment>,
+    /// 详情页「跟这一局」那一栏里的 pid(**不进草稿、不写配置**)。
+    pub(super) follow_pid_input: String,
+    /// 正在跟(挡住连点两次)。
+    pub(super) following: bool,
     /// 设置页「配置文件」:daemon 报的落点与"能不能换"。
     pub(super) config_source: ConfigSource,
     /// 正在切(挡住连点两次)。
@@ -127,6 +131,8 @@ impl App {
                 picked_path: None,
                 pick_token: 0,
                 environment: None,
+                follow_pid_input: String::new(),
+                following: false,
                 config_source: ConfigSource::default(),
                 config_switching: false,
                 config_msg: None,

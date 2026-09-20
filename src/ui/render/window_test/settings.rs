@@ -191,6 +191,35 @@ pub(super) fn settings_page(mut ui: Ui) {
     window.invoke_fullscreen_toggled(false);
     assert!(!draft().fullscreen);
 
+    // 「跟随的进程」这个名字进草稿(跟着自动保存写进配置);pid 那一栏只落在 App 上,
+    // 点了「跟这一局」才走 RPC。
+    window.invoke_process_name_changed("game.exe".into());
+    assert_eq!(draft().process_name, "game.exe");
+    window.invoke_follow_pid_changed("4242".into());
+    assert_app(&|app| assert_eq!(app.follow_pid_input, "4242"));
+
+    // 填了不是数字的东西:给红字,而且**不**去开会话(按钮按下去什么也不该发生)。
+    window.invoke_follow_pid_changed("game.exe".into());
+    window.invoke_follow_this_run();
+    assert_app(&|app| {
+        assert!(!app.following);
+        assert!(
+            app.saved_msg.as_deref().unwrap_or("").contains("不是 PID"),
+            "要说清这一栏要的是什么:{:?}",
+            app.saved_msg
+        );
+    });
+
+    // 填了 pid:旗立起来(挡住第二次点击),上一句回话清掉。
+    window.invoke_follow_pid_changed("4242".into());
+    window.invoke_follow_this_run();
+    assert_app(&|app| assert!(app.following));
+    with_ui(|ui| {
+        ui.app.following = false;
+        ui.app.follow_pid_input.clear();
+        ui.app.saved_msg = None;
+    });
+
     // 配置来源:点一下 = 开始切(旗立起来挡住第二次点击),顺手清掉上一句回话 ——
     // 界面不会停在上一次的结果上。(真正那趟 RPC 由 `update_settings` 发出去,
     // 这里只看消息有没有落地。)

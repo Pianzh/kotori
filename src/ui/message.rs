@@ -65,6 +65,13 @@ pub enum Message {
     ScaleRatioChanged(String),
     DirectLaunchToggled(bool),
     AutoWatchToggled(bool),
+    /// 详情页「跟随的进程」那一栏(存进配置的进程名)。
+    ProcessNameChanged(String),
+    /// 详情页「跟这一局」那一栏里那个 pid 框(只对这一次运行有意义,不进草稿)。
+    FollowPidChanged(String),
+    /// 点「跟这一局」。
+    FollowThisRun,
+    FollowDone(Result<String, String>),
     FullscreenToggled(bool),
     FramerateChanged(String),
     ExePathChanged(String),

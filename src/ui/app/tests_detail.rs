@@ -403,3 +403,27 @@ fn testing_the_connection_says_something_right_away() {
     let msg = app.sync_form.msg.clone().unwrap_or_default();
     assert!(msg.contains("测试连接"), "{msg}");
 }
+
+/// 「跟随的进程」是草稿的一部分(改了才写配置),而 pid 那一栏**不是** ——
+/// 它只对当前这一次运行有意义,由 App 自己拿着、点按钮才发出去。
+#[test]
+fn the_followed_process_name_is_drafted_but_the_pid_is_not() {
+    let (mut app, _task) = App::new();
+    app.games = vec![ui_game()];
+    let _ = app.update(Message::GameSelected("demo".into()));
+
+    let draft = app.draft.clone().expect("进详情页要有草稿");
+    assert!(!draft.process_name_changed(), "刚打开时什么都没改");
+
+    let mut edited = draft.clone();
+    edited.process_name = "  game.exe  ".into();
+    assert!(edited.process_name_changed(), "比较时去掉两端空白");
+
+    // pid 那一栏:它根本不进草稿(App 上另一个字段),点按钮才解析。
+    let _ = app.update(Message::FollowPidChanged("4242".into()));
+    assert_eq!(app.follow_pid_input, "4242");
+    assert!(
+        !app.draft.as_ref().unwrap().process_name_changed(),
+        "填 pid 不该顺手把草稿里的进程名也改了"
+    );
+}

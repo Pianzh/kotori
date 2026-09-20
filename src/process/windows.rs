@@ -9,7 +9,7 @@
 //! 的路子(`PLATFORMS.md` §2.2)将来可以换掉轮询,但观测接口先保持与 Linux 一致,
 //! 让 `watch_only` 与收尾判定先用起来。
 
-use super::{collect_descendants, is_plumbing, matches};
+use super::{ProcEntry, collect_descendants, is_plumbing, matches};
 
 /// One process as the snapshot reports it: pid, parent pid, full exe name.
 struct Entry {
@@ -18,13 +18,23 @@ struct Entry {
     name: String,
 }
 
-/// 一份进程表快照:`(exe 名, 命令行)`。Windows 这边拿不到命令行,给空串 ——
+/// 一份进程表快照。Windows 这边拿不到命令行,`argv0` 给空串 ——
 /// 匹配逻辑对空命令行本来就不做额外判断(见 `mod.rs` 的 `matches`)。
-pub fn snapshot() -> Vec<(String, String)> {
+pub fn snapshot() -> Vec<ProcEntry> {
     process_table()
         .into_iter()
-        .map(|entry| (entry.name, String::new()))
+        .map(|entry| ProcEntry {
+            pid: entry.pid,
+            name: entry.name,
+            cmdline: String::new(),
+        })
         .collect()
+}
+
+/// 这个 pid 还活着吗?Toolhelp 快照只列活着的进程,所以查表即可 ——
+/// 比 `OpenProcess` 少一个句柄要关,而这里每 2 秒问一次。
+pub fn pid_is_alive(pid: i32) -> bool {
+    process_table().iter().any(|entry| entry.pid == pid)
 }
 
 /// One consistent pass over the process table.

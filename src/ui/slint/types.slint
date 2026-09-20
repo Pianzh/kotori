@@ -41,6 +41,8 @@ export struct GameDetail {
     // 用户手写的 gamescope 参数;空 = 由 kotori 按上面那些字段拼。非空时它**取代**
     // 上面全部(包括算法/锐度/全屏/帧率),见 `ScaleProfile::gamescope_args`。
     gamescope-args: string,
+    // 自动追踪要盯的进程名;空 = 按 exe 文件名认(见 `GameConfig::process_name`)。
+    process-name: string,
 }
 
 // 一行存档位置。`kind` 是下标:`0 = relative`、`1 = windows`、`2 = absolute`

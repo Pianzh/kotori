@@ -103,6 +103,8 @@ mod tests {
             direct_launch_original: false,
             auto_watch: false,
             auto_watch_original: false,
+            process_name: String::new(),
+            process_name_original: String::new(),
             algo: algo.into(),
             sharpness: 2,
             internal_w: "1280".into(),

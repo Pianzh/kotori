@@ -374,6 +374,30 @@ pub(super) async fn stop_session(socket: &Path, session_id: &str) -> Result<(), 
     Ok(())
 }
 
+/// 「跟这一局」:让 daemon 盯住用户挑的那个 pid(只对这一次运行有意义,不写配置)。
+pub(super) async fn observe_process(
+    socket: &Path,
+    game_id: &str,
+    pid: i32,
+) -> Result<String, String> {
+    let value = crate::rpc::call(
+        socket,
+        "game.observe",
+        Some(crate::rpc::params([
+            ("id", Value::String(game_id.to_string())),
+            ("pid", Value::from(pid)),
+        ])),
+    )
+    .await?;
+    let name = value
+        .get("process_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("?");
+    Ok(format!(
+        "已开始跟随 {name}（PID {pid}），退出后照常上传存档"
+    ))
+}
+
 pub(super) async fn remove_game(socket: &Path, game_id: &str) -> Result<(), String> {
     let params = crate::rpc::params([("id", Value::String(game_id.to_string()))]);
     crate::rpc::call(socket, "game.remove", Some(params)).await?;
@@ -421,6 +445,19 @@ pub(super) async fn save_profile(draft: Draft) -> Result<(), String> {
     }
     if draft.auto_watch != draft.auto_watch_original {
         params.push(("auto_watch", Value::Bool(draft.auto_watch)));
+    }
+    if draft.process_name_changed() {
+        // 空 = 回到"按 exe 文件名认"。daemon 那边的 `double_option` 要求**显式 null**
+        // 才是"清掉"(键不出现 = 别动这个字段),所以这里必须发 Null 而不是空串。
+        let name = draft.process_name.trim();
+        params.push((
+            "process_name",
+            if name.is_empty() {
+                Value::Null
+            } else {
+                Value::String(name.to_string())
+            },
+        ));
     }
 
     crate::rpc::call(

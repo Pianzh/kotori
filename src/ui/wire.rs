@@ -124,6 +124,10 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_output_h_changed(|text| dispatch(Message::OutputHChanged(one_line(&text))));
     window.on_direct_launch_toggled(|value| dispatch(Message::DirectLaunchToggled(value)));
     window.on_auto_watch_toggled(|value| dispatch(Message::AutoWatchToggled(value)));
+    window
+        .on_process_name_changed(|value| dispatch(Message::ProcessNameChanged(value.to_string())));
+    window.on_follow_pid_changed(|value| dispatch(Message::FollowPidChanged(value.to_string())));
+    window.on_follow_this_run(|| dispatch(Message::FollowThisRun));
     window.on_fullscreen_toggled(|value| dispatch(Message::FullscreenToggled(value)));
     window.on_framerate_changed(|text| dispatch(Message::FramerateChanged(one_line(&text))));
     window.on_add_save(|| dispatch(Message::AddSavePath));

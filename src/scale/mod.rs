@@ -83,7 +83,16 @@ pub struct LaunchSpec<'a> {
     pub profile: &'a ScaleProfile,
     /// Process whose lifetime defines the session. Needed to make a session
     /// outlive a launcher, and required for a watch session.
+    ///
+    /// 有了 `follow_pid` 时它只用来**显示**(用户从运行中的进程里挑的那一局,
+    /// 名字是顺手记下来的,不进配置)。
     pub process_name: Option<&'a str>,
+    /// 跟**这一个**进程(pid),而不是按名字认。
+    ///
+    /// 名字能存进配置、下一局还认得出来,而 pid 只对当前这一次运行有意义 —— 但它是
+    /// **精确**的:两款游戏都叫 `Game.exe` 时,只有 pid 说得清现在跑的是哪一款
+    /// (用户 2026-09-20 提的"最好只让填 pid")。`None` = 老样子,按名字跟。
+    pub follow_pid: Option<i32>,
     /// Do not launch anything: only track `process_name`. 由 `daemon::watch`
     /// 在"用户自己把游戏启动了"时发起(见 [`crate::config::GameConfig::auto_watch`])——
     /// 它是一种**会话**,不是一种启动方式。
@@ -185,6 +194,11 @@ pub struct ScaleSession {
     pub process_group: Option<u32>,
     /// The process this session follows, if any.
     pub process_name: Option<String>,
+    /// 跟的是哪一个 pid(用户从运行中的进程里挑的那种会话)。`None` = 按名字跟。
+    ///
+    /// 会话自己留着它是为了**收尾判活**(`process::pid_alive`)与"点停止之后别再认
+    /// 回来"那笔账(见 `Daemon::ignored_watch`)—— 名字在那两处都不够精确。
+    pub follow_pid: Option<i32>,
     /// The wine prefix this session's game runs under.
     ///
     /// Kept because part of a real teardown happens *inside* wine: wine's

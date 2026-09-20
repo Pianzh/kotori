@@ -120,6 +120,9 @@ impl App {
                     self.selected = Some(g.id.clone());
                     self.saved_msg = None;
                     self.confirm_delete = false;
+                    // 「跟这一局」那个 pid 属于上一款,别带过来。
+                    self.follow_pid_input.clear();
+                    self.following = false;
                     // Seed the form from the *stored* profile. Anything else
                     // means a plain "open + save" silently rewrites settings.
                     self.draft = Some(Draft::from_game(g));
@@ -302,6 +305,10 @@ impl App {
             | Message::GameDirChanged(..)
             | Message::DirectLaunchToggled(..)
             | Message::AutoWatchToggled(..)
+            | Message::ProcessNameChanged(..)
+            | Message::FollowPidChanged(..)
+            | Message::FollowThisRun
+            | Message::FollowDone(..)
             | Message::SavePathKindChanged(..)
             | Message::SavePathChanged(..)
             | Message::SavePathExcludeChanged(..)

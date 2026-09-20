@@ -125,6 +125,53 @@ impl App {
                 }
                 self.schedule_auto_save()
             }
+            Message::ProcessNameChanged(value) => {
+                if let Some(draft) = &mut self.draft {
+                    draft.process_name = value;
+                }
+                self.schedule_auto_save()
+            }
+            // pid 那一栏不进草稿:它只对当前这一次运行有意义,点了按钮才发出去。
+            Message::FollowPidChanged(value) => {
+                self.follow_pid_input = value;
+                Task::none()
+            }
+            Message::FollowThisRun => {
+                let Some(game_id) = self.selected.clone() else {
+                    return Task::none();
+                };
+                let text = self.follow_pid_input.trim().to_string();
+                let Ok(pid) = text.parse::<i32>() else {
+                    self.report_saved(
+                        format!("「{text}」不是 PID —— 这一栏要的是当前那个进程的编号(例如 12345)"),
+                        false,
+                    );
+                    return Task::none();
+                };
+                self.following = true;
+                self.saved_msg = None;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { observe_process(&socket, &game_id, pid).await },
+                    Message::FollowDone,
+                )
+            }
+            Message::FollowDone(result) => {
+                self.following = false;
+                match result {
+                    Ok(message) => {
+                        self.report_saved(message, true);
+                        // 会话起来了,库里的状态跟着刷一次(那一行会变成「仅观测」)。
+                        let socket = self.daemon_socket.clone();
+                        return Task::perform(
+                            async move { load_status(&socket).await },
+                            Message::StatusLoaded,
+                        );
+                    }
+                    Err(e) => self.report_saved(format!("跟随失败: {e}"), false),
+                }
+                Task::none()
+            }
             Message::GameDirChanged(value) => {
                 if let Some(draft) = &mut self.draft {
                     draft.game_dir = value;

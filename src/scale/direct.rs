@@ -23,19 +23,65 @@ use crate::util::executor::find_binary;
 type Sessions = Arc<RwLock<HashMap<String, ScaleSession>>>;
 type Events = broadcast::Sender<SessionEvent>;
 
-/// Track a game the user starts themselves: kotori launches nothing, the
-/// session simply follows `process_name` for as long as it runs.
+/// 这一局跟着**谁**。两种钥匙各有各的用处,所以都留着:
 ///
-/// **调用方必须是"已经看到它在跑"的那一方**(今天只有 `daemon::watch`)。
+/// * [`Follow::Name`] —— 名字。能存进配置、下一局还认得出来,是"自动追踪"那条路;
+/// * [`Follow::Pid`] —— 用户从运行中的进程里挑的那**一个**。名字给不了这种精确:
+///   两款游戏都叫 `Game.exe` 时,只有 pid 说得清现在跑的是哪一款。代价是它只对这一次
+///   运行有意义(进程一退,号迟早会被内核发给别人),所以它不进配置。
+#[derive(Debug, Clone)]
+pub(super) enum Follow {
+    Name(String),
+    Pid { pid: i32, name: String },
+}
+
+impl Follow {
+    /// 它还在跑吗?
+    fn alive(&self) -> bool {
+        match self {
+            Follow::Name(name) => process::is_running(name),
+            Follow::Pid { pid, .. } => process::pid_alive(*pid),
+        }
+    }
+
+    /// 日志里怎么称呼这一局。
+    fn label(&self) -> String {
+        match self {
+            Follow::Name(name) => name.clone(),
+            Follow::Pid { pid, name } if name.is_empty() => format!("pid {pid}"),
+            Follow::Pid { pid, name } => format!("{name}（pid {pid}）"),
+        }
+    }
+
+    /// 会话表里记的进程名(界面拿它显示"在跟谁")。
+    fn display_name(&self) -> String {
+        match self {
+            Follow::Name(name) => name.clone(),
+            Follow::Pid { pid, name } if name.is_empty() => format!("pid {pid}"),
+            Follow::Pid { name, .. } => name.clone(),
+        }
+    }
+}
+
+/// Track a game the user starts themselves: kotori launches nothing, the
+/// session simply follows one process for as long as it runs.
+///
+/// **调用方必须是"已经看到它在跑"的那一方**(`daemon::watch` 按名字,或用户从
+/// 运行中的进程里挑了一个 pid)。
 pub(super) async fn start_watch_session(
     sessions: &Sessions,
     events: &Events,
     spec: &LaunchSpec<'_>,
 ) -> Result<ScaleSession, ScaleError> {
-    let Some(name) = spec.process_name.filter(|name| !name.trim().is_empty()) else {
-        return Err(ScaleError::ProtocolError(
-            "观测会话必须知道要盯哪个进程名".to_string(),
-        ));
+    let name = spec.process_name.unwrap_or_default().trim().to_string();
+    let follow = match spec.follow_pid {
+        Some(pid) => Follow::Pid { pid, name },
+        None if !name.is_empty() => Follow::Name(name),
+        None => {
+            return Err(ScaleError::ProtocolError(
+                "观测会话必须知道要盯哪个进程名(或者一个 pid)".to_string(),
+            ));
+        }
     };
 
     let session = ScaleSession {
@@ -48,7 +94,8 @@ pub(super) async fn start_watch_session(
         runtime_ratio: 1.0,
         started_at: std::time::Instant::now(),
         process_group: None,
-        process_name: Some(name.to_string()),
+        process_name: Some(follow.display_name()),
+        follow_pid: spec.follow_pid,
         output_size: (0, 0),
         // Nothing was launched, so there is no prefix of ours to close.
         wine_prefix: None,
@@ -58,7 +105,8 @@ pub(super) async fn start_watch_session(
 
     register(sessions, events, &session).await;
     tracing::info!(
-        "watching for process {name} (session {})",
+        "watching for process {} (session {})",
+        follow.label(),
         session.session_id
     );
 
@@ -67,7 +115,7 @@ pub(super) async fn start_watch_session(
         events.clone(),
         session.session_id.clone(),
         session.game_id.clone(),
-        name.to_string(),
+        follow,
         None,
         None,
     );
@@ -145,6 +193,7 @@ pub(super) async fn start_direct_session(
         // Windows 没有进程组:没有可以一锅端的东西,停止 = 不再跟踪。
         process_group: if cfg!(unix) { Some(pid) } else { None },
         process_name: name.clone(),
+        follow_pid: None,
         output_size: (0, 0),
         wine_prefix: if cfg!(unix) {
             spec.wine_prefix.map(Path::to_path_buf)
@@ -162,7 +211,7 @@ pub(super) async fn start_direct_session(
         events.clone(),
         session.session_id.clone(),
         session.game_id.clone(),
-        name.clone().unwrap_or_default(),
+        Follow::Name(name.clone().unwrap_or_default()),
         Some(child),
         session.wine_prefix.clone(),
     );
@@ -243,7 +292,7 @@ fn spawn_watch_task(
     events: Events,
     sid: String,
     game_id: Option<String>,
-    name: String,
+    follow: Follow,
     child: Option<tokio::process::Child>,
     prefix: Option<PathBuf>,
 ) {
@@ -257,21 +306,27 @@ fn spawn_watch_task(
             }
         }
 
-        // 两条路共用的收尾:等这个名字走光。启动器交接时,我们启动的那个先退,
-        // 真游戏顶着这个名字还在跑 —— 所以这一步对直启不是多余的。
-        if !name.is_empty() {
+        // 两条路共用的收尾:等它走光。启动器交接时,我们启动的那个先退,真游戏顶着
+        // 这个名字还在跑 —— 所以这一步对直启不是多余的。按 pid 跟的那种不做交接
+        // 推断:用户指的就是那一个进程,它没了这一局就结束。
+        // 名字是空的 = 这一局连"跟谁"都没有(直启且 exe 名都取不出来),直接收尾。
+        let watchable = match &follow {
+            Follow::Name(name) => !name.is_empty(),
+            Follow::Pid { .. } => true,
+        };
+        if watchable {
             loop {
                 tokio::time::sleep(process::POLL_INTERVAL).await;
                 if !sessions.read().await.contains_key(&sid) {
                     return;
                 }
-                if !process::is_running(&name) {
+                if !follow.alive() {
                     break;
                 }
             }
         }
 
-        tracing::info!("session {sid}: {name} exited");
+        tracing::info!("session {sid}: {} exited", follow.label());
         sessions.write().await.remove(&sid);
         // `None`(观测会话)时它什么都不做:那是用户自己的 prefix,关不得。
         #[cfg(unix)]

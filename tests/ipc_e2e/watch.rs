@@ -179,3 +179,92 @@ fn one_process_is_claimed_by_a_single_game() {
         "进程退出后会话要收掉"
     );
 }
+
+/// 「跟这一局」:用户直接指一个 pid,精确到不会认错同名的另一款。
+///
+/// 名字给不了这种精确 —— 自动追踪那条路在同名时只能按 id 排序取第一个(见
+/// `one_process_is_claimed_by_a_single_game`);pid 是"就是这一个进程"。
+#[test]
+fn observing_one_pid_picks_exactly_that_game() {
+    let mut fixture = Fixture::new("observe");
+    fixture.start();
+
+    let watched = fixture.dir.join("kotori-observe-proc");
+    std::fs::copy("/bin/sleep", &watched).expect("copy /bin/sleep");
+    let watched_name = watched.file_name().unwrap().to_string_lossy().to_string();
+
+    let game_dir = fixture.dir.join("ObserveGame");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    let exe = game_dir.join("game.exe");
+    std::fs::write(&exe, b"").unwrap();
+
+    // 两款游戏(名字一样、进程名也一样),谁都**没有**开自动追踪:这一局只由 pid 决定。
+    for (name, id) in [("First", "first"), ("Second", "second")] {
+        let response = fixture.rpc(
+            "game.create",
+            json!({ "name": name, "exe_path": exe, "game_dir": game_dir }),
+        );
+        assert_eq!(response["result"]["id"], id, "{response}");
+        let response = fixture.rpc(
+            "game.update",
+            json!({ "id": id, "auto_watch": false, "process_name": watched_name }),
+        );
+        assert_eq!(response["result"]["success"], true, "{response}");
+    }
+
+    let sessions = |fixture: &Fixture| -> Vec<String> {
+        fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["game_id"].as_str().unwrap_or("?").to_string())
+            .collect()
+    };
+
+    // 还没开游戏:没什么可跟的。不存在的 pid 要如实报错,别开出一个空会话。
+    let response = fixture.rpc("game.observe", json!({ "id": "first", "pid": 999_999 }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("已经不在了"),
+        "{response}"
+    );
+    assert!(sessions(&fixture).is_empty());
+
+    let mut child = std::process::Command::new(&watched)
+        .arg("30")
+        .spawn()
+        .expect("spawn the watched process");
+    let pid = child.id() as i64;
+
+    let response = fixture.rpc("game.observe", json!({ "id": "second", "pid": pid }));
+    assert!(
+        response["result"]["session_id"].is_string(),
+        "observe refused: {response}"
+    );
+    assert_eq!(
+        response["result"]["process_name"], watched_name,
+        "{response}"
+    );
+    assert_eq!(sessions(&fixture), vec!["second".to_string()], "{response}");
+
+    // 同一款再挑一次会被挡下(已经有一个会话在跟它了)。
+    let response = fixture.rpc("game.observe", json!({ "id": "second", "pid": pid }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("已经在跟"),
+        "{response}"
+    );
+
+    // 进程退出 → 会话结束(退出后上传就挂在这上面)。
+    child.kill().unwrap();
+    child.wait().unwrap();
+    assert!(
+        wait_until(Duration::from_secs(15), || sessions(&fixture).is_empty()),
+        "按 pid 跟的会话没有跟着进程结束\n--- daemon log ---\n{}",
+        fixture.logs()
+    );
+}

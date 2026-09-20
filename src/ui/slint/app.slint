@@ -103,8 +103,13 @@ export component AppWindow inherits Window {
     // 启动方式(单游戏页):render 推,Switch 回写。
     in-out property <bool> game-direct-launch: false;
     in-out property <bool> game-auto-watch: false;
+    in-out property <string> game-follow-pid: "";
+    in-out property <bool> game-following: false;
     callback direct-launch-toggled(bool);
     callback auto-watch-toggled(bool);
+    callback process-name-changed(string);
+    callback follow-pid-changed(string);
+    callback follow-this-run();
     // 这个游戏的云存档状况(措辞由 Rust 拼好,见 render.rs 的 sync_line)
     in-out property <string> detail-sync-line: "";
     in-out property <bool> detail-sync-can-act: false;
@@ -324,6 +329,8 @@ export component AppWindow inherits Window {
                             confirm-delete: root.confirm-delete;
                             game-direct-launch <=> root.game-direct-launch;
                             game-auto-watch <=> root.game-auto-watch;
+                            follow-pid <=> root.game-follow-pid;
+                            following: root.game-following;
                             sync-line: root.detail-sync-line;
                             sync-can-act: root.detail-sync-can-act;
                             sync-pending: root.detail-sync-pending;
@@ -339,6 +346,9 @@ export component AppWindow inherits Window {
                             delete-confirmed => { root.delete-confirmed(); }
                             direct-launch-toggled(value) => { root.direct-launch-toggled(value); }
                             auto-watch-toggled(value) => { root.auto-watch-toggled(value); }
+                            process-name-changed(value) => { root.process-name-changed(value); }
+                            follow-pid-changed(value) => { root.follow-pid-changed(value); }
+                            follow-this-run => { root.follow-this-run(); }
                             game-dir-changed(text) => { root.game-dir-changed(text); }
                             exe-changed(text) => { root.exe-changed(text); }
                             launch-args-changed(text) => { root.launch-args-changed(text); }

@@ -178,6 +178,7 @@ impl Daemon {
             wine_prefix: None,
             profile: &game.profile,
             process_name: Some(&game.name),
+            follow_pid: None,
             watch_only: true,
             direct_launch: false,
         };

@@ -23,6 +23,7 @@ import { GameItem, GameDetail, PathPick, SaveItem } from "../types.slint";
 import { GameSavesGroup } from "game-saves.slint";
 import { GameHeader } from "game-header.slint";
 import { GameActions } from "game-actions.slint";
+import { GameLaunchGroup } from "game-launch.slint";
 import { GameScaleAdvancedGroup, GameScaleGroup } from "game-scale.slint";
 import { GameSyncGroup } from "game-sync.slint";
 
@@ -66,6 +67,9 @@ export component GameSettingsPage inherits Rectangle {
     callback delete-confirmed();
     callback direct-launch-toggled(bool);
     callback auto-watch-toggled(bool);
+    callback process-name-changed(string);
+    callback follow-pid-changed(string);
+    callback follow-this-run();
 
     callback game-dir-changed(string);
     callback exe-changed(string);
@@ -117,6 +121,12 @@ export component GameSettingsPage inherits Rectangle {
     in-out property <string> framerate: "";
     // 手写的 gamescope 参数;非空时档案里其它缩放设置全部让位。
     in-out property <string> gamescope-args: "";
+    // 自动追踪盯的进程名(存配置);空 = 按 exe 文件名认。
+    in-out property <string> process-name: "";
+    // 「跟这一局」要跟的 pid。**不进配置、也不进草稿** —— 它只对这一次运行有意义,
+    // 页面自己拿着,点了那颗按钮才发给 Rust(见 `follow-this-run`)。
+    in-out property <string> follow-pid: "";
+    in property <bool> following: false;
 
     function seed-copy() {
         root.game-dir = root.stored.game-dir;
@@ -132,6 +142,7 @@ export component GameSettingsPage inherits Rectangle {
         root.fullscreen = root.stored.fullscreen;
         root.framerate = root.stored.framerate;
         root.gamescope-args = root.stored.gamescope-args;
+        root.process-name = root.stored.process-name;
     }
 
     init => { root.seed-copy(); }
@@ -228,74 +239,18 @@ export component GameSettingsPage inherits Rectangle {
                 }
             }
 
-            // ── 启动方式 ─────────────────────────────────────────────
-            RevealItem {
+            GameLaunchGroup {
                 revealed: root.revealed;
-                step: 2;
-                bottom: 8px;
-                SectionTitle { text: "启动方式"; }
-            }
-            RevealItem {
-                revealed: root.revealed;
-                step: 2;
-                bottom: 24px;
-                Group {
-                    CardRow {
-                        title: "直接启动（不走缩放）";
-                        description: "Linux 上不套 gamescope 直接跑 wine；Windows 上启动本来就是这样。退出后照常上传存档，但运行时缩放对这一局不可用。";
-                        Switch {
-                            // `game-direct-launch` 是 in 属性(render 从草稿推),
-                            // 不能 <=> 双向链;点了发消息,新值下一帧推回来。
-                            checked: root.game-direct-launch;
-                            toggled => { root.direct-launch-toggled(self.checked); }
-                        }
-                    }
-                    Divider { }
-                    VerticalLayout {
-                        padding: 16px;
-                        Text {
-                            text: "上面这条路管的是 kotori 怎么把它跑起来。游戏不是从这里启动的,下面「自动追踪」照样算数。";
-                            font-size: 11px;
-                            color: Tokens.text-3;
-                            wrap: word-wrap;
-                        }
-                    }
-                }
-            }
-
-            // ── 自动追踪 ─────────────────────────────────────────────
-            // 它是**独立开关**,不在「启动方式」里面:开着它照样能从上面点启动,
-            // 两条路发现的是同一局游戏(会话表按 game_id 去重)。
-            RevealItem {
-                revealed: root.revealed;
-                step: 3;
-                bottom: 8px;
-                SectionTitle { text: "自动追踪"; }
-            }
-            RevealItem {
-                revealed: root.revealed;
-                step: 3;
-                bottom: 24px;
-                Group {
-                    CardRow {
-                        title: "自动追踪";
-                        description: "不必从 kotori 启动:双击图标 / 启动器 / Steam 拉起来的那一局,kotori 也会盯住进程,游戏退出后照常上传存档(状态栏显示成「仅观测」)。";
-                        Switch {
-                            checked: root.game-auto-watch;
-                            toggled => { root.auto-watch-toggled(self.checked); }
-                        }
-                    }
-                    if root.game-auto-watch : Divider { }
-                    if root.game-auto-watch : CardRow {
-                        title: "跟随的进程";
-                        Text {
-                            text: root.game.process == "" ? "（未设置进程名,按 exe 文件名认）" : root.game.process;
-                            font-size: 13px;
-                            color: Tokens.text-2;
-                            vertical-alignment: center;
-                        }
-                    }
-                }
+                game-direct-launch: root.game-direct-launch;
+                game-auto-watch: root.game-auto-watch;
+                process-name <=> root.process-name;
+                follow-pid <=> root.follow-pid;
+                following: root.following;
+                direct-launch-toggled(v) => { root.direct-launch-toggled(v); }
+                auto-watch-toggled(v) => { root.auto-watch-toggled(v); }
+                process-name-changed(v) => { root.process-name-changed(v); }
+                follow-pid-changed(v) => { root.follow-pid-changed(v); }
+                follow-this-run => { root.follow-this-run(); }
             }
 
             // ── 缩放 ──────────────────────────────────────────────────

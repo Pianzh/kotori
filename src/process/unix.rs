@@ -3,7 +3,7 @@
 //! 与 `windows.rs` 的 Toolhelp 快照互为对方的平台实现,共用 `mod.rs` 的匹配逻辑;
 //! 那 15 字节的 `comm` 截断只存在于这一侧(坑见 `mod.rs` 文件头)。
 
-use super::{collect_descendants, is_plumbing, matches};
+use super::{ProcEntry, collect_descendants, is_plumbing, matches};
 
 /// PIDs of running processes whose name matches `name`.
 pub fn find_pids(name: &str) -> Vec<i32> {
@@ -33,27 +33,28 @@ pub fn find_pids(name: &str) -> Vec<i32> {
     pids
 }
 
-/// 一份进程表快照:`(comm, cmdline)` 逐条。见 [`super::Snapshot`]。
-pub fn snapshot() -> Vec<(String, String)> {
+/// 一份进程表快照:pid + comm + cmdline。见 [`super::Snapshot`]。
+pub fn snapshot() -> Vec<ProcEntry> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return Vec::new();
     };
     entries
         .flatten()
-        .filter(|entry| {
-            entry
-                .file_name()
-                .to_str()
-                .is_some_and(|n| n.parse::<i32>().is_ok())
-        })
-        .map(|entry| {
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<i32>().ok()?;
             let dir = entry.path();
-            (
-                std::fs::read_to_string(dir.join("comm")).unwrap_or_default(),
-                std::fs::read_to_string(dir.join("cmdline")).unwrap_or_default(),
-            )
+            Some(ProcEntry {
+                pid,
+                name: std::fs::read_to_string(dir.join("comm")).unwrap_or_default(),
+                cmdline: std::fs::read_to_string(dir.join("cmdline")).unwrap_or_default(),
+            })
         })
         .collect()
+}
+
+/// 这个 pid 还活着吗?Linux 上就是"`/proc/<pid>` 还在不在"。
+pub fn pid_is_alive(pid: i32) -> bool {
+    std::path::Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// `(pid, ppid, comm)` for every process this user can see. `comm` arrives

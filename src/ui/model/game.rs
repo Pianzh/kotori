@@ -89,6 +89,9 @@ pub(in crate::ui) struct Draft {
     pub(in crate::ui) direct_launch_original: bool,
     pub(in crate::ui) auto_watch: bool,
     pub(in crate::ui) auto_watch_original: bool,
+    /// 自动追踪盯的进程名(空 = 按 exe 文件名认)。
+    pub(in crate::ui) process_name: String,
+    pub(in crate::ui) process_name_original: String,
     pub(in crate::ui) algo: String,
     pub(in crate::ui) sharpness: u32,
     pub(in crate::ui) internal_w: String,
@@ -125,6 +128,8 @@ impl Draft {
             direct_launch_original: game.direct_launch,
             auto_watch: game.auto_watch,
             auto_watch_original: game.auto_watch,
+            process_name: game.process_name.clone(),
+            process_name_original: game.process_name.clone(),
             algo: if ScaleAlgorithm::ALL.contains(&game.algo.as_str()) {
                 game.algo.clone()
             } else {
@@ -159,6 +164,14 @@ impl Draft {
     /// Has the user changed the exe's extra arguments?
     pub(in crate::ui) fn launch_args_changed(&self) -> bool {
         self.launch_args.trim() != self.launch_args_original.trim()
+    }
+
+    /// Has the user changed the process name this game is followed by?
+    ///
+    /// 这一栏存的是**名字**(写进配置、下一局还认得出来);pid 有它自己的那一栏
+    /// (「跟这一局」,只对当前这一次运行有意义,不进配置)。
+    pub(in crate::ui) fn process_name_changed(&self) -> bool {
+        self.process_name.trim() != self.process_name_original.trim()
     }
 
     /// Has the user changed the save locations?

@@ -45,6 +45,12 @@ pub(super) fn push_detail(ui: &mut Ui) {
         app.draft.as_ref().map(|d| d.auto_watch).unwrap_or(false),
         |v| w.set_game_auto_watch(v),
     );
+    push_bool(w.get_game_following(), app.following, |v| {
+        w.set_game_following(v)
+    });
+    push_str(w.get_game_follow_pid(), &app.follow_pid_input, |v| {
+        w.set_game_follow_pid(v)
+    });
 
     if let Some(game) = app.selected_game() {
         push_eq(w.get_game(), game_item(game, app), |v| w.set_game(v));
@@ -163,6 +169,8 @@ fn game_detail(game: &UiGame) -> GameDetail {
         // 按空白再切开(见 `parse::scale::split_args`)。
         launch_args: game.launch_args.join(" ").into(),
         gamescope_args: game.gamescope_args.join(" ").into(),
+        // 自动追踪盯的进程名(空 = 按 exe 文件名认)。
+        process_name: game.process_name.clone().into(),
     }
 }
 impl App {

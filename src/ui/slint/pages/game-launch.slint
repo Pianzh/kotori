@@ -1,0 +1,122 @@
+// 单游戏设置页的「启动方式 + 自动追踪」两节。
+//
+// 单独一个文件,理由与 `game-scale.slint` / `game-saves.slint` 一样:那一页已经很长,
+// 而这两节说的是同一件事的两面 —— **谁把它启动起来**(启动方式)与**不是我们启动的
+// 那一局怎么发现**(自动追踪)。它们互不相干,界面上也刻意分成两组。
+
+import { Divider, RevealItem } from "../widgets/base.slint";
+import { Tokens } from "../theme.slint";
+import { Switch, TextField } from "../widgets/controls.slint";
+import { AccentButton } from "../widgets/buttons.slint";
+import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
+
+export component GameLaunchGroup inherits VerticalLayout {
+    in property <bool> revealed: false;
+    // 启动方式(直接启动)与自动追踪,由 render 从草稿推;Switch 只上报"用户点了"。
+    in property <bool> game-direct-launch: false;
+    in property <bool> game-auto-watch: false;
+    // 自动追踪盯的进程名(写进配置);空 = 按 exe 文件名认。
+    in-out property <string> process-name: "";
+    // 「跟这一局」那个 pid:只对这一次运行有意义,不进配置。
+    in-out property <string> follow-pid: "";
+    in property <bool> following: false;
+
+    callback direct-launch-toggled(bool);
+    callback auto-watch-toggled(bool);
+    callback process-name-changed(string);
+    callback follow-pid-changed(string);
+    callback follow-this-run();
+
+    // ── 启动方式 ─────────────────────────────────────────────
+        RevealItem {
+            revealed: root.revealed;
+            step: 2;
+            bottom: 8px;
+            SectionTitle { text: "启动方式"; }
+        }
+        RevealItem {
+            revealed: root.revealed;
+            step: 2;
+            bottom: 24px;
+            Group {
+                CardRow {
+                    title: "直接启动（不走缩放）";
+                    description: "Linux 上不套 gamescope 直接跑 wine；Windows 上启动本来就是这样。退出后照常上传存档，但运行时缩放对这一局不可用。";
+                    Switch {
+                        // `game-direct-launch` 是 in 属性(render 从草稿推),
+                        // 不能 <=> 双向链;点了发消息,新值下一帧推回来。
+                        checked: root.game-direct-launch;
+                        toggled => { root.direct-launch-toggled(self.checked); }
+                    }
+                }
+                Divider { }
+                VerticalLayout {
+                    padding: 16px;
+                    Text {
+                        text: "上面这条路管的是 kotori 怎么把它跑起来。游戏不是从这里启动的,下面「自动追踪」照样算数。";
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+        }
+
+    // ── 自动追踪 ─────────────────────────────────────────────
+        // 它是**独立开关**,不在「启动方式」里面:开着它照样能从上面点启动,
+        // 两条路发现的是同一局游戏(会话表按 game_id 去重)。
+        RevealItem {
+            revealed: root.revealed;
+            step: 3;
+            bottom: 8px;
+            SectionTitle { text: "自动追踪"; }
+        }
+        RevealItem {
+            revealed: root.revealed;
+            step: 3;
+            bottom: 24px;
+            Group {
+                CardRow {
+                    title: "自动追踪";
+                    description: "不必从 kotori 启动:双击图标 / 启动器 / Steam 拉起来的那一局,kotori 也会盯住进程,游戏退出后照常上传存档(状态栏显示成「仅观测」)。";
+                    Switch {
+                        checked: root.game-auto-watch;
+                        toggled => { root.auto-watch-toggled(self.checked); }
+                    }
+                }
+                Divider { }
+                CardRow {
+                    title: "跟随的进程";
+                    description: "留空 = 按 exe 文件名认。填了它,以后游戏自己起来(双击 / 启动器 / Steam)也认得出来 —— 启动器交接那种游戏尤其需要。";
+                    TextField {
+                        field-width: 240px;
+                        text <=> root.process-name;
+                        edited(text) => { root.process-name-changed(text); }
+                        placeholder: "例如 game.exe";
+                    }
+                }
+                Divider { }
+                CardRow {
+                    title: "跟当前这一局（PID）";
+                    description: "只对**现在跑着的那一个进程**有效,不写进配置。同一个名字有两款游戏时(都叫 Game.exe),只有它能说清是哪一款。";
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: center;
+                        TextField {
+                            field-width: 160px;
+                            text <=> root.follow-pid;
+                            edited(text) => { root.follow-pid-changed(text); }
+                            placeholder: "进程 PID";
+                        }
+                        AccentButton {
+                            label: root.following ? "跟上了" : "跟这一局";
+                            button-width: 92px;
+                            button-enabled: !root.following;
+                            clicked => { root.follow-this-run(); }
+                        }
+                    }
+                }
+            }
+        }
+
+}
