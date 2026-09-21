@@ -444,15 +444,18 @@ pub fn exe_owner(
         .map(|(_, game)| game.name.clone())
 }
 
-/// Why adding another entry for an exe that is already in the library deserves
-/// a warning (still allowed — "警告但不阻止", user call 2026-09-19). Three ways
-/// a duplicate bites, all silent at add time:
+/// 「这个 exe 已经在库里了」的一句话。
 ///
-/// 1. cloud versions are laid out per game id, so two ids for one game split
-///    the version history in half and a restore cannot know which half wins;
-/// 2. `process_name` watching is global by process name, so with two entries
-///    sharing it, "the game exited" no longer belongs to one session;
-/// 3. both entries running at once write the same local save directory.
+/// ⚠ **它带着一条已经作废的结论,别照它理解现在的规矩。** 从前这里写着"同一个 exe
+/// 建多条档案是允许的(警告但不阻止)",还拿"两套启动参数、一条直启一条仅观测"当理由
+/// —— 那个理由是**错的**:直接启动与自动追踪本来就是**同一条档案上的两个开关**
+/// (用户 2026-09-21 原话:"它本来就只是一个选项,应该是同一个档案的")。现在的规矩是
+/// **一个 exe 只许有一条档案**:`game.create` 早已硬拒绝,`game.update` 与扫描那条路
+/// 的收口 —— 连同这个函数与它拼的那句提示语 —— 一起见根目录的 `PLAN-cloud-identity.md`
+/// (临时计划文档,功能做完随功能删)。
+///
+/// 今天只剩 CLI 的 `add` 还在用它,而那条路的行为是**跳过**已入库的 exe,所以这句提示
+/// 实际只在"同一个文件的两种写法"时才可能出现。
 ///
 /// Paths are compared canonicalized (resolving symlinks; both sides fall back
 /// to the literal path when that fails) so the same file under a different
