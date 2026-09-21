@@ -284,8 +284,23 @@ export component SyncPage inherits ScrollView {
                 }
                 Divider { }
                 CardRow {
+                    title: "bucket";
+                    // ⚠ **别把它搬走**(2026-09-21 用户报"打了字但没保存生效,重开又变回旧的"):
+                    // 它 2026-09-18 曾被搬到最下面「凭据」组里,而那一组的按钮是「保存凭据」
+                    // —— 那颗**不存桶名**(凭据进密钥环、桶名进 config),于是"填在下面、
+                    // 存在上面"变成一个人人都会踩的坑。它现在就在自己的保存按钮上面一行。
+                    description: "Backblaze 控制台(B2 Cloud Storage → Buckets → Create a Bucket)里你自己建的桶的名字:全局唯一,重名要换一个;类型选 Private——存档不该公开可读。它不是凭据:只能访问这个桶的 keyID / applicationKey 在凭据区填。bucket 是整个桶,下面那行 prefix 是桶里归 kotori 独占的目录(<bucket>/<prefix>/…),桶里放别的东西不冲突,kotori 只碰自己 prefix 下的路径。⚠ 随本组最下面的「保存设置」一起保存。";
+                    TextField {
+                        field-width: 220px;
+                        text <=> root.bucket;
+                        edited(text) => { root.field(1, text); }
+                        placeholder: "kotori-saves";
+                    }
+                }
+                Divider { }
+                CardRow {
                     title: "prefix";
-                    description: "bucket 里归 kotori 独占的目录(bucket 本身在下面凭据区填),bucket 里的其他东西我们一律不碰。";
+                    description: "bucket 里归 kotori 独占的目录(bucket 在上面那一行填),bucket 里的其他东西我们一律不碰。";
                     TextField {
                         field-width: 220px;
                         text <=> root.prefix;
@@ -375,9 +390,6 @@ export component SyncPage inherits ScrollView {
             step: 6;
             bottom: 24px;
                 SyncCredentialsGroup {
-                    // bucket 2026-09-18 起住在凭据组里(**位置还等用户定**,见
-                    // `sync-credentials.slint` 那条注释),值仍归页面所有。
-                    bucket <=> root.bucket;
                     store-kind: root.store-kind;
                     store-locked: root.store-locked;
                     store-path: root.store-path;

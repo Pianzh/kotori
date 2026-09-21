@@ -316,6 +316,21 @@ fn setting_only_the_engine_leaves_the_other_settings_alone() {
     let written = std::fs::read_to_string(fixture.dir.join("config.toml")).unwrap();
     assert!(written.contains(r#"engine = "kopia""#), "{written}");
     assert!(written.contains(r#"bucket = "my-bucket""#), "{written}");
+
+    // **单独改桶名**也要落盘 —— 界面「连接与保留」那行的「保存设置」发的就是这一笔。
+    // 用户 2026-09-21 报"打了字但没保存生效,重开又变回旧的":根因是他把框放在了
+    // 「保存凭据」旁边(见 `sync.slint` 里那段注释),不是这一层;这条盯着 daemon 这半:
+    // 收到桶名就该存进 config,重开 GUI 读到的才是新的。
+    let renamed = fixture.rpc("sync.set_settings", json!({ "bucket": "renamed-bucket" }));
+    assert_eq!(
+        renamed["result"]["settings"]["bucket"], "renamed-bucket",
+        "{renamed}"
+    );
+    let written = std::fs::read_to_string(fixture.dir.join("config.toml")).unwrap();
+    assert!(
+        written.contains(r#"bucket = "renamed-bucket""#),
+        "桶名没落盘,重开当然还是旧的:\n{written}"
+    );
 }
 
 /// 设置页里指的**程序位置**要真的被用上：填一个目录，daemon 就在里面找那个程序，
