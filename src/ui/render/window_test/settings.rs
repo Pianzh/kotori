@@ -191,34 +191,9 @@ pub(super) fn settings_page(mut ui: Ui) {
     window.invoke_fullscreen_toggled(false);
     assert!(!draft().fullscreen);
 
-    // 「跟随的进程」这个名字进草稿(跟着自动保存写进配置);pid 那一栏只落在 App 上,
-    // 点了「跟这一局」才走 RPC。
+    // 「跟随的进程」这个名字进草稿(跟着自动保存写进配置)。
     window.invoke_process_name_changed("game.exe".into());
     assert_eq!(draft().process_name, "game.exe");
-    window.invoke_follow_pid_changed("4242".into());
-    assert_app(&|app| assert_eq!(app.follow_pid_input, "4242"));
-
-    // 填了不是数字的东西:给红字,而且**不**去开会话(按钮按下去什么也不该发生)。
-    window.invoke_follow_pid_changed("game.exe".into());
-    window.invoke_follow_this_run();
-    assert_app(&|app| {
-        assert!(!app.following);
-        assert!(
-            app.saved_msg.as_deref().unwrap_or("").contains("不是 PID"),
-            "要说清这一栏要的是什么:{:?}",
-            app.saved_msg
-        );
-    });
-
-    // 填了 pid:旗立起来(挡住第二次点击),上一句回话清掉。
-    window.invoke_follow_pid_changed("4242".into());
-    window.invoke_follow_this_run();
-    assert_app(&|app| assert!(app.following));
-    with_ui(|ui| {
-        ui.app.following = false;
-        ui.app.follow_pid_input.clear();
-        ui.app.saved_msg = None;
-    });
 
     // 「启动 / 停止」是一颗按钮两种时候:没在跑时点它 = 启动(`launching` 立起来);
     // 在跑时点它 = 停,**绝不**再发一次启动 —— 详情页头部那颗从前就是在这儿撒的谎。
@@ -237,9 +212,40 @@ pub(super) fn settings_page(mut ui: Ui) {
     });
     window.invoke_toggle_run("demo".into());
     assert_app(&|app| assert_eq!(app.launching, None, "在跑的该去停"));
+    // ⚠ 但**这一下只是等确认**:停止会真的把游戏结束掉(用户 2026-09-20:"建议对
+    // 停止追加确认"),所以第一次点只立旗,第二次才动手。
+    assert_app(&|app| assert!(app.confirm_stop, "会杀进程的那一局要先问一次"));
+
+    // 「取消」:收回那一步,游戏照跑。
+    window.invoke_stop_cancelled();
+    assert_app(&|app| assert!(!app.confirm_stop));
+
+    // 再点一次(立旗)→ 再点一次(确认):旗放下,会话还在 —— 收尾是 daemon 那一侧
+    // 的事(它要等进程真的走光才发 `Ended`,退出后上传挂在那个事件上)。
+    window.invoke_toggle_run("demo".into());
+    assert_app(&|app| assert!(app.confirm_stop));
+    window.invoke_toggle_run("demo".into());
+    assert_app(&|app| {
+        assert!(!app.confirm_stop, "确认过就该把那一步收起来");
+        assert!(app.running.contains_key("demo"), "会话由 daemon 那边收");
+    });
+
+    // 观测会话点一下就停:那只是"别再跟着它",不杀进程,没必要问第二遍。
+    with_ui(|ui| {
+        ui.app.running.insert(
+            "demo".into(),
+            SessionInfo {
+                session_id: "s2".into(),
+                watch_only: true,
+            },
+        );
+    });
+    window.invoke_toggle_run("demo".into());
+    assert_app(&|app| assert!(!app.confirm_stop, "观测会话不必二次确认"));
     with_ui(|ui| {
         ui.app.running.clear();
         ui.app.saved_msg = None;
+        ui.app.confirm_stop = false;
     });
 
     // 配置来源:点一下 = 开始切(旗立起来挡住第二次点击),顺手清掉上一句回话 ——

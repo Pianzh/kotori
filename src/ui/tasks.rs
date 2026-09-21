@@ -380,30 +380,6 @@ pub(super) async fn load_processes(socket: &Path) -> Result<Vec<ProcessRow>, Str
     parse_processes(&value)
 }
 
-/// 「跟这一局」:让 daemon 盯住用户挑的那个 pid(只对这一次运行有意义,不写配置)。
-pub(super) async fn observe_process(
-    socket: &Path,
-    game_id: &str,
-    pid: i32,
-) -> Result<String, String> {
-    let value = crate::rpc::call(
-        socket,
-        "game.observe",
-        Some(crate::rpc::params([
-            ("id", Value::String(game_id.to_string())),
-            ("pid", Value::from(pid)),
-        ])),
-    )
-    .await?;
-    let name = value
-        .get("process_name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("?");
-    Ok(format!(
-        "已开始跟随 {name}（PID {pid}），退出后照常上传存档"
-    ))
-}
-
 pub(super) async fn remove_game(socket: &Path, game_id: &str) -> Result<(), String> {
     let params = crate::rpc::params([("id", Value::String(game_id.to_string()))]);
     crate::rpc::call(socket, "game.remove", Some(params)).await?;

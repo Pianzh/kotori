@@ -1,6 +1,10 @@
 //! `secrets` 的单测：四级存储各自的脾气，以及"现在到底存在哪一级"的说法。
 
+// 这两个只在 unix 测试里用(windows 的密钥环后端还没实现,那几条测试整条
+// `#[cfg(unix)]`,见下面的 `FakeTool`)。
+#[cfg(unix)]
 use super::keyring::adopt_plain_entries;
+#[cfg(unix)]
 use super::plain::PlainFile;
 // 假 secret-tool 是 shell 脚本,只在 Unix 上能跑 —— 用到它的测试全部
 // #[cfg(unix)],Windows 的密钥环后端(凭据管理器)实现后再补那边的夹具。

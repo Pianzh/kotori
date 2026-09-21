@@ -39,12 +39,31 @@ impl App {
         }
         match run_action(&self.running, &game_id) {
             RunAction::Launch => self.launch_game(game_id),
-            RunAction::Stop => self.stop_game(game_id),
+            RunAction::Stop => {
+                // ⚠ 「停止」会**真的把这一局结束掉**(Linux 杀进程组、Windows 杀整棵
+                // 树),所以会杀进程的那一局先问一次(用户 2026-09-20:"建议对停止追加
+                // 确认")。观测会话点一下就停 —— 那只是"别再跟着它",不必吓人
+                // (见 `App::stop_needs_confirm`)。
+                if self.stop_needs_confirm(&game_id) && !self.confirm_stop {
+                    self.confirm_stop = true;
+                    return Task::none();
+                }
+                self.stop_game(game_id)
+            }
         }
+    }
+
+    /// 点下去会不会**杀进程**?会才值得二次确认。
+    fn stop_needs_confirm(&self, game_id: &str) -> bool {
+        self.running
+            .get(game_id)
+            .is_some_and(|session| !session.watch_only)
     }
 
     /// 启动一款游戏:`launching` 立刻立起来(按钮随即变成灰的),等 daemon 回话。
     fn launch_game(&mut self, id: String) -> Task<Message> {
+        // 上一款留下的那次"等确认"不许落到这一款身上。
+        self.confirm_stop = false;
         self.launching = Some(id.clone());
         let socket = self.daemon_socket.clone();
         Task::perform(
@@ -62,6 +81,7 @@ impl App {
         let Some(session) = self.running.get(&game_id).map(|s| s.session_id.clone()) else {
             return Task::none();
         };
+        self.confirm_stop = false;
         let socket = self.daemon_socket.clone();
         self.error = None;
         Task::perform(

@@ -216,20 +216,15 @@ fn save_sync_follows_the_game_lifecycle() {
     );
 
     // --- now the exit path, with a game kotori only watches -----------------
-    // A uniquely named copy of `sleep`, so nothing else on the machine can be
-    // mistaken for the game.
-    let watched = fixture.dir.join("kotori-lifecycle-proc");
-    std::fs::copy("/bin/sleep", &watched).unwrap();
-    let watched_name = watched.file_name().unwrap().to_string_lossy().to_string();
-    let response = fixture.rpc(
-        "game.update",
-        json!({ "id": "life-game", "auto_watch": true, "process_name": watched_name }),
-    );
-    assert_eq!(response["result"]["success"], true, "{response}");
+    // ⚠ 真跑起来的必须**就是档案里那个 exe**:自动追踪认的是进程的 exe 完整路径
+    // (用户 2026-09-20),所以这里把 `game.exe` 本身换成一个会一直跑下去的进程 ——
+    // 上面那段用假 gamescope 的启动只把路径当参数,不看文件里是什么。
+    // (新档案默认开着自动追踪,进程名默认就是 exe 的文件名,不用再设。)
+    std::fs::copy("/bin/sleep", &exe).unwrap();
 
     // ⚠ 这里**不点「启动」**:自动追踪的意义就是"不是 kotori 启动的那一局也要跟"
     // (用户 2026-09-20),后台那圈轮询会自己认出它。
-    let mut child = std::process::Command::new(&watched)
+    let mut child = std::process::Command::new(&exe)
         .arg("30")
         .spawn()
         .expect("spawn the watched process");

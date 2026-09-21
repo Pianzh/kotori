@@ -21,6 +21,10 @@ pub(super) fn push_detail(ui: &mut Ui) {
     push_bool(w.get_confirm_delete(), app.confirm_delete, |v| {
         w.set_confirm_delete(v)
     });
+    // 「停止」的二次确认:文案与那一步都由它决定(见 `update::run`)。
+    push_bool(w.get_confirm_stop(), app.confirm_stop, |v| {
+        w.set_confirm_stop(v)
+    });
     let (saved, saved_ok) = match &app.saved_msg {
         Some(message) => (message.clone(), app.saved_ok),
         None => (String::new(), true),
@@ -45,12 +49,6 @@ pub(super) fn push_detail(ui: &mut Ui) {
         app.draft.as_ref().map(|d| d.auto_watch).unwrap_or(false),
         |v| w.set_game_auto_watch(v),
     );
-    push_bool(w.get_game_following(), app.following, |v| {
-        w.set_game_following(v)
-    });
-    push_str(w.get_game_follow_pid(), &app.follow_pid_input, |v| {
-        w.set_game_follow_pid(v)
-    });
 
     if let Some(game) = app.selected_game() {
         push_eq(w.get_game(), game_item(game, app), |v| w.set_game(v));

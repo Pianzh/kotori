@@ -126,13 +126,11 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_auto_watch_toggled(|value| dispatch(Message::AutoWatchToggled(value)));
     window
         .on_process_name_changed(|value| dispatch(Message::ProcessNameChanged(value.to_string())));
-    window.on_follow_pid_changed(|value| dispatch(Message::FollowPidChanged(value.to_string())));
-    window.on_follow_this_run(|| dispatch(Message::FollowThisRun));
-    // 「从正在运行的进程里挑」:状态在一个 Slint 全局里(两个入口共用),所以它的回调
-    // 也从那儿接 —— 页面那颗按钮直接喊全局,不必经窗口转发。
+    window.on_stop_cancelled(|| dispatch(Message::StopCancelled));
+    // 「从正在运行的进程里挑」:状态在一个 Slint 全局里,所以它的回调也从那儿接
+    // —— 添加游戏页那颗按钮直接喊全局,不必经窗口转发。
     let picker = window.global::<ProcessPickerState>();
-    picker.on_pick_for_follow(|| dispatch(Message::ProcessPickerOpen(PickerPurpose::FollowPid)));
-    picker.on_pick_for_new_game(|| dispatch(Message::ProcessPickerOpen(PickerPurpose::NewGame)));
+    picker.on_pick_for_new_game(|| dispatch(Message::ProcessPickerOpen));
     picker.on_query_changed(|value| dispatch(Message::ProcessQueryChanged(value.to_string())));
     picker.on_picked(|index| dispatch(Message::ProcessPicked(index as usize)));
     picker.on_closed(|| dispatch(Message::ProcessPickerClose));

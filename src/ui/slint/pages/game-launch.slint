@@ -7,7 +7,6 @@
 import { Divider, RevealItem } from "../widgets/base.slint";
 import { Tokens } from "../theme.slint";
 import { Switch, TextField } from "../widgets/controls.slint";
-import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { ProcessPickerState } from "../widgets/process-picker.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 
@@ -18,15 +17,10 @@ export component GameLaunchGroup inherits VerticalLayout {
     in property <bool> game-auto-watch: false;
     // 自动追踪盯的进程名(写进配置);空 = 按 exe 文件名认。
     in-out property <string> process-name: "";
-    // 「跟这一局」那个 pid:只对这一次运行有意义,不进配置。
-    in-out property <string> follow-pid: "";
-    in property <bool> following: false;
 
     callback direct-launch-toggled(bool);
     callback auto-watch-toggled(bool);
     callback process-name-changed(string);
-    callback follow-pid-changed(string);
-    callback follow-this-run();
 
     // ── 启动方式 ─────────────────────────────────────────────
         RevealItem {
@@ -88,33 +82,12 @@ export component GameLaunchGroup inherits VerticalLayout {
                 Divider { }
                 CardRow {
                     title: "跟随的进程";
-                    description: "留空 = 按 exe 文件名认。填了它,以后游戏自己起来(双击 / 启动器 / Steam)也认得出来 —— 启动器交接那种游戏尤其需要。";
+                    description: "留空 = 按上面那个可执行文件的文件名认。填了它,就按这个名字认 —— 但它只是**预筛**:真正算数的是进程的 exe 完整路径必须是上面那一个(否则库里两款都叫 Game.exe 的游戏会互相认领)。";
                     TextField {
                         field-width: 240px;
                         text <=> root.process-name;
                         edited(text) => { root.process-name-changed(text); }
                         placeholder: "例如 game.exe";
-                    }
-                }
-                Divider { }
-                CardRow {
-                    title: "跟当前这一局（PID）";
-                    description: "只对**现在跑着的那一个进程**有效,不写进配置。同一个名字有两款游戏时(都叫 Game.exe),只有它能说清是哪一款。";
-                    HorizontalLayout {
-                        spacing: 8px;
-                        alignment: center;
-                        TextField {
-                            field-width: 160px;
-                            text <=> root.follow-pid;
-                            edited(text) => { root.follow-pid-changed(text); }
-                            placeholder: "进程 PID";
-                        }
-                        AccentButton {
-                            label: root.following ? "跟上了" : "跟这一局";
-                            button-width: 92px;
-                            button-enabled: !root.following;
-                            clicked => { root.follow-this-run(); }
-                        }
                     }
                 }
             }

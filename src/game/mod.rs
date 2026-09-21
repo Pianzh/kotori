@@ -423,6 +423,27 @@ pub fn generate_unique_game_id(config: &crate::config::Config, name: &str) -> St
     candidate
 }
 
+/// 这个 exe 是不是已经属于某一条档案了?是的话返回**那一条的名字**。
+///
+/// 与 [`duplicate_exe_warning`] 的分工是**用途**:那条是"警告但放行"(CLI 的
+/// `add` 走它,旧规矩没变),这条给 `game.create` 的硬拒绝 —— 用户 2026-09-20 认定
+/// 同一个 exe 建两条档案会给云同步留下说不清的坑(版本历史按档案分开存,观测同一个
+/// 进程时分不清谁在跑),"能保证不出问题"之前不如挡住。**只用在创建那条路上**:
+/// `game.update` 与 `scan` 暂时照旧(用户当天说这条先搁置)。
+pub fn exe_owner(
+    config: &crate::config::Config,
+    exe_path: &Path,
+    exclude_id: Option<&str>,
+) -> Option<String> {
+    config
+        .games
+        .iter()
+        .find(|(id, game)| {
+            Some(id.as_str()) != exclude_id && crate::util::same_file(&game.exe_path, exe_path)
+        })
+        .map(|(_, game)| game.name.clone())
+}
+
 /// Why adding another entry for an exe that is already in the library deserves
 /// a warning (still allowed — "警告但不阻止", user call 2026-09-19). Three ways
 /// a duplicate bites, all silent at add time:

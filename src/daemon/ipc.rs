@@ -144,6 +144,9 @@ pub(super) fn claim_socket(lock_path: &Path) -> anyhow::Result<std::fs::File> {
     }
     std::fs::OpenOptions::new()
         .create(true)
+        // 这个文件只是**锁的载体**(`share_mode(0)` 才是锁),里面从来不写内容,
+        // 所以不截断:截断对"谁持有锁"没有任何影响,而说清楚比让 clippy 猜好。
+        .truncate(false)
         .write(true)
         // 独占:别人再打开这个文件会失败,这就是 Windows 上的 flock。
         .share_mode(0)

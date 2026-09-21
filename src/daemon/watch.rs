@@ -6,18 +6,21 @@
 //! 什么都不留,退出后的上传自然也不触发(`Ended` 是上传的唯一触发器)。
 //!
 //! 这里的循环替掉那一按:每隔 [`WATCH_POLL`] 看一眼配置里开着 `auto_watch` 的游戏,
-//! 谁的名字在进程表里、而且**还没有会话**,就替它开一个观测会话(`ScaleSession.watch_only`)
-//! —— 会话本身照旧由 `scale::direct` 跟到进程消失,再发 `Ended`。
+//! **谁的 exe 正在跑**(进程名只是预筛,见 [`crate::process::Snapshot::matches_exe`])、
+//! 而且**还没有会话**,就替它开一个观测会话(`ScaleSession.watch_only`)—— 会话本身
+//! 照旧由 `scale::direct` 跟到进程消失,再发 `Ended`。
 //!
 //! 两条防重复的规矩,都不是锦上添花:
 //!
 //! * **按 game_id 去重**:用户从 kotori 点「启动」开的那一局,`rpc_game_launch` 早就
 //!   登记过会话了,这里不能再开一个(否则退出时会传两次,界面也只认得下一条)。
+//!   会话之间则按 **exe 完整路径**去重(旧配置里可能两条档案指着同一个 exe)。
 //! * **连续两次都看到才算数**:`spawn` 与"登记进会话表"之间有一小段窗口
 //!   (`direct` 里那 300ms 的立即退出检测),正好落在窗口里的话也会重复。多等一个
 //!   轮询周期把窗口躲开,顺带滤掉一闪而过的短命进程。
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use super::*;
@@ -30,6 +33,9 @@ pub(super) const WATCH_POLL: Duration = Duration::from_secs(2);
 struct Watched {
     id: String,
     name: String,
+    /// 这一款档案里记的 exe **完整路径** —— 认人的凭据(用户 2026-09-20:任务管理器
+    /// 里那一栏就是它,exe 名与 exe 目录都已经含在里面了,所以比一次就够)。
+    exe: PathBuf,
     game_dir: PathBuf,
     profile: crate::config::ScaleProfile,
 }
@@ -57,13 +63,17 @@ impl Daemon {
                     .retain(|id, _| ids.contains(id.as_str()));
 
                 let live = this.engine.list_sessions().await;
-                // 这一轮已经"认领"过的进程名。⚠ 光看 `live` 不够:同一轮里先开的
-                // 那个会话还没进 `live`(它是在循环开始前取的),于是同一个进程会被
-                // 第二款游戏再认一次 —— 用户库里就有两款 exe 都叫 `Game.exe`
-                // (2026-09-20 实测:一轮里开出两个会话)。
-                let mut claimed: Vec<String> = live
+                // 这一轮已经"认领"过的 exe。⚠ 光看 `live` 不够:同一轮里先开的那个
+                // 会话还没进 `live`(它是在循环开始前取的),于是同一个进程会被再认
+                // 一次 —— 2026-09-20 实测到的"一轮里开出两个会话"就是这么来的。
+                //
+                // 记的是 **exe 完整路径**而不是名字:两款游戏即使同名(`Game.exe`),
+                // 路径不同就是两个进程,谁也不该挡谁;只有"两条档案指着同一个 exe"
+                // (旧配置,`game.create` 现在会挡住新的)才会撞上,那时按 id 排序取
+                // 第一个。
+                let mut claimed: Vec<PathBuf> = live
                     .iter()
-                    .filter_map(|session| session.process_name.clone())
+                    .filter_map(|session| session.exe_path.clone())
                     .collect();
                 for game in candidates {
                     // 用户亲手停掉的那一款:同一个进程实例还在就闭嘴
@@ -77,17 +87,13 @@ impl Daemon {
                     {
                         continue;
                     }
-                    // 同一个进程名只能归一款:进程名认不出是哪一款时(比如两款游戏
-                    // 都叫 `Game.exe`)按 id 排序取第一个,并在日志里说清这是歧义 ——
-                    // 用户给它们各填一个「跟随的进程」就能消除。
-                    if let Some(other) = claimed
+                    if claimed
                         .iter()
-                        .find(|name| crate::process::same_name(name, &game.name))
+                        .any(|exe| crate::util::same_file(exe, &game.exe))
                     {
                         tracing::warn!(
-                            "进程 {} 同时匹配多款开着自动追踪的游戏,这一轮只跟 {};给它们填「跟随的进程」可以消除歧义",
-                            game.name,
-                            other
+                            "自动追踪:{} 的 exe 这一轮已经被别的档案认领了（同一个 exe 的两条档案），先跟 id 小的那一条",
+                            game.name
                         );
                         continue;
                     }
@@ -107,7 +113,7 @@ impl Daemon {
                                 game.id,
                                 game.name
                             );
-                            claimed.push(game.name.clone());
+                            claimed.push(game.exe.clone());
                             first_seen.remove(&game.id);
                         }
                         Err(error) => {
@@ -123,7 +129,9 @@ impl Daemon {
     /// 这一刻值得自动追踪的游戏 —— **只挑进程真的在跑的**。
     ///
     /// 进程表只读一遍(`Snapshot`):42 款游戏逐个 `is_running` 就是每 2 秒 42 遍
-    /// 遍历,而这件事每 2 秒发生一次、永远不停。
+    /// 遍历,而这件事每 2 秒发生一次、永远不停。认人认的是 **exe 完整路径**:名字只
+    /// 当便宜的预筛(见 [`crate::process::Snapshot::matches_exe`])—— 库里两款游戏都
+    /// 叫 `Game.exe` 时,名字分不清谁是谁。
     async fn auto_watch_candidates(&self) -> Vec<Watched> {
         let wanted: Vec<Watched> = {
             let config = self.config.read().await;
@@ -136,6 +144,7 @@ impl Daemon {
                     Some(Watched {
                         id: id.clone(),
                         name,
+                        exe: game.exe_path.clone(),
                         game_dir: game.effective_game_dir(),
                         profile: game.scale_profile.clone(),
                     })
@@ -146,9 +155,9 @@ impl Daemon {
         let running = crate::process::Snapshot::take();
         let mut found: Vec<Watched> = wanted
             .into_iter()
-            .filter(|game| running.matches(&game.name))
+            .filter(|game| running.matches_exe(&game.name, &game.exe))
             .collect();
-        // 名字有歧义时(同一轮里好几款都匹配)"取第一个"得有个确定的说法 ——
+        // 同一个 exe 有好几条档案时(旧配置)"取第一个"得有个确定的说法 ——
         // 配置里是 HashMap,遍历顺序每次都可能不同。
         found.sort_by(|left, right| left.id.cmp(&right.id));
         found
@@ -169,16 +178,17 @@ impl Daemon {
 
     /// 替一款已经在跑的游戏开观测会话:什么都不启动,只跟着它。
     async fn start_auto_watch(&self, game: &Watched) -> Result<String, String> {
+        let exe = game.exe.to_string_lossy().to_string();
         let spec = LaunchSpec {
             game_id: &game.id,
-            exe: "",
+            // 观测会话里 `exe` 不是要启动的东西,而是**身份**(见 `LaunchSpec::watch_only`)。
+            exe: &exe,
             args: &[],
             game_dir: &game.game_dir,
             // 不是我们启动的,所以没有"我们的 prefix"要收尾(见 `direct::start_watch_session`)。
             wine_prefix: None,
             profile: &game.profile,
             process_name: Some(&game.name),
-            follow_pid: None,
             watch_only: true,
             direct_launch: false,
         };

@@ -50,14 +50,48 @@ impl ScaleEngine for UnsupportedScaleEngine {
         direct::start_direct_session(&self.sessions, &self.events, spec).await
     }
 
-    /// 直接启动的会话没有进程组可一锅端（Windows 没有 `process_group`）：
-    /// "停止" = kotori 不再跟踪这一局，游戏本身继续跑。
+    /// 「停止」= **真的把这一局结束掉**(我们启动的那个进程树),或者**不再跟着它**
+    /// (观测会话)。
+    ///
+    /// ⚠ 从前这里只把会话从表里删掉 —— 于是 Windows 上那颗「停止」按钮的实际效果是
+    /// "kotori 不再跟着这一局,游戏照跑"(用户 2026-09-20 实测:"只会停止对游戏进程的
+    /// 追逐而不会停止进程")。现在两头都对上了 Linux:`terminate_session` 干的事这里
+    /// 由 [`crate::process::kill_tree`] 干(Windows 没有进程组,只有"走一遍后代")。
     async fn stop_session(&self, session: &ScaleSession) -> Result<(), ScaleError> {
-        let removed = self.sessions.write().await.remove(&session.session_id);
-        match removed {
-            Some(_) => Ok(()),
-            None => Err(ScaleError::SessionNotFound(session.session_id.clone())),
+        if !self.sessions.read().await.contains_key(&session.session_id) {
+            return Err(ScaleError::SessionNotFound(session.session_id.clone()));
         }
+
+        // 观测会话里的进程不是我们启动的:对它动手就是越界。删掉会话 = 停止跟随。
+        if session.watch_only {
+            self.sessions.write().await.remove(&session.session_id);
+            tracing::info!("stopped watch-only session {}", session.session_id);
+            return Ok(());
+        }
+
+        // `gamescope_pid` 在类型上是 u32(它是给别处显示用的句柄/进程号),而进程表
+        // 一律用 i32 —— 转一道,顺手把"没有 pid"这种不可能的情况挡住。
+        let pid = session.gamescope_pid.unwrap_or(0) as i32;
+        let mut killed = crate::process::kill_tree(pid);
+        // 启动器交接那种游戏:我们 spawn 的那个早就退了(会话是照着进程名继续跟的),
+        // 所以按 pid 杀不到任何东西 —— 那就把顶着这个名字的进程各杀一棵树。Linux 侧
+        // 不需要这一步:交接出去的孩子仍然留在同一个进程组里,`killpg` 顺带扫到它。
+        if killed == 0
+            && let Some(name) = session.process_name.as_deref()
+        {
+            for other in crate::process::find_pids(name) {
+                killed += crate::process::kill_tree(other);
+            }
+        }
+        tracing::info!(
+            "stopping session {} (pid {pid}, killed {killed})",
+            session.session_id
+        );
+
+        // 会话**留在表里**:进程走光由 `direct::spawn_watch_task` 发现,它照旧发
+        // `Ended` —— 而 `Ended` 是"退出后上传存档"的唯一触发器。Linux 侧的
+        // `terminate_session` 之后同样什么都不做,两边因此一模一样。
+        Ok(())
     }
 
     async fn wait_session(&self, session: &ScaleSession) -> Result<(), ScaleError> {
@@ -84,5 +118,82 @@ impl ScaleEngine for UnsupportedScaleEngine {
 
     async fn get_status(&self, _session: &ScaleSession) -> Result<ScaleStatus, ScaleError> {
         Err(ScaleError::Unsupported)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ScaleProfile;
+
+    /// 「停止」必须**真的把这一局结束掉**(我们启动的那一局)。
+    ///
+    /// 用户 2026-09-20 在 Windows 上实测报的就是这个:从前 `stop_session` 只把会话从
+    /// 表里删掉,于是那颗按钮的实际效果是"kotori 不再跟着它,游戏照跑"。现在它走的
+    /// 是 [`crate::process::kill_tree`],所以要钉住两件事:**整棵树**都得死,而会话
+    /// 要留在表里(退出后的存档上传挂在 watcher 发出的 `Ended` 上)。
+    ///
+    /// 只能在 Windows 上跑(这个后端本身也只存在于 Windows);`cmd /c ping` 是"会一直
+    /// 跑、而且有孩子"的现成样本 —— 拿 `notepad` 那种 GUI 进程在无头会话里不一定起得来。
+    #[tokio::test]
+    async fn stopping_a_launched_game_kills_its_process_tree() {
+        let engine = UnsupportedScaleEngine::new();
+        let dir = std::env::temp_dir();
+        let profile = ScaleProfile::default_for();
+        let cmd = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        let args: Vec<String> = ["/c", "ping", "-n", "120", "127.0.0.1"]
+            .iter()
+            .map(|arg| arg.to_string())
+            .collect();
+
+        let spec = LaunchSpec {
+            game_id: "stop-me",
+            exe: &cmd,
+            args: &args,
+            game_dir: &dir,
+            wine_prefix: None,
+            profile: &profile,
+            process_name: None,
+            watch_only: false,
+            direct_launch: true,
+        };
+        let session = engine.start_session(&spec).await.expect("直启该成功");
+        let root = session.gamescope_pid.expect("直启必须有 pid") as i32;
+
+        // 让 cmd 把 ping 起出来(这一步要等,`spawn` 返回时孩子还没影)。
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let descendants_of_root = loop {
+            let found = crate::process::descendants(root);
+            if !found.is_empty() {
+                break found;
+            }
+            assert!(std::time::Instant::now() < deadline, "cmd 没有起出 ping");
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        };
+
+        engine.stop_session(&session).await.expect("停止该成功");
+
+        // 会话还在(收尾由 watcher 发现进程走光之后做,`Ended` 才发得出去)。
+        assert!(
+            engine.get_session(&session.session_id).await.is_some(),
+            "停止之后会话要留着,否则退出后的上传就没触发器了"
+        );
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let snapshot = crate::process::Snapshot::take();
+            let left: Vec<i32> = std::iter::once(root)
+                .chain(descendants_of_root.iter().copied())
+                .filter(|pid| snapshot.has_pid(*pid))
+                .collect();
+            if left.is_empty() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "停止之后这些进程还活着: {left:?} —— 那颗按钮又变成「只是不再跟踪」了"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
     }
 }

@@ -21,6 +21,7 @@ impl App {
                 self.selected = None;
                 self.draft = None;
                 self.confirm_delete = false;
+                self.confirm_stop = false;
                 self.error = None;
                 if tab == Tab::Settings || tab == Tab::Sync {
                     // Re-read them all, they may have changed on disk (or in the
@@ -45,8 +46,8 @@ impl App {
                 }
                 Task::none()
             }
-            // 「从正在运行的进程里挑」那一族消息在 `update/picker.rs`(两个入口共用)。
-            m @ (Message::ProcessPickerOpen(..)
+            // 「从正在运行的进程里挑」那一族消息在 `update/picker.rs`。
+            m @ (Message::ProcessPickerOpen
             | Message::ProcessesLoaded(..)
             | Message::ProcessQueryChanged(..)
             | Message::ProcessPicked(..)
@@ -120,9 +121,8 @@ impl App {
                     self.selected = Some(g.id.clone());
                     self.saved_msg = None;
                     self.confirm_delete = false;
-                    // 「跟这一局」那个 pid 属于上一款,别带过来。
-                    self.follow_pid_input.clear();
-                    self.following = false;
+                    // 二次确认属于上一款,别带过来。
+                    self.confirm_stop = false;
                     // Seed the form from the *stored* profile. Anything else
                     // means a plain "open + save" silently rewrites settings.
                     self.draft = Some(Draft::from_game(g));
@@ -142,6 +142,7 @@ impl App {
                 self.draft = None;
                 self.saved_msg = None;
                 self.confirm_delete = false;
+                self.confirm_stop = false;
                 Task::none()
             }
             Message::SearchChanged(query) => {
@@ -306,9 +307,6 @@ impl App {
             | Message::DirectLaunchToggled(..)
             | Message::AutoWatchToggled(..)
             | Message::ProcessNameChanged(..)
-            | Message::FollowPidChanged(..)
-            | Message::FollowThisRun
-            | Message::FollowDone(..)
             | Message::SavePathKindChanged(..)
             | Message::SavePathChanged(..)
             | Message::SavePathExcludeChanged(..)
@@ -329,6 +327,11 @@ impl App {
                     async move { load_status(&socket).await },
                     Message::StatusLoaded,
                 )
+            }
+            // 二次确认那一步里用户按了「取消」:什么都不做。
+            Message::StopCancelled => {
+                self.confirm_stop = false;
+                Task::none()
             }
             Message::AutoSave(generation) => {
                 // 世代对不上 = 这 700ms 里又改过,这一次作废(防抖就是靠它)。

@@ -180,7 +180,7 @@ fn library_and_sync_pages_render_without_a_display() {
 
     // 「从运行中的进程里挑」:浮层开 → 候选到 → 搜索 → 挑一个 → 添加游戏那三个框
     // 被填好(挑进程那条路的正面)。
-    ui.app.process_picker.open(PickerPurpose::NewGame);
+    ui.app.process_picker.open();
     render(&mut ui);
     assert!(
         ui.window.global::<ProcessPickerState>().get_open(),

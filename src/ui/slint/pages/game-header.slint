@@ -4,14 +4,19 @@
 
 import { Tokens } from "../theme.slint";
 import { IconButton } from "../widgets/base.slint";
-import { AccentButton } from "../widgets/buttons.slint";
+import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { GameItem } from "../types.slint";
 
 export component GameHeader inherits Rectangle {
     in property <GameItem> game;
+    /// 「停止」等二次确认:它会**真的把游戏结束掉**,所以那颗按钮要再问一次
+    /// (与「删除条目」同一套两步样式)。只有会杀进程的那一局才为真。
+    in property <bool> confirm-stop: false;
     callback back();
     /// 「启动 / 停止」那一颗:该干什么由 Rust 定(见 `update::run_action`)。
     callback toggle-run();
+    /// 二次确认里用户按了「取消」。
+    callback stop-cancelled();
 
     height: layout.preferred-height;
     layout := HorizontalLayout {
@@ -55,13 +60,25 @@ export component GameHeader inherits Rectangle {
 
                     VerticalLayout {
                         alignment: center;
-                        AccentButton {
-                            label: root.game.state != 0
-                                ? "停止"
-                                : (root.game.launching ? "启动中…" : "启动");
-                            button-width: 96px;
-                            button-enabled: !root.game.launching;
-                            clicked => { root.toggle-run(); }
+                        HorizontalLayout {
+                            spacing: 8px;
+                            // 二次确认那一步:一个「取消」退路,否则头一次点下去就没人
+                            // 知道怎么反悔(与「删除条目」一样)。
+                            if root.confirm-stop : StdButton {
+                                label: "取消";
+                                button-width: 68px;
+                                clicked => { root.stop-cancelled(); }
+                            }
+                            AccentButton {
+                                label: root.confirm-stop
+                                    ? "确认停止"
+                                    : (root.game.state != 0
+                                        ? "停止"
+                                        : (root.game.launching ? "启动中…" : "启动"));
+                                button-width: 96px;
+                                button-enabled: !root.game.launching;
+                                clicked => { root.toggle-run(); }
+                            }
                         }
                     }
                 }

@@ -1,7 +1,10 @@
 //! 自动追踪的端到端:「不是 kotori 启动的那一局也要跟」。
 //!
-//! 从 `session.rs` 拆出来(那边连着这两个测试会越过 500 行的软线)。测的是同一件事
-//! 的两面:**谁在跑要自己认出来**(用户 2026-09-20),以及**一个进程只归一款游戏**。
+//! 从 `session.rs` 拆出来(那边连着这几个测试会越过 500 行的软线)。测的是同一件事
+//! 的两面:**谁在跑要自己认出来**(用户 2026-09-20),以及**同一个 exe 只归一款游戏**。
+//!
+//! ⚠ 认人的凭据是进程的 **exe 完整路径**(不是名字),所以这里的"游戏"都是**真跑起来
+//! 的那个文件本身**,而不是一个空壳 exe 配一个另外起的进程。
 
 use std::time::{Duration, Instant};
 
@@ -15,27 +18,18 @@ fn auto_watch_follows_a_game_kotori_did_not_launch() {
     let mut fixture = Fixture::new("watch");
     fixture.start();
 
-    // A uniquely named copy of `sleep`, so the process name cannot collide with
-    // anything else on the machine.
-    let watched = fixture.dir.join("kotori-watched-proc");
-    std::fs::copy("/bin/sleep", &watched).expect("copy /bin/sleep");
-    let watched_name = watched.file_name().unwrap().to_string_lossy().to_string();
-
-    let game_dir = fixture.dir.join("WatchGame");
-    std::fs::create_dir_all(&game_dir).unwrap();
-    let exe = game_dir.join("game.exe");
-    std::fs::write(&exe, b"").unwrap();
+    // ⚠ **档案里的 exe 必须就是真跑起来的那个文件**:自动追踪认人的凭据是进程的
+    // exe 完整路径(用户 2026-09-20:任务管理器里那一栏就是它)。从前这里记的是一个
+    // 空的 `game.exe`、真跑的却是另一个名字 —— 那种"按名字认"的写法已经删掉了。
+    let exe = fixture.dir.join("kotori-watched-proc");
+    std::fs::copy("/bin/sleep", &exe).expect("copy /bin/sleep");
 
     let response = fixture.rpc(
         "game.create",
-        json!({ "name": "Watch Game", "exe_path": exe, "game_dir": game_dir }),
+        json!({ "name": "Watch Game", "exe_path": exe }),
     );
     assert_eq!(response["result"]["id"], "watch-game", "{response}");
-    let response = fixture.rpc(
-        "game.update",
-        json!({ "id": "watch-game", "auto_watch": true, "process_name": watched_name }),
-    );
-    assert_eq!(response["result"]["success"], true, "{response}");
+    // 什么都不用再设:新档案默认开着自动追踪,要认的进程名默认就是 exe 的文件名。
 
     // ⚠ 这里**故意不点「启动」**。自动追踪的意思就是"不是 kotori 启动的那一局
     // 也要跟"(用户 2026-09-20) —— 从前必须手点一次「启动」(那一按什么都不启动,
@@ -49,7 +43,7 @@ fn auto_watch_follows_a_game_kotori_did_not_launch() {
     assert_eq!(session_count(&fixture), 0, "还没开游戏,不该有会话");
 
     // Start the game ourselves — kotori never launches it.
-    let mut child = std::process::Command::new(&watched)
+    let mut child = std::process::Command::new(&exe)
         .arg("30")
         .spawn()
         .expect("spawn the watched process");
@@ -88,7 +82,7 @@ fn auto_watch_follows_a_game_kotori_did_not_launch() {
     // 进程走光之后解禁 —— 下一局照样自动跟(停止是"这一局",不是永久的)。
     child.kill().unwrap();
     child.wait().unwrap();
-    let mut child = std::process::Command::new(&watched)
+    let mut child = std::process::Command::new(&exe)
         .arg("30")
         .spawn()
         .expect("spawn the watched process again");
@@ -118,28 +112,46 @@ fn one_process_is_claimed_by_a_single_game() {
     let mut fixture = Fixture::new("claim");
     fixture.start();
 
-    let watched = fixture.dir.join("kotori-claim-proc");
-    std::fs::copy("/bin/sleep", &watched).expect("copy /bin/sleep");
-    let watched_name = watched.file_name().unwrap().to_string_lossy().to_string();
+    // 真跑起来的就是档案里那个 exe(见上一条测试的说明)。
+    let exe = fixture.dir.join("kotori-claim-proc");
+    std::fs::copy("/bin/sleep", &exe).expect("copy /bin/sleep");
+    let watched_name = exe.file_name().unwrap().to_string_lossy().to_string();
 
     let game_dir = fixture.dir.join("ClaimGame");
     std::fs::create_dir_all(&game_dir).unwrap();
-    let exe = game_dir.join("game.exe");
-    std::fs::write(&exe, b"").unwrap();
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "First", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "first", "{response}");
 
-    // 两款不同的游戏,盯同一个进程名(现实里是"exe 同名",这里是同一个名字)。
-    for (name, id) in [("First", "first"), ("Second", "second")] {
-        let response = fixture.rpc(
-            "game.create",
-            json!({ "name": name, "exe_path": exe, "game_dir": game_dir }),
-        );
-        assert_eq!(response["result"]["id"], id, "{response}");
-        let response = fixture.rpc(
-            "game.update",
-            json!({ "id": id, "auto_watch": true, "process_name": watched_name }),
-        );
-        assert_eq!(response["result"]["success"], true, "{response}");
-    }
+    // ① 同一个 exe **建不出第二条档案**(用户 2026-09-20:两条档案指着同一个 exe 会让
+    //    云端的版本历史分家,不如挡住)。错误里要说清撞的是谁。
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Second", "exe_path": exe, "game_dir": game_dir }),
+    );
+    let message = response["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("已经属于「First」"), "{response}");
+
+    // ② 旧配置里"两条档案指着同一个 exe"毕竟还可能出现(改 exe 那条路按用户的话先
+    //    搁置,没挡)。那时后台循环只能跟一条,而且必须在日志里说清 —— 否则一个进程
+    //    会开出两个会话,退出时会传两次存档。
+    //
+    //    这里就用"先建一条别的、再把 exe 改过来"复现那种旧配置:`watched_name` 只是
+    //    让它有个名字,判据始终是 exe 完整路径。
+    let other_exe = fixture.dir.join("kotori-claim-other");
+    std::fs::write(&other_exe, b"").unwrap();
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Second", "exe_path": other_exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "second", "{response}");
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "second", "exe_path": exe, "process_name": watched_name }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
 
     let session_count = |fixture: &Fixture| {
         fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
@@ -148,7 +160,7 @@ fn one_process_is_claimed_by_a_single_game() {
             .len()
     };
 
-    let mut child = std::process::Command::new(&watched)
+    let mut child = std::process::Command::new(&exe)
         .arg("30")
         .spawn()
         .expect("spawn the watched process");
@@ -167,7 +179,7 @@ fn one_process_is_claimed_by_a_single_game() {
         fixture.logs()
     );
     assert!(
-        fixture.logs().contains("同时匹配多款"),
+        fixture.logs().contains("已经被别的档案认领"),
         "歧义要在日志里说清楚:\n{}",
         fixture.logs()
     );
@@ -180,96 +192,7 @@ fn one_process_is_claimed_by_a_single_game() {
     );
 }
 
-/// 「跟这一局」:用户直接指一个 pid,精确到不会认错同名的另一款。
-///
-/// 名字给不了这种精确 —— 自动追踪那条路在同名时只能按 id 排序取第一个(见
-/// `one_process_is_claimed_by_a_single_game`);pid 是"就是这一个进程"。
-#[test]
-fn observing_one_pid_picks_exactly_that_game() {
-    let mut fixture = Fixture::new("observe");
-    fixture.start();
-
-    let watched = fixture.dir.join("kotori-observe-proc");
-    std::fs::copy("/bin/sleep", &watched).expect("copy /bin/sleep");
-    let watched_name = watched.file_name().unwrap().to_string_lossy().to_string();
-
-    let game_dir = fixture.dir.join("ObserveGame");
-    std::fs::create_dir_all(&game_dir).unwrap();
-    let exe = game_dir.join("game.exe");
-    std::fs::write(&exe, b"").unwrap();
-
-    // 两款游戏(名字一样、进程名也一样),谁都**没有**开自动追踪:这一局只由 pid 决定。
-    for (name, id) in [("First", "first"), ("Second", "second")] {
-        let response = fixture.rpc(
-            "game.create",
-            json!({ "name": name, "exe_path": exe, "game_dir": game_dir }),
-        );
-        assert_eq!(response["result"]["id"], id, "{response}");
-        let response = fixture.rpc(
-            "game.update",
-            json!({ "id": id, "auto_watch": false, "process_name": watched_name }),
-        );
-        assert_eq!(response["result"]["success"], true, "{response}");
-    }
-
-    let sessions = |fixture: &Fixture| -> Vec<String> {
-        fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|s| s["game_id"].as_str().unwrap_or("?").to_string())
-            .collect()
-    };
-
-    // 还没开游戏:没什么可跟的。不存在的 pid 要如实报错,别开出一个空会话。
-    let response = fixture.rpc("game.observe", json!({ "id": "first", "pid": 999_999 }));
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("已经不在了"),
-        "{response}"
-    );
-    assert!(sessions(&fixture).is_empty());
-
-    let mut child = std::process::Command::new(&watched)
-        .arg("30")
-        .spawn()
-        .expect("spawn the watched process");
-    let pid = child.id() as i64;
-
-    let response = fixture.rpc("game.observe", json!({ "id": "second", "pid": pid }));
-    assert!(
-        response["result"]["session_id"].is_string(),
-        "observe refused: {response}"
-    );
-    assert_eq!(
-        response["result"]["process_name"], watched_name,
-        "{response}"
-    );
-    assert_eq!(sessions(&fixture), vec!["second".to_string()], "{response}");
-
-    // 同一款再挑一次会被挡下(已经有一个会话在跟它了)。
-    let response = fixture.rpc("game.observe", json!({ "id": "second", "pid": pid }));
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("已经在跟"),
-        "{response}"
-    );
-
-    // 进程退出 → 会话结束(退出后上传就挂在这上面)。
-    child.kill().unwrap();
-    child.wait().unwrap();
-    assert!(
-        wait_until(Duration::from_secs(15), || sessions(&fixture).is_empty()),
-        "按 pid 跟的会话没有跟着进程结束\n--- daemon log ---\n{}",
-        fixture.logs()
-    );
-}
-
-/// `process.list`:两个入口(「跟这一局」「从进程添加游戏」)共用的候选列表。
+/// `process.list`:添加游戏页「从运行中的进程添加」的候选列表。
 ///
 /// 它必须**短**:只列看着像游戏的进程 —— 把上百个后台进程倒给用户等于什么也没说。
 /// 而每一条都要带着"能直接拿来用"的东西:PID(跟这一局)与 exe 路径(建条目)。

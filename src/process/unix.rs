@@ -4,6 +4,7 @@
 //! 那 15 字节的 `comm` 截断只存在于这一侧(坑见 `mod.rs` 文件头)。
 
 use super::{Pickable, ProcEntry, collect_descendants, is_plumbing, matches};
+use std::path::PathBuf;
 
 /// PIDs of running processes whose name matches `name`.
 pub fn find_pids(name: &str) -> Vec<i32> {
@@ -66,14 +67,15 @@ pub fn pickable() -> Vec<Pickable> {
             let argv0 = entry.cmdline.split('\0').next().unwrap_or_default().trim();
             let game_like =
                 name.to_lowercase().ends_with(".exe") || argv0.to_lowercase().ends_with(".exe");
-            // 相对路径要靠**进程自己的 cwd** 才能变成可用的路径,而 cwd 只在真要
-            // 挑进程时才读(快照那条路每 2 秒跑一次,不能顺手多读一遍)。
-            let cwd = std::fs::read_link(format!("/proc/{}/cwd", entry.pid)).ok();
+            // 相对路径要靠**进程自己的 cwd** 才能变成可用的路径,而 cwd 只在真要挑
+            // 进程时才读(快照那条路每 2 秒跑一次,不能顺手多读一遍);`then` 的闭包
+            // 因此是"真像游戏才去读"。
             game_like.then(|| Pickable {
                 pid: entry.pid,
                 name,
                 title: String::new(),
-                exe: unix_exe_path(argv0, cwd.as_deref().and_then(|dir| dir.to_str())),
+                exe: exe_path(entry.pid, &entry.cmdline)
+                    .map(|path| path.to_string_lossy().to_string()),
             })
         })
         .collect()
@@ -105,9 +107,17 @@ pub(super) fn unix_exe_path(argv0: &str, cwd: Option<&str>) -> Option<String> {
     (!rest.is_empty()).then(|| format!("/{rest}"))
 }
 
-/// 这个 pid 还活着吗?Linux 上就是"`/proc/<pid>` 还在不在"。
-pub fn pid_is_alive(pid: i32) -> bool {
-    std::path::Path::new(&format!("/proc/{pid}")).exists()
+/// 这个进程的 exe 完整路径:命令行首项(可能是 `Z:\…` / 相对路径)换成本机路径。
+///
+/// Linux 这边 `/proc/<pid>/exe` 不能用:跑 wine 游戏时它指向的是 **wine 载入器**,
+/// 不是游戏 —— 游戏的真实身份只能从 `argv[0]` 里读(wine 会把它改写成游戏自己的
+/// 路径)。相对路径要靠**进程自己的 cwd** 才拼得出来,所以这里读一次
+/// `/proc/<pid>/cwd`;`C:\…` 那种盘符在不知道是哪个 prefix 的情况下不猜(见
+/// [`unix_exe_path`])—— 那时返回 `None`,自动追踪就不认这个进程。
+pub fn exe_path(pid: i32, cmdline: &str) -> Option<PathBuf> {
+    let argv0 = cmdline.split('\0').next().unwrap_or_default().trim();
+    let cwd = std::fs::read_link(format!("/proc/{pid}/cwd")).ok();
+    unix_exe_path(argv0, cwd.as_deref().and_then(|dir| dir.to_str())).map(PathBuf::from)
 }
 
 /// `(pid, ppid, comm)` for every process this user can see. `comm` arrives

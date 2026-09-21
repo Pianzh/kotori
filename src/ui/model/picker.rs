@@ -1,8 +1,7 @@
-//! 「从正在运行的进程里挑」:候选、搜索词,以及"挑了之后拿它干什么"。
+//! 「从正在运行的进程里挑」:候选与搜索词。
 //!
-//! 两个入口共用**同一个浮层**(详情页的「跟当前这一局」与添加游戏页的「从进程添加」),
-//! 差别只在挑完那一下 —— 那就是 [`PickerPurpose`]。所以状态放在 `App` 上、浮层挂在
-//! 窗口根上(`app.slint`),而不是各页自己画一份。
+//! 它只服务添加游戏页那一条路(挑一个正在跑的进程 → 填成一条新档案),所以状态放在
+//! `App` 上、浮层挂在窗口根上(`app.slint`),而不是页面自己画一份。
 //!
 //! 候选是**打开时取的那一份快照**:过滤在内存里做。每敲一个字都去问一次 daemon 太吵,
 //! 而进程表本来就是"当时那一瞬"的东西。
@@ -33,25 +32,8 @@ impl ProcessRow {
     }
 }
 
-/// 挑一个进程之后拿它干什么。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PickerPurpose {
-    /// 详情页「跟当前这一局」:把 pid 填进那一栏,并**立刻**开始跟。
-    #[default]
-    FollowPid,
-    /// 添加游戏页:把名字 / exe / 根目录替用户填进那三个框。
-    NewGame,
-}
-
-impl PickerPurpose {
-    /// 浮层顶上那句话。
-    pub fn title(self) -> &'static str {
-        match self {
-            PickerPurpose::FollowPid => "挑一个进程去跟随",
-            PickerPurpose::NewGame => "挑一个进程添加成游戏",
-        }
-    }
-}
+/// 浮层顶上那句话(它只有一个用途:挑一个正在跑的进程,把它填成一条新档案)。
+pub const PICKER_TITLE: &str = "挑一个进程添加成游戏";
 
 /// 浮层的状态。
 #[derive(Debug, Default)]
@@ -64,19 +46,17 @@ pub(in crate::ui) struct ProcessPicker {
     open: bool,
     loading: bool,
     error: Option<String>,
-    purpose: PickerPurpose,
 }
 
 impl ProcessPicker {
     /// 打开浮层并挂上"取候选"的那一次请求(调用方负责发它)。
-    pub(in crate::ui) fn open(&mut self, purpose: PickerPurpose) {
+    pub(in crate::ui) fn open(&mut self) {
         self.open = true;
         self.loading = true;
         self.error = None;
         self.all.clear();
         self.filtered.clear();
         self.query.clear();
-        self.purpose = purpose;
     }
 
     pub(in crate::ui) fn close(&mut self) {
@@ -128,11 +108,7 @@ impl ProcessPicker {
     }
 
     pub(in crate::ui) fn title(&self) -> &'static str {
-        self.purpose.title()
-    }
-
-    pub(in crate::ui) fn purpose(&self) -> PickerPurpose {
-        self.purpose
+        PICKER_TITLE
     }
 
     /// 推给窗口的那一份(已经过滤过)。
@@ -187,7 +163,7 @@ mod tests {
     #[test]
     fn the_query_matches_every_clue_and_says_what_it_hid() {
         let mut picker = ProcessPicker::default();
-        picker.open(PickerPurpose::FollowPid);
+        picker.open();
         picker.loaded(rows());
         assert_eq!(picker.rows().len(), 2);
 
@@ -213,7 +189,7 @@ mod tests {
     #[test]
     fn picking_uses_the_filtered_index() {
         let mut picker = ProcessPicker::default();
-        picker.open(PickerPurpose::NewGame);
+        picker.open();
         picker.loaded(rows());
         picker.set_query("gael".into());
         assert_eq!(picker.row(0).unwrap().pid, 99);
@@ -224,12 +200,12 @@ mod tests {
     #[test]
     fn opening_again_starts_from_a_clean_slate() {
         let mut picker = ProcessPicker::default();
-        picker.open(PickerPurpose::FollowPid);
+        picker.open();
         picker.loaded(rows());
         picker.set_query("black".into());
         picker.close();
 
-        picker.open(PickerPurpose::NewGame);
+        picker.open();
         assert!(picker.rows().is_empty());
         assert_eq!(picker.query(), "");
         assert!(picker.loading(), "刚打开时是在读");

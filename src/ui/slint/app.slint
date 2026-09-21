@@ -103,16 +103,16 @@ export component AppWindow inherits Window {
     in-out property <string> saved-message: "";
     in-out property <bool> saved-ok: true;
     in-out property <bool> confirm-delete: false;
+    // 「停止」的二次确认(它会真的把游戏结束掉,见 `update::run`)。只对**会杀进程**
+    // 的那一局置它,观测会话点一下就停,不必吓人。
+    in-out property <bool> confirm-stop: false;
     // 启动方式(单游戏页):render 推,Switch 回写。
     in-out property <bool> game-direct-launch: false;
     in-out property <bool> game-auto-watch: false;
-    in-out property <string> game-follow-pid: "";
-    in-out property <bool> game-following: false;
     callback direct-launch-toggled(bool);
     callback auto-watch-toggled(bool);
     callback process-name-changed(string);
-    callback follow-pid-changed(string);
-    callback follow-this-run();
+    callback stop-cancelled();
     // 这个游戏的云存档状况(措辞由 Rust 拼好,见 render.rs 的 sync_line)
     in-out property <string> detail-sync-line: "";
     in-out property <bool> detail-sync-can-act: false;
@@ -324,10 +324,9 @@ export component AppWindow inherits Window {
                             saved-msg: root.saved-message;
                             saved-ok: root.saved-ok;
                             confirm-delete: root.confirm-delete;
+                            confirm-stop: root.confirm-stop;
                             game-direct-launch <=> root.game-direct-launch;
                             game-auto-watch <=> root.game-auto-watch;
-                            follow-pid <=> root.game-follow-pid;
-                            following: root.game-following;
                             sync-line: root.detail-sync-line;
                             sync-can-act: root.detail-sync-can-act;
                             sync-pending: root.detail-sync-pending;
@@ -344,8 +343,7 @@ export component AppWindow inherits Window {
                             direct-launch-toggled(value) => { root.direct-launch-toggled(value); }
                             auto-watch-toggled(value) => { root.auto-watch-toggled(value); }
                             process-name-changed(value) => { root.process-name-changed(value); }
-                            follow-pid-changed(value) => { root.follow-pid-changed(value); }
-                            follow-this-run => { root.follow-this-run(); }
+                            stop-cancelled => { root.stop-cancelled(); }
                             game-dir-changed(text) => { root.game-dir-changed(text); }
                             exe-changed(text) => { root.exe-changed(text); }
                             launch-args-changed(text) => { root.launch-args-changed(text); }

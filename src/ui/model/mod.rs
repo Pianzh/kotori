@@ -17,7 +17,7 @@ mod sync;
 
 pub use environment::{ConfigSource, WineStatus};
 pub use game::{SavePathDraft, UiGame};
-pub use picker::{PickerPurpose, ProcessRow};
+pub use picker::ProcessRow;
 pub use session::SessionInfo;
 pub use sync::{SyncGameRow, SyncStatus};
 

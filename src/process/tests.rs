@@ -93,13 +93,52 @@ fn command_line_paths_become_unix_paths() {
     assert_eq!(path(r"C:\Games\demo\game.exe", None), None);
 }
 
-/// 自己这个进程当然活着,`/proc` 里不存在的号则不是 —— 两边的平台实现都只是
-/// "查一下",所以这条在两个平台上都成立。
+/// 自己这个进程的 exe 完整路径拿得到,而且与 `current_exe()` 指的是同一个文件。
+#[cfg(unix)]
 #[test]
-fn pids_can_be_asked_who_is_alive() {
-    assert!(pid_alive(std::process::id() as i32));
-    assert!(!pid_alive(i32::MAX), "这么个号不该存在");
-    assert!(!pid_alive(0), "0 不是进程");
+fn a_process_reports_its_own_exe_path() {
+    let snapshot = Snapshot::take();
+    let own = std::process::id() as i32;
+    assert!(snapshot.has_pid(own), "自己的进程总该在快照里");
+    let me = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.pid == own)
+        .expect("刚查过,它就在里面");
+    let exe = me.exe_path().expect("自己的 exe 路径应该拿得到");
+    assert!(
+        crate::util::same_file(&exe, &std::env::current_exe().unwrap()),
+        "拿到的 {exe:?} 与 current_exe() 不是同一个文件"
+    );
+}
+
+/// **认人靠完整路径**:名字只是便宜的预筛,真正算数的是进程的 exe 是不是档案里那一个。
+/// 这条是"库里两款游戏都叫 `Game.exe`"那个坑的守门人 —— 名字一样、路径不一样的两款
+/// 不能互相认领(用户 2026-09-20:认错游戏会牵连存档同步)。
+#[cfg(unix)]
+#[test]
+fn the_exe_path_decides_which_game_is_running() {
+    let mut child = std::process::Command::new("/bin/sleep")
+        .arg("30")
+        .spawn()
+        .expect("spawn sleep");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !Snapshot::take().matches_exe("sleep", std::path::Path::new("/bin/sleep")) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "刚起的 sleep 没被认出来"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // 名字对得上,但 exe 不是档案里那一个 ⇒ 不算(这就是"另一个 Game.exe")。
+    assert!(!Snapshot::take().matches_exe("sleep", std::path::Path::new("/bin/true")));
+    // 路径对得上,名字对不上也不算(预筛那一层)。
+    assert!(!Snapshot::take().matches_exe("wineserver", std::path::Path::new("/bin/sleep")));
+
+    child.kill().unwrap();
+    child.wait().unwrap();
 }
 
 #[test]
@@ -186,22 +225,6 @@ async fn waiting_for_a_missing_process_returns_immediately() {
     let started = std::time::Instant::now();
     wait_until_gone("kotori-definitely-not-running").await;
     assert!(started.elapsed() < std::time::Duration::from_millis(500));
-}
-
-/// 自动追踪靠它回答"这一款是不是已经有会话了":会话里记的名字来自配置或 exe
-/// 文件名,两个写法都得能对上,而空名字不许跟任何东西相等(否则第一次轮询就会
-/// 把每个游戏都当成"已经在跟")。
-#[test]
-fn two_spellings_of_the_same_process_name_match() {
-    assert!(same_name("game.exe", "C:\\games\\demo\\game.exe"));
-    assert!(same_name("Game.EXE", "game.exe"));
-    // `/proc/<pid>/comm` 只留 15 字节,长名字在进程表里就是这个截断形式
-    // (名字全是 ASCII,所以按字节切与内核一致)。
-    let long = "VeryLongGameName.exe";
-    assert!(same_name(long, &long[..15]));
-    assert!(!same_name("game.exe", "game2.exe"));
-    assert!(!same_name("", "game.exe"));
-    assert!(!same_name("game.exe", ""));
 }
 
 #[test]

@@ -4,8 +4,10 @@
 use super::super::*;
 // `SettingsPatch` 住在 `sync_rpc` 自己那一层（`pub(super)`），不随 `daemon::*` 过来。
 use crate::config::{Config, GameConfig, SavePath, ScaleProfile};
+use crate::secrets::Keyring;
+#[cfg(unix)]
+use crate::secrets::SecretKey;
 use crate::secrets::testing::FakeTool;
-use crate::secrets::{Keyring, SecretKey};
 use std::path::PathBuf;
 
 /// Send a raw JSON-RPC request through the real dispatcher.

@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -466,8 +466,7 @@ impl ScaleEngine for GamescopeScaleEngine {
             });
 
         // 把这个 prefix 记进数据目录:万一这一局之后我们没机会收尾(daemon 被 SIGKILL、
-        // 或者被另一个实例顶掉),下一个 daemon 至少能在关机时把它关干净
-        // (见 `wine_prefixes`)。收尾那条路照旧走 `close_wine`。
+        // 被另一个实例顶掉),下一个 daemon 至少能在关机时把它关干净(见 `wine_prefixes`)。
         if let Some(prefix) = spec.wine_prefix {
             crate::wine_prefixes::record(prefix);
         }
@@ -481,7 +480,7 @@ impl ScaleEngine for GamescopeScaleEngine {
             started_at: std::time::Instant::now(),
             process_group: Some(pgid),
             process_name: spec.process_name.map(str::to_string),
-            follow_pid: None,
+            exe_path: Some(PathBuf::from(spec.exe)),
             output_size: spec.profile.output_size_for(screen),
             wine_prefix: spec.wine_prefix.map(Path::to_path_buf),
             watch_only: false,

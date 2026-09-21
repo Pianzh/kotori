@@ -54,6 +54,8 @@ pub enum Message {
     /// 那一颗「启动 / 停止」按钮(同一颗按钮两种时候):该启动还是该停,由 Rust 看
     /// 会话表决定(见 `App::run_action`)—— 文案与动作出自同一个判断。
     ToggleRun(String),
+    /// 「停止」的二次确认里用户按了取消(那颗按钮会真的把游戏结束掉,所以问一次)。
+    StopCancelled,
     LaunchDone(Result<Value, String>),
     GameSelected(String),
     BackToList,
@@ -69,13 +71,9 @@ pub enum Message {
     AutoWatchToggled(bool),
     /// 详情页「跟随的进程」那一栏(存进配置的进程名)。
     ProcessNameChanged(String),
-    /// 详情页「跟这一局」那一栏里那个 pid 框(只对这一次运行有意义,不进草稿)。
-    FollowPidChanged(String),
-    /// 点「跟这一局」。
-    FollowThisRun,
-    FollowDone(Result<String, String>),
-    /// 打开「从运行中的进程里挑」浮层(两个入口共用,差别在 `PickerPurpose`)。
-    ProcessPickerOpen(PickerPurpose),
+    /// 打开「从运行中的进程里挑」浮层(添加游戏页那个入口:挑一个正在跑的进程,
+    /// 把它变成一条新档案)。
+    ProcessPickerOpen,
     /// 候选到了(打开时那一次 `process.list`)。
     ProcessesLoaded(Result<Vec<ProcessRow>, String>),
     ProcessQueryChanged(String),

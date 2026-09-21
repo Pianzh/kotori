@@ -1,7 +1,7 @@
 // 「从正在运行的进程里挑」:居中的浮层(搜索框 + 可滚动列表)。
 //
-// 两个入口共用同一份列表 —— 详情页的「跟当前这一局（PID）」与添加游戏页的
-// 「从运行中的进程添加」 —— 所以它挂在**窗口根上**(app.slint),而不是各页自己画。
+// 它只服务一个入口 —— 添加游戏页的「从运行中的进程添加」—— 所以挂在**窗口根上**
+// (app.slint),而不是各页自己画。
 //
 // 为什么居中而不是下拉:下拉要把触发控件的 `absolute-position` 传上来当锚点,两个宿主
 // 各传一次,写错了浮层就跑到屏幕外面,而这件事没有任何检查能拦住;居中没有这个自由度。
@@ -32,8 +32,7 @@ export global ProcessPickerState {
     callback query-changed(string);
     callback picked(int);
     callback closed();
-    // 两个入口:页面那颗按钮直接喊这里,不必再经窗口转发。
-    callback pick-for-follow();
+    // 添加游戏页那颗按钮直接喊这里,不必再经窗口转发。
     callback pick-for-new-game();
 }
 
@@ -145,7 +144,7 @@ export component ProcessPicker inherits Rectangle {
 
             Divider { }
             Text {
-                text: "「跟这一局」用 PID 认这一次运行;「添加游戏」用 exe 路径建一条档案。PID 只对当前这一局有效,进程一退就作废。";
+                text: "挑中的进程会用它的 exe 路径建一条新档案 —— 档案认人也是靠这个完整路径。";
                 font-size: 11px;
                 color: Tokens.text-3;
                 wrap: word-wrap;

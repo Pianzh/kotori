@@ -18,21 +18,25 @@ use tokio::sync::{RwLock, broadcast};
 
 use super::{LaunchSpec, ScaleError, ScaleSession, SessionEvent, SessionKind};
 use crate::process;
+// wine 那套只在 unix 侧:Windows 的直启是裸 exe,没有"我们启动的是哪个 wine"这件事。
+#[cfg(unix)]
 use crate::util::executor::find_binary;
 
 type Sessions = Arc<RwLock<HashMap<String, ScaleSession>>>;
 type Events = broadcast::Sender<SessionEvent>;
 
-/// 这一局跟着**谁**。两种钥匙各有各的用处,所以都留着:
+/// 这一局跟着**谁**。
 ///
-/// * [`Follow::Name`] —— 名字。能存进配置、下一局还认得出来,是"自动追踪"那条路;
-/// * [`Follow::Pid`] —— 用户从运行中的进程里挑的那**一个**。名字给不了这种精确:
-///   两款游戏都叫 `Game.exe` 时,只有 pid 说得清现在跑的是哪一款。代价是它只对这一次
-///   运行有意义(进程一退,号迟早会被内核发给别人),所以它不进配置。
+/// * [`Follow::Name`] —— 名字。kotori **自己启动**的那一局用它:exe 是我们挑的,进程
+///   表里那个名字够判断"它还在不在"了(启动器交接时真游戏顶着同一个名字继续跑)。
+/// * [`Follow::Exe`] —— exe 的**完整路径**。自动追踪那条路用它:游戏不是我们启动的,
+///   光凭名字分不清"库里两款都叫 `Game.exe`"的游戏是哪一个(用户 2026-09-20),
+///   而认错一款游戏会牵连它的存档同步。完整路径里已经含了 exe 名与 exe 目录,所以
+///   比一次就够。
 #[derive(Debug, Clone)]
 pub(super) enum Follow {
     Name(String),
-    Pid { pid: i32, name: String },
+    Exe { name: String, exe: PathBuf },
 }
 
 impl Follow {
@@ -40,7 +44,7 @@ impl Follow {
     fn alive(&self) -> bool {
         match self {
             Follow::Name(name) => process::is_running(name),
-            Follow::Pid { pid, .. } => process::pid_alive(*pid),
+            Follow::Exe { name, exe } => process::Snapshot::take().matches_exe(name, exe),
         }
     }
 
@@ -48,8 +52,7 @@ impl Follow {
     fn label(&self) -> String {
         match self {
             Follow::Name(name) => name.clone(),
-            Follow::Pid { pid, name } if name.is_empty() => format!("pid {pid}"),
-            Follow::Pid { pid, name } => format!("{name}（pid {pid}）"),
+            Follow::Exe { name, exe } => format!("{name}（{}）", exe.display()),
         }
     }
 
@@ -57,8 +60,7 @@ impl Follow {
     fn display_name(&self) -> String {
         match self {
             Follow::Name(name) => name.clone(),
-            Follow::Pid { pid, name } if name.is_empty() => format!("pid {pid}"),
-            Follow::Pid { name, .. } => name.clone(),
+            Follow::Exe { name, .. } => name.clone(),
         }
     }
 }
@@ -66,22 +68,24 @@ impl Follow {
 /// Track a game the user starts themselves: kotori launches nothing, the
 /// session simply follows one process for as long as it runs.
 ///
-/// **调用方必须是"已经看到它在跑"的那一方**(`daemon::watch` 按名字,或用户从
-/// 运行中的进程里挑了一个 pid)。
+/// **调用方必须是"已经看到它在跑"的那一方**(`daemon::watch` 按 exe 完整路径认出
+/// 之后才开的会话)。
 pub(super) async fn start_watch_session(
     sessions: &Sessions,
     events: &Events,
     spec: &LaunchSpec<'_>,
 ) -> Result<ScaleSession, ScaleError> {
     let name = spec.process_name.unwrap_or_default().trim().to_string();
-    let follow = match spec.follow_pid {
-        Some(pid) => Follow::Pid { pid, name },
-        None if !name.is_empty() => Follow::Name(name),
-        None => {
-            return Err(ScaleError::ProtocolError(
-                "观测会话必须知道要盯哪个进程名(或者一个 pid)".to_string(),
-            ));
-        }
+    // `exe` 在这条路上是**身份**而不是要启动的东西(见 `LaunchSpec::watch_only`)。
+    let exe = PathBuf::from(spec.exe);
+    if name.is_empty() || exe.as_os_str().is_empty() {
+        return Err(ScaleError::ProtocolError(
+            "观测会话必须知道要盯哪个 exe（档案里那个完整路径）".to_string(),
+        ));
+    }
+    let follow = Follow::Exe {
+        name,
+        exe: exe.clone(),
     };
 
     let session = ScaleSession {
@@ -95,7 +99,7 @@ pub(super) async fn start_watch_session(
         started_at: std::time::Instant::now(),
         process_group: None,
         process_name: Some(follow.display_name()),
-        follow_pid: spec.follow_pid,
+        exe_path: Some(exe),
         output_size: (0, 0),
         // Nothing was launched, so there is no prefix of ours to close.
         wine_prefix: None,
@@ -190,10 +194,11 @@ pub(super) async fn start_direct_session(
         profile: spec.profile.clone(),
         runtime_ratio: 1.0,
         started_at: std::time::Instant::now(),
-        // Windows 没有进程组:没有可以一锅端的东西,停止 = 不再跟踪。
+        // Windows 没有进程组:`process_group` 是 `None`,那边的「停止」靠
+        // `process::kill_tree` 走一遍后代(见 `unsupported::stop_session`)。
         process_group: if cfg!(unix) { Some(pid) } else { None },
         process_name: name.clone(),
-        follow_pid: None,
+        exe_path: Some(PathBuf::from(spec.exe)),
         output_size: (0, 0),
         wine_prefix: if cfg!(unix) {
             spec.wine_prefix.map(Path::to_path_buf)
@@ -297,6 +302,10 @@ fn spawn_watch_task(
     prefix: Option<PathBuf>,
 ) {
     tokio::spawn(async move {
+        // 这个 prefix 只有 unix 侧收尾时用(`close_wine`)——Windows 上游戏是我们
+        // 直接 spawn 的,没有 wine 那一摊要关,参数因此在那一边"没人读"。
+        #[cfg(not(unix))]
+        let _ = prefix;
         if let Some(mut child) = child {
             match child.wait().await {
                 Ok(status) => {
@@ -307,12 +316,12 @@ fn spawn_watch_task(
         }
 
         // 两条路共用的收尾:等它走光。启动器交接时,我们启动的那个先退,真游戏顶着
-        // 这个名字还在跑 —— 所以这一步对直启不是多余的。按 pid 跟的那种不做交接
-        // 推断:用户指的就是那一个进程,它没了这一局就结束。
+        // 这个名字还在跑 —— 所以这一步对直启不是多余的。自动追踪那条路跟的是
+        // **exe 完整路径**(`Follow::Exe`):那一款游戏的进程真的没了,这一局才算结束。
         // 名字是空的 = 这一局连"跟谁"都没有(直启且 exe 名都取不出来),直接收尾。
         let watchable = match &follow {
             Follow::Name(name) => !name.is_empty(),
-            Follow::Pid { .. } => true,
+            Follow::Exe { .. } => true,
         };
         if watchable {
             loop {

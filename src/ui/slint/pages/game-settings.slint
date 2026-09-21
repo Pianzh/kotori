@@ -48,6 +48,8 @@ export component GameSettingsPage inherits Rectangle {
     in property <string> saved-msg: "";
     in property <bool> saved-ok: true;
     in property <bool> confirm-delete: false;
+    // 「停止」的二次确认(只在**会杀进程**的那一局为真,见 `update::run`)。
+    in property <bool> confirm-stop: false;
     // 云存档:这一款游戏的状况与两个动作(措辞由 Rust 拼,见 render.rs 的 sync_line)
     in property <string> sync-line: "";
     in property <bool> sync-can-act: false;
@@ -68,8 +70,7 @@ export component GameSettingsPage inherits Rectangle {
     callback direct-launch-toggled(bool);
     callback auto-watch-toggled(bool);
     callback process-name-changed(string);
-    callback follow-pid-changed(string);
-    callback follow-this-run();
+    callback stop-cancelled();
 
     callback game-dir-changed(string);
     callback exe-changed(string);
@@ -123,10 +124,6 @@ export component GameSettingsPage inherits Rectangle {
     in-out property <string> gamescope-args: "";
     // 自动追踪盯的进程名(存配置);空 = 按 exe 文件名认。
     in-out property <string> process-name: "";
-    // 「跟这一局」要跟的 pid。**不进配置、也不进草稿** —— 它只对这一次运行有意义,
-    // 页面自己拿着,点了那颗按钮才发给 Rust(见 `follow-this-run`)。
-    in-out property <string> follow-pid: "";
-    in property <bool> following: false;
 
     function seed-copy() {
         root.game-dir = root.stored.game-dir;
@@ -172,8 +169,10 @@ export component GameSettingsPage inherits Rectangle {
             // ── 头部:返回 + 游戏名 + 动作 ──────────────────────────────
                 GameHeader {
                     game: root.game;
+                    confirm-stop: root.confirm-stop;
                     back => { root.back(); }
                     toggle-run => { root.toggle-run(); }
+                    stop-cancelled => { root.stop-cancelled(); }
                 }
 
             // ── 路径 ──────────────────────────────────────────────────
@@ -244,13 +243,9 @@ export component GameSettingsPage inherits Rectangle {
                 game-direct-launch: root.game-direct-launch;
                 game-auto-watch: root.game-auto-watch;
                 process-name <=> root.process-name;
-                follow-pid <=> root.follow-pid;
-                following: root.following;
                 direct-launch-toggled(v) => { root.direct-launch-toggled(v); }
                 auto-watch-toggled(v) => { root.auto-watch-toggled(v); }
                 process-name-changed(v) => { root.process-name-changed(v); }
-                follow-pid-changed(v) => { root.follow-pid-changed(v); }
-                follow-this-run => { root.follow-this-run(); }
             }
 
             // ── 缩放 ──────────────────────────────────────────────────

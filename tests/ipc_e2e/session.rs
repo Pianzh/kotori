@@ -71,17 +71,16 @@ fn manual_add_and_wine_settings_over_ipc() {
     assert!(created["scale_profile"]["output_width"].is_null());
     assert!(created["scale_profile"]["output_height"].is_null());
 
-    // A duplicate name is no longer refused (2026-09-19: two entries for one
-    // game are legal — "警告但不阻止"): the second one gets a suffixed id and
-    // the response carries a warning about the shared exe.
+    // ⚠ 同一个 exe 的第二条档案被**拒绝**了(用户 2026-09-20 改的主意:从前是
+    // 「警告但不阻止」,他后来认定"两条档案指着同一个 exe"会给云同步留下说不清的
+    // 坑 —— 版本历史按档案分开存、观测同一个进程时分不清谁在跑)。判据是 exe 这个
+    // 文件,不是名字,所以改个名字照样被挡。
     let response = fixture.rpc(
         "game.create",
-        json!({ "name": "My Game", "exe_path": exe, "game_dir": game_dir }),
+        json!({ "name": "My Game Again", "exe_path": exe, "game_dir": game_dir }),
     );
-    assert_eq!(response["result"]["id"], "my-game-2", "{response}");
-    let warning = response["result"]["warning"].as_str().unwrap().to_string();
-    assert!(warning.contains("My Game"), "{warning}");
-    assert!(warning.contains("允许"), "{warning}");
+    let message = response["error"]["message"].as_str().unwrap_or_default();
+    assert!(message.contains("已经属于「My Game」"), "{response}");
     // A missing exe and a bad game dir are still refused.
     let response = fixture.rpc(
         "game.create",
@@ -127,11 +126,14 @@ fn manual_add_and_wine_settings_over_ipc() {
         "自动追踪不该挡住启动:{response}"
     );
 
-    // 没写进程名也不报错:自动追踪按 exe 文件名认人(`GameConfig::watch_name`),
-    // 认出与否由后台那圈轮询决定(那条路见 `auto_watch_follows_...`)。
+    // 没写进程名也不报错:自动追踪按 exe 文件名认人(见 `GameConfig::watch_name`),
+    // 而"是不是它"由完整路径说了算;认出与否由后台那圈轮询决定(见 `watch.rs` 的 e2e)。
+    // ⚠ 这里必须换一个**真的 exe 文件**:同一个 exe 建第二条档案现在会被挡住。
+    let other_exe = game_dir.join("Other.exe");
+    std::fs::write(&other_exe, b"").unwrap();
     let response = fixture.rpc(
         "game.create",
-        json!({ "name": "Watchless", "exe_path": exe, "game_dir": game_dir }),
+        json!({ "name": "Watchless", "exe_path": other_exe, "game_dir": game_dir }),
     );
     assert_eq!(response["result"]["id"], "watchless", "{response}");
     let response = fixture.rpc(

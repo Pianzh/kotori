@@ -89,19 +89,6 @@ impl Daemon {
                 Ok(game_id) => respond(id, self.rpc_game_launch(game_id).await),
                 Err(e) => rpc_err(id, -32602, e),
             },
-            "game.observe" => match (
-                param_str(&req.params, "id"),
-                req.params
-                    .as_ref()
-                    .and_then(|p| p.get("pid"))
-                    .and_then(|v| v.as_i64()),
-            ) {
-                (Ok(game_id), Some(pid)) => {
-                    respond(id, self.rpc_game_observe(game_id, pid as i32).await)
-                }
-                (Err(e), _) => rpc_err(id, -32602, e),
-                (_, None) => rpc_err(id, -32602, "缺少参数: pid".to_string()),
-            },
             "game.wait" => match param_str(&req.params, "session_id") {
                 Ok(sid) => respond(id, self.rpc_game_wait(sid).await),
                 Err(e) => rpc_err(id, -32602, e),

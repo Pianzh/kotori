@@ -95,14 +95,23 @@ impl Daemon {
         };
 
         self.mutate_config(|config| {
-            // 同名冲突在 `generate_unique_game_id` 里已经用后缀解决了 —— 同一款
-            // 游戏建两条档案是合法需求,报错只会把它挡在门外。id 在写锁内生成,
-            // 两个并发 create 不会抢到同一个。
+            // ⚠ **同一个 exe 只许有一条档案**(用户 2026-09-20 改的主意:从前是
+            // 「警告但不阻止」,他后来认定它会给云同步留下说不清的坑 —— 版本历史
+            // 按档案分开存、两条档案观测同一个进程。"能保证不出问题"之前,挡住更省事)。
+            let owner = crate::game::exe_owner(config, &new_game.exe_path, None);
+            if let Some(owner) = owner {
+                return Err(format!(
+                    "可执行文件已经属于「{owner}」：同一个 exe 只能建一条档案\
+                     （两条档案会让云端的版本历史分家、观测同一个进程时分不清谁在跑）"
+                ));
+            }
+            // 同名冲突在 `generate_unique_game_id` 里已经用后缀解决了 —— 同一款游戏
+            // 改名建两条是合法需求,报错只会把它挡在门外。id 在写锁内生成,两个并发
+            // create 不会抢到同一个。
             let id = crate::game::generate_unique_game_id(config, &name);
             if id.is_empty() {
                 return Err("这个名称无法生成合法的游戏 ID，请换一个".to_string());
             }
-            let warning = crate::game::duplicate_exe_warning(config, &new_game.exe_path, None);
             config.games.insert(
                 id.clone(),
                 crate::config::GameConfig {
@@ -120,16 +129,8 @@ impl Daemon {
                     created_at: chrono::Utc::now(),
                 },
             );
-            if let Some(text) = &warning {
-                tracing::info!("game.create: {id} (duplicate exe warning: {text})");
-            } else {
-                tracing::info!("game.create: {id}");
-            }
-            let mut result = json!({ "id": id, "name": name });
-            if let Some(text) = warning {
-                result["warning"] = json!(text);
-            }
-            Ok(result)
+            tracing::info!("game.create: {id}");
+            Ok(json!({ "id": id, "name": name }))
         })
         .await
     }
@@ -265,7 +266,6 @@ impl Daemon {
             wine_prefix: Some(&wine_prefix),
             profile: &game.scale_profile,
             process_name: game.process_name.as_deref(),
-            follow_pid: None,
             watch_only: false,
             direct_launch: game.direct_launch,
         };
@@ -283,69 +283,6 @@ impl Daemon {
             "wine_prefix": wine_prefix,
             "prefix_source": prefix_source.label(),
             "sync_pull": pulled,
-        }))
-    }
-
-    /// 「跟这一局」:用户从运行中的进程里挑了一个 pid,让它当这一款游戏的那一局。
-    ///
-    /// 与配置里那个 `process_name` 的分工:[`super::watch`] 按名字自己认(名字能存进
-    /// 配置、下一局还认得出来),而 pid **只对这一次运行有意义**——但它精确到不会认错
-    /// 同名的另一款(用户库里两款 exe 都叫 `Game.exe`)。
-    ///
-    /// 不写配置:用户没说要让这件事持久化。会话的结束照旧发 `Ended`,退出后上传因此
-    /// 与别的观测会话完全一样。
-    pub(super) async fn rpc_game_observe(&self, id: &str, pid: i32) -> Result<Value, String> {
-        let (game_dir, profile) = {
-            let config = self.config.read().await;
-            let Some(game) = config.games.get(id) else {
-                return Err(format!("配置中找不到游戏: {id}"));
-            };
-            (game.effective_game_dir(), game.scale_profile.clone())
-        };
-
-        // 先确认它真的还在:pid 是用户从列表里挑的,而列表可能已经放了一会儿。
-        let snapshot = crate::process::Snapshot::take();
-        let Some(name) = snapshot.name_of(pid).filter(|name| !name.is_empty()) else {
-            return Err(format!("进程 {pid} 已经不在了，列表可能过期了"));
-        };
-
-        if let Some(session) = self
-            .engine
-            .list_sessions()
-            .await
-            .iter()
-            .find(|session| session.game_id.as_deref() == Some(id))
-        {
-            return Err(format!(
-                "这一款已经在跟了（会话 {}），先停掉它再挑",
-                session.session_id
-            ));
-        }
-
-        let spec = LaunchSpec {
-            game_id: id,
-            exe: "",
-            args: &[],
-            game_dir: &game_dir,
-            wine_prefix: None,
-            profile: &profile,
-            process_name: Some(&name),
-            follow_pid: Some(pid),
-            watch_only: true,
-            direct_launch: false,
-        };
-        let session = self
-            .engine
-            .start_session(&spec)
-            .await
-            .map_err(|e| e.to_string())?;
-
-        tracing::info!("game.observe: {id} 跟住 {name}（pid {pid}）");
-        Ok(json!({
-            "session_id": session.session_id,
-            "process_name": name,
-            "pid": pid,
-            "game_dir": game_dir,
         }))
     }
 
@@ -370,16 +307,13 @@ impl Daemon {
         if session.watch_only
             && let Some(game_id) = &session.game_id
         {
-            // 按 pid 跟的那种会话直接记那一个号;按名字跟的记"这一刻这个名字有哪几个
-            // pid"。两者都是"这一局别再认回来"的凭据(见 `Daemon::ignored_watch`)。
-            let pids = match session.follow_pid {
-                Some(pid) => vec![pid],
-                None => session
-                    .process_name
-                    .as_deref()
-                    .map(crate::process::find_pids)
-                    .unwrap_or_default(),
-            };
+            // 记的是"停的那一刻这个名字有哪几个 pid":游戏退出后用户重开拿到的是新
+            // pid,于是下一局照旧被自动追踪(见 `Daemon::ignored_watch`)。
+            let pids = session
+                .process_name
+                .as_deref()
+                .map(crate::process::find_pids)
+                .unwrap_or_default();
             self.ignored_watch
                 .write()
                 .await

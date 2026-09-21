@@ -1,5 +1,9 @@
 //! Process detection:回答「这个游戏还在跑吗、它的进程树里都有谁」。
 //!
+//! **认人靠 exe 的完整路径**(`ProcEntry::exe_path` + `crate::util::same_file`),名字
+//! 只当便宜的预筛 —— 库里两款游戏都叫 `Game.exe` 时,名字分不清谁是谁,而存档同步
+//! 认错了游戏是要出事的(用户 2026-09-20)。
+//!
 //! 按平台拆成两个实现(`unix.rs` 轮询 `/proc`,`windows.rs` 打一份 Toolhelp 快照),
 //! 匹配逻辑与「游戏 vs wine 管道进程」的判定留在本文件 —— 它们平台无关,测试也
 //! 因此两边都能跑。对外的函数签名与拆分前一致,调用点一行都不用改。
@@ -15,15 +19,22 @@
 //! the snapshot reports the full exe name — and simply passes it as `comm`.)
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 #[cfg(unix)]
 mod unix;
 #[cfg(unix)]
-pub use unix::{descendants, find_pids, live_game_processes, pickable, pid_is_alive, snapshot};
+pub use unix::{descendants, exe_path, find_pids, live_game_processes, pickable, snapshot};
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{descendants, find_pids, live_game_processes, pickable, pid_is_alive, snapshot};
+pub use windows::kill_tree;
+#[cfg(windows)]
+pub use windows::{exe_path, find_pids, pickable, snapshot};
+// ⚠ Windows 侧的 `descendants` 只有**测试**要(`kill_tree` 在自己模块里直接调它,
+//    而收尾那条游戏进程树的路是 unix 的 `teardown`),所以它只在 test 构建里再导出。
+#[cfg(all(windows, test))]
+pub use windows::descendants;
 
 /// `C:\games\x\Game.exe` / `/usr/bin/wine` -> `game.exe` / `wine`
 pub fn normalize_process_name(name: &str) -> String {
@@ -99,6 +110,15 @@ impl ProcEntry {
         matches(name, &self.name, &self.cmdline)
     }
 
+    /// 这个进程的 exe **完整路径** —— 与任务管理器「详细信息」里那一栏同一个来源。
+    ///
+    /// 拿不到就是 `None`(`unix.rs` / `windows.rs` 各自写清了什么时候拿不到):它
+    /// 只说明"认不出这是不是档案里那个 exe",不是错误。判断"是不是同一个文件"交给
+    /// [`crate::util::same_file`] —— 同一个文件可以有多种写法。
+    pub fn exe_path(&self) -> Option<PathBuf> {
+        exe_path(self.pid, &self.cmdline)
+    }
+
     /// **显示给用户**的名字。
     ///
     /// 优先命令行首项的文件名:它是完整的。平台报的那个 `comm` 在 Linux 上只留
@@ -138,26 +158,38 @@ impl Snapshot {
         }
     }
 
-    /// 有没有哪个进程匹配 `name`?规则与 [`is_running`] 完全一致([`matches`])。
-    pub fn matches(&self, name: &str) -> bool {
-        self.entries.iter().any(|entry| entry.matches(name))
+    /// 这个 pid 现在还在进程表里吗?
+    ///
+    /// 只给测试用(`#[cfg(test)]`):产品代码问的是"这一款游戏还在不在",那是
+    /// [`Snapshot::matches_exe`] 的事;测试问的是"这个进程死了没有",就是这个。
+    #[cfg(test)]
+    pub fn has_pid(&self, pid: i32) -> bool {
+        self.entries.iter().any(|entry| entry.pid == pid)
     }
 
-    /// 这个 pid 现在叫什么名字(给用户看的那一份,见 [`ProcEntry::display_name`])?
-    /// 不在表里就是"它已经不在了"。
-    pub fn name_of(&self, pid: i32) -> Option<String> {
+    /// 有没有哪个进程**就是** `exe` 这一个可执行文件?
+    ///
+    /// `name` 只是**便宜的预筛**:先按名字滤掉绝大多数进程,免得给每个进程都去读
+    /// 一次 `/proc/<pid>/cwd`(或开一个句柄)。真正算数的是完整路径 —— 库里两款游戏
+    /// 都叫 `Game.exe` 时,名字分不清,路径分得清(用户 2026-09-20:自动追踪的凭据
+    /// 是 exe 目录 + exe 文件名,而这两样合起来就是完整路径)。
+    pub fn matches_exe(&self, name: &str, exe: &Path) -> bool {
         self.entries
             .iter()
-            .find(|entry| entry.pid == pid)
-            .map(ProcEntry::display_name)
+            .filter(|entry| entry.matches(name))
+            .any(|entry| {
+                entry
+                    .exe_path()
+                    .is_some_and(|path| crate::util::same_file(&path, exe))
+            })
     }
 }
 
 /// 「从正在运行的进程里挑」的一个候选。
 ///
-/// 两个地方共用同一份列表:详情页的「跟当前这一局(PID)」,以及添加游戏页的
-/// 「从运行中的进程添加」。列表**刻意短**:不是把上百个进程倒给用户,而是只留
-/// 那些"看着像游戏"的(Windows 侧 = 有可见顶层窗口的进程,Linux 侧 = `.exe`)。
+/// 给添加游戏页的「从运行中的进程添加」用:列表**刻意短**,不是把上百个进程倒给
+/// 用户,而是只留那些"看着像游戏"的(Windows 侧 = 有可见顶层窗口的进程,Linux 侧
+/// = `.exe`)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Pickable {
     pub pid: i32,
@@ -182,28 +214,6 @@ pub fn pickable_processes() -> Vec<Pickable> {
             .then_with(|| left.pid.cmp(&right.pid))
     });
     found
-}
-
-/// 这个 pid 现在还活着吗?
-///
-/// 与 [`is_running`] 的区别在**钥匙**:名字能存进配置、下一局还认得出来,而 pid 只对
-/// 当前这一次运行有意义(进程一退,内核迟早会把这个号发给别人)。"从运行中的进程里挑"
-/// 那条路用它 —— 用户指的就是"现在跑着的那一个",精确到不会认错同名的另一款。
-pub fn pid_alive(pid: i32) -> bool {
-    pid > 0 && pid_is_alive(pid)
-}
-
-/// 两个名字是不是"同一个进程"?按 [`matches`] 那套规矩比(去掉目录、大小写不敏感、
-/// 也认 15 字节截断形式)。
-///
-/// 给"自动追踪"那条路用:它要在**会话表**里认出"这一款已经有会话了",而会话里记的
-/// 进程名可能来自配置(`process_name`),也可能是 exe 文件名 —— 两者都得能对上。
-pub fn same_name(left: &str, right: &str) -> bool {
-    let left = normalize_process_name(left);
-    let right = normalize_process_name(right);
-    !left.is_empty()
-        && !right.is_empty()
-        && (left == right || left == truncated(&right) || right == truncated(&left))
 }
 
 /// Poll interval used while waiting for a watched game.
