@@ -30,6 +30,11 @@ pub(super) fn daemon_config() -> Config {
 }
 
 pub(super) fn daemon(keyring: Keyring) -> Daemon {
+    daemon_at(keyring).0
+}
+
+/// 同上，但把配置文件的路径也交出来 —— 单测要断言"写下去的东西真的落盘了"。
+pub(super) fn daemon_at(keyring: Keyring) -> (Daemon, PathBuf) {
     let mut config = Config::default();
     config.sync.enabled = true;
     config.sync.endpoint = String::new();
@@ -37,6 +42,7 @@ pub(super) fn daemon(keyring: Keyring) -> Daemon {
     config.games.insert(
         "demo".into(),
         GameConfig {
+            cloud_id: None,
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),
@@ -57,7 +63,11 @@ pub(super) fn daemon(keyring: Keyring) -> Daemon {
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
-    Daemon::with_keyring(config, keyring).with_config_path(dir.join("config.toml"))
+    let path = dir.join("config.toml");
+    (
+        Daemon::with_keyring(config, keyring).with_config_path(path.clone()),
+        path,
+    )
 }
 
 // 假 secret-tool(FakeTool)是 shell 脚本,Unix 限定——Windows 的密钥环后端
@@ -156,5 +166,51 @@ async fn settings_are_validated_before_they_are_stored() {
     assert_eq!(
         value["result"]["settings"]["prefix"], "saves/kotori",
         "the prefix is normalised, not rejected"
+    );
+}
+
+/// 云同步的「身份」：**认领一次就粘住**，而且一台机器只有一个机器身份。
+///
+/// 身份是"两台机器上哪两条档案是同一款游戏"的唯一答案（游戏名会重复、会不一样），
+/// 所以它绝不能自己变：指纹只当提议，改它要用户点头。
+#[tokio::test]
+async fn a_game_claims_one_cloud_identity_and_keeps_it() {
+    let fake = FakeTool::new("identity");
+    let (daemon, config_path) = daemon_at(fake.keyring());
+    let target = crate::sync::SaveTarget {
+        key: "rel-savedata".to_string(),
+        configured: "savedata".to_string(),
+        local: PathBuf::from("/games/demo/savedata"),
+        exclude: Vec::new(),
+    };
+
+    // 还没上传过：没有身份，也不会自己冒出来一个。
+    assert_eq!(daemon.cloud_id_of("demo").await.unwrap(), None);
+
+    let first = daemon
+        .pack_identity("demo", std::slice::from_ref(&target))
+        .await
+        .unwrap();
+    assert_eq!(first.locations, vec!["rel-savedata".to_string()]);
+    assert!(first.fingerprint.is_none(), "指纹是下一步的事，绝不编一个");
+    assert_eq!(
+        first.machine_id.as_deref(),
+        Some(daemon.machine_id().await.unwrap().as_str())
+    );
+
+    // 粘住：再问一次还是它。
+    let again = daemon.pack_identity("demo", &[target]).await.unwrap();
+    assert_eq!(again.cloud_id, first.cloud_id);
+    assert_eq!(again.machine_id, first.machine_id);
+
+    // 而且落了盘 —— 重开一个进程读到的必须是同一个身份。
+    let persisted = crate::config::load_at(&config_path).unwrap();
+    assert_eq!(
+        persisted.games["demo"].cloud_id.as_deref(),
+        Some(first.cloud_id.as_str())
+    );
+    assert_eq!(
+        persisted.daemon.machine_id.as_deref(),
+        first.machine_id.as_deref()
     );
 }

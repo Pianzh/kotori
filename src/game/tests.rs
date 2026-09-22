@@ -169,6 +169,7 @@ fn an_exe_already_used_by_another_entry_warns_but_stays_allowed() {
 
 fn game_config_named(name: &str) -> crate::config::GameConfig {
     crate::config::GameConfig {
+        cloud_id: None,
         name: name.to_string(),
         game_dir: PathBuf::from("/games/demo"),
         exe_path: PathBuf::from("/games/demo/game.exe"),

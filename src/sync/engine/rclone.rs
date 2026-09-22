@@ -17,7 +17,7 @@ use crate::secrets::{Keyring, SecretKey};
 use crate::util::exec::Quiet;
 
 use super::super::archive::{self, Manifest, PackReport};
-use super::super::cloud::{self, CloudGame};
+use super::super::cloud::{self, CloudGame, PackIdentity};
 use super::super::save_targets::SaveTarget;
 use super::super::{
     SyncError, copyto_args, deletefile_args, game_remote, list_dirs_args, list_files_args,
@@ -166,11 +166,12 @@ impl RcloneZip {
         game_id: &str,
         stamp: &str,
         targets: &[SaveTarget],
+        identity: Option<&PackIdentity>,
         work_dir: &Path,
         timeout: Duration,
     ) -> Result<PackReport, SyncError> {
         let zip = work_dir.join(format!("{stamp}{}", super::super::PACKAGE_SUFFIX));
-        let report = archive::pack(&zip, targets, chrono::Utc::now())
+        let report = archive::pack(&zip, targets, chrono::Utc::now(), identity)
             .map_err(|e| SyncError::Command(format!("打包失败: {e}")))?;
 
         // 本机一个存档目录都没有：上传一个空包只会往版本列表里塞垃圾。

@@ -109,6 +109,7 @@ async fn a_real_kopia_repository_round_trips_a_save() {
             "demo",
             stamp1,
             std::slice::from_ref(&target),
+            None,
             &work,
             timeout,
         )
@@ -128,6 +129,7 @@ async fn a_real_kopia_repository_round_trips_a_save() {
             "demo",
             stamp2,
             std::slice::from_ref(&target),
+            None,
             &work2,
             timeout,
         )
@@ -185,6 +187,7 @@ async fn a_real_kopia_repository_keeps_two_games_apart() {
                 game,
                 "20260901T000000000Z-aaaa1111",
                 &[target(&saves, "savedata")],
+                None,
                 &work,
                 timeout,
             )
@@ -246,6 +249,7 @@ async fn a_real_kopia_repository_is_visible_from_another_machine() {
         "demo",
         "20260901T000000000Z-aaaa1111",
         &[target(&saves, "savedata")],
+        None,
         &work,
         timeout,
     )

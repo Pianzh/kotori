@@ -33,6 +33,7 @@ impl Drop for FakePrefix {
 
 pub(super) fn game(game_dir: &str, exe: &str) -> GameConfig {
     GameConfig {
+        cloud_id: None,
         name: "demo".into(),
         game_dir: PathBuf::from(game_dir),
         exe_path: PathBuf::from(exe),

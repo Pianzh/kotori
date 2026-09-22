@@ -26,7 +26,7 @@ use crate::secrets::Keyring;
 
 use super::SyncError;
 use super::archive::{Manifest, PackReport};
-use super::cloud::CloudGame;
+use super::cloud::{CloudGame, PackIdentity};
 use super::save_targets::SaveTarget;
 
 mod diagnostics;
@@ -116,18 +116,19 @@ impl Backend {
         game_id: &str,
         stamp: &str,
         targets: &[SaveTarget],
+        identity: Option<&PackIdentity>,
         work_dir: &Path,
         timeout: Duration,
     ) -> Result<PackReport, SyncError> {
         match &self.inner {
             Inner::Rclone(engine) => {
                 engine
-                    .send(game_id, stamp, targets, work_dir, timeout)
+                    .send(game_id, stamp, targets, identity, work_dir, timeout)
                     .await
             }
             Inner::Kopia(engine) => {
                 engine
-                    .send(game_id, stamp, targets, work_dir, timeout)
+                    .send(game_id, stamp, targets, identity, work_dir, timeout)
                     .await
             }
         }

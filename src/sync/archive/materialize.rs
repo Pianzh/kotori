@@ -15,21 +15,25 @@ use super::gather::gather;
 use super::pack::PackReport;
 use super::{FORMAT, MANIFEST, Manifest};
 use crate::sync::SaveTarget;
+use crate::sync::cloud::PackIdentity;
 
 /// 把 `targets` 里存在的每个存档位置摆进 `dir`，并在 `dir` 根写一份清单。
 ///
 /// `dir` 里的旧内容不会被清理：调用方给的总是一个刚建出来的空目录（`Staging`
 /// 的临时目录用完即删），多一条"先清空"的路径只会多一个删错东西的机会。
+/// `identity` 与 zip 那条路同一个意思（见 [`super::pack`]）。
 pub fn materialize(
     dir: &Path,
     targets: &[SaveTarget],
     now: chrono::DateTime<chrono::Utc>,
+    identity: Option<&PackIdentity>,
 ) -> Result<PackReport, String> {
     let gathered = gather(targets)?;
     let manifest = Manifest {
         format: FORMAT,
         created: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         locations: gathered.locations,
+        identity: identity.cloned(),
         entries: gathered.entries,
     };
 

@@ -109,7 +109,16 @@ impl Daemon {
                     continue;
                 }
             };
-            let outcome = runner.upload(&id, &name, &targets).await;
+            // 身份在这一刻定下来（第一次上传 = 这台机器认领这一款），并写进包里 ——
+            // 取回之前比的就是它（见 `crate::sync::cloud::identity_match`）。
+            let identity = match self.pack_identity(&id, &targets).await {
+                Ok(identity) => identity,
+                Err(error) => {
+                    outcomes.push(GameOutcome::failed(&id, &name, error));
+                    continue;
+                }
+            };
+            let outcome = runner.upload(&id, &name, &targets, Some(&identity)).await;
             self.sync.remember(&id, "上传", &outcome);
             outcomes.push(outcome);
         }
@@ -172,8 +181,11 @@ impl Daemon {
         let settings = self.config.read().await.sync.clone();
         let runner = self.sync_runner(&settings)?;
         let (name, targets) = self.sync_targets(game_id).await?;
+        let cloud_id = self.cloud_id_of(game_id).await?;
 
-        let outcome = runner.restore(game_id, &name, &targets, version).await;
+        let outcome = runner
+            .restore(game_id, &name, &targets, cloud_id.as_deref(), version)
+            .await;
         self.sync.remember(game_id, "恢复", &outcome);
         Ok(json!({ "ok": outcome.ok, "game": outcome }))
     }
@@ -205,17 +217,25 @@ impl Daemon {
             Err(error) => return Some(json!({ "ok": false, "error": error })),
         };
 
-        let outcome =
-            match tokio::time::timeout(PULL_TIMEOUT, runner.pull(game_id, &name, &targets)).await {
-                Ok(outcome) => outcome,
-                Err(_) => {
-                    tracing::warn!("{game_id}: 启动前拉取超时（{PULL_TIMEOUT:?}），直接启动游戏");
-                    return Some(json!({
-                        "ok": false,
-                        "error": format!("拉取超过 {} 秒，已跳过", PULL_TIMEOUT.as_secs()),
-                    }));
-                }
-            };
+        // ⚠ 取回那条路**绝不认领身份**：认领是上传的事。没认领过就是"还没配对"，
+        // 闸门据此拒绝取回（宁可不动，也不猜）——见 `crate::sync::cloud`。
+        let cloud_id = self.cloud_id_of(game_id).await.unwrap_or(None);
+
+        let outcome = match tokio::time::timeout(
+            PULL_TIMEOUT,
+            runner.pull(game_id, &name, &targets, cloud_id.as_deref()),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                tracing::warn!("{game_id}: 启动前拉取超时（{PULL_TIMEOUT:?}），直接启动游戏");
+                return Some(json!({
+                    "ok": false,
+                    "error": format!("拉取超过 {} 秒，已跳过", PULL_TIMEOUT.as_secs()),
+                }));
+            }
+        };
 
         self.sync.remember(game_id, "取回", &outcome);
         if !outcome.ok {
@@ -255,7 +275,17 @@ impl Daemon {
         // Let wineserver finish flushing whatever the game just wrote.
         tokio::time::sleep(SETTLE_DELAY).await;
 
-        let outcome = runner.upload(game_id, &name, &targets).await;
+        // 身份先定下来：包要带着它上云（第一次上传就在这一刻认领）。
+        let identity = match self.pack_identity(game_id, &targets).await {
+            Ok(identity) => identity,
+            Err(error) => {
+                tracing::warn!("{game_id}: 退出后上传失败: {error}");
+                return;
+            }
+        };
+        let outcome = runner
+            .upload(game_id, &name, &targets, Some(&identity))
+            .await;
         self.sync.remember(game_id, "上传", &outcome);
         if outcome.ok {
             tracing::info!("{game_id}: 退出后已同步存档");

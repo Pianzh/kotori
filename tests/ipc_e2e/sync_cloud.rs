@@ -106,3 +106,214 @@ fn a_second_machine_sees_what_the_first_one_uploaded() {
         "{versions}"
     );
 }
+
+/// 上传时认领的**云端身份**要落进配置，而且粘住。
+///
+/// 身份是"两台机器上哪两条档案是同一款游戏"的唯一答案（游戏名会重复、会不一样），
+/// 所以它必须写在配置里、跨进程还在，而且第二次上传不会换一个。
+#[test]
+fn uploading_claims_a_cloud_identity_and_keeps_it() {
+    let mut fixture = Fixture::new("identity");
+    let remote = fixture.enable_fake_sync(true);
+    fixture.start();
+
+    let game_dir = fixture.dir.join("IdentityGame");
+    let saves = game_dir.join("savedata");
+    std::fs::create_dir_all(&saves).unwrap();
+    let exe = game_dir.join("game.exe");
+    std::fs::write(&exe, b"").unwrap();
+    std::fs::write(saves.join("save.dat"), b"first").unwrap();
+
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Identity Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "identity-game", "{response}");
+    fixture.rpc(
+        "game.update",
+        json!({ "id": "identity-game", "save_paths": ["savedata"] }),
+    );
+    fixture.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+
+    // 还没上传过：配置里没有身份（也就没有"猜"的余地）。
+    let before = std::fs::read_to_string(fixture.config.clone()).unwrap();
+    assert!(!before.contains("cloud_id"), "{before}");
+
+    let response = fixture.rpc("sync.now", json!({ "id": "identity-game" }));
+    assert_eq!(response["result"]["ok"], true, "{response}");
+
+    let written = std::fs::read_to_string(fixture.config.clone()).unwrap();
+    let cloud_id = field(&written, "cloud_id").expect("上传之后应当认领一个身份");
+    let machine_id = field(&written, "machine_id").expect("也要记下这是哪台机器");
+    assert_eq!(cloud_id.len(), 36, "身份是个 uuid: {cloud_id}");
+    assert_eq!(machine_id.len(), 36, "机器身份也是个 uuid: {machine_id}");
+
+    // 再传一版：身份粘住，机器身份也不变。
+    std::fs::write(saves.join("save.dat"), b"second").unwrap();
+    let response = fixture.rpc("sync.now", json!({ "id": "identity-game" }));
+    assert_eq!(response["result"]["ok"], true, "{response}");
+    let again = std::fs::read_to_string(fixture.config.clone()).unwrap();
+    assert_eq!(
+        field(&again, "cloud_id").as_deref(),
+        Some(cloud_id.as_str())
+    );
+    assert_eq!(
+        field(&again, "machine_id").as_deref(),
+        Some(machine_id.as_str())
+    );
+    assert_eq!(cloud_packages(&remote.join("games/identity-game")).len(), 2);
+
+    // 包上也带着它 —— 取回之前比的就是这个（闸门的测试见下一条）。
+    let packages = cloud_packages(&remote.join("games/identity-game"));
+    // `cloud_packages` 给的就是文件名本身（带 .zip），别再加一次后缀。
+    let zip = remote.join("games/identity-game").join(&packages[0]);
+    let unpacked = fixture.dir.join("unpacked");
+    let manifest = read_manifest(&zip, &unpacked);
+    assert!(
+        manifest.contains(&cloud_id),
+        "包清单里要写着这是谁传的: {manifest}"
+    );
+}
+
+/// 防错配闸：身份对不上时**一个文件都不铺**（自动取回与手动恢复两条路）。
+///
+/// 这是整件事里唯一不可逆的错误 —— 把另一款游戏的存档铺进本机这一款，用户下一次
+/// 上传再把它推回云端（静默损坏存档）。这里用"改配置里的身份"来造这个局面：本机
+/// 上传过一次（因此有了身份），然后把那份身份换成另一个。
+#[test]
+fn a_mismatched_identity_stops_both_pull_and_restore() {
+    let mut fixture = Fixture::new("identity-gate");
+    fixture.enable_fake_sync(true);
+    let probe = fixture.enable_fake_display();
+    fixture.start();
+
+    let game_dir = fixture.dir.join("GateGame");
+    let saves = game_dir.join("savedata");
+    std::fs::create_dir_all(&saves).unwrap();
+    let exe = game_dir.join("game.exe");
+    std::fs::write(&exe, b"").unwrap();
+    std::fs::write(saves.join("save.dat"), b"from-cloud").unwrap();
+
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Gate Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "gate-game", "{response}");
+    fixture.rpc(
+        "game.update",
+        json!({ "id": "gate-game", "save_paths": ["savedata"] }),
+    );
+    fixture.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+    let response = fixture.rpc("sync.now", json!({ "id": "gate-game" }));
+    assert_eq!(response["result"]["ok"], true, "{response}");
+
+    let original = std::fs::read_to_string(fixture.config.clone()).unwrap();
+    let cloud_id = field(&original, "cloud_id").unwrap();
+
+    // 把本机的身份换成另一个（模拟"云端那一版其实是别的一款"）。
+    std::fs::write(
+        fixture.config.clone(),
+        original.replace(&cloud_id, "11111111-2222-3333-4444-555555555555"),
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.rpc("config.reload", json!({}))["result"]["success"],
+        true
+    );
+
+    // 手动的「恢复」先试一次：身份对不上，不许覆盖本机存档。
+    std::fs::write(saves.join("save.dat"), b"my own progress").unwrap();
+    let response = fixture.rpc("sync.restore", json!({ "id": "gate-game" }));
+    assert_eq!(response["result"]["ok"], false, "{response}");
+    let error = response["result"]["game"]["error"].as_str().unwrap_or("");
+    assert!(error.contains("另一个身份"), "{response}");
+    assert_eq!(
+        std::fs::read_to_string(saves.join("save.dat")).unwrap(),
+        "my own progress",
+        "拒绝就是拒绝：一个文件都不许动"
+    );
+
+    // 再走自动取回那条路（启动游戏之前）。
+    std::fs::remove_dir_all(&saves).unwrap();
+    let response = fixture.rpc("game.launch", json!({ "id": "gate-game" }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("gamescope")),
+        "假 gamescope 立刻退出: {response}"
+    );
+    assert!(probe.exists(), "启动那条路还是走到了 gamescope");
+    assert!(
+        !saves.join("save.dat").exists(),
+        "身份对不上时绝不能把云端的存档铺下来"
+    );
+
+    // 界面看得见"为什么没铺"：状态里那一条取回记录带着原因。
+    let status = fixture.rpc("sync.status", json!({}));
+    let record = status["result"]["games"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|game| game["id"] == "gate-game")
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        record["last"]["detail"]
+            .as_str()
+            .is_some_and(|detail| detail.contains("另一个身份")),
+        "状态里要说清为什么没取回: {status}"
+    );
+
+    // --- 把身份改回去：同一台机器的取回立刻恢复正常 -------------------------
+    let tampered = std::fs::read_to_string(fixture.config.clone()).unwrap();
+    std::fs::write(
+        fixture.config.clone(),
+        tampered.replace("11111111-2222-3333-4444-555555555555", &cloud_id),
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.rpc("config.reload", json!({}))["result"]["success"],
+        true
+    );
+
+    let response = fixture.rpc("game.launch", json!({ "id": "gate-game" }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("gamescope")),
+        "假 gamescope 立刻退出: {response}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(saves.join("save.dat")).unwrap(),
+        "from-cloud",
+        "身份对得上时，启动前照样把云端的存档取回来"
+    );
+}
+
+/// 从 `config.toml` 里抠出一个键的值（测试只关心"写没写、写成了什么"）。
+fn field(text: &str, key: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(&format!("{key} = ")))
+        .map(|value| value.trim_matches('"').to_string())
+}
+
+/// 解开一个包，返回它清单的原文（断言身份写在里面）。
+fn read_manifest(zip: &std::path::Path, into: &std::path::Path) -> String {
+    std::fs::create_dir_all(into).unwrap();
+    let file = std::fs::File::open(zip).unwrap();
+    let mut archive = zip::ZipArchive::new(file).unwrap();
+    let mut manifest = String::new();
+    std::io::Read::read_to_string(
+        &mut archive.by_name("kotori-manifest.json").unwrap(),
+        &mut manifest,
+    )
+    .unwrap();
+    manifest
+}

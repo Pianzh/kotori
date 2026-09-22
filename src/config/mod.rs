@@ -48,6 +48,12 @@ pub struct DaemonConfig {
     /// [`Config::normalize`]。缺省 `false`(老配置里没有这个键)。
     #[serde(default)]
     pub auto_watch_migrated: bool,
+    /// 这台机器的身份（uuid）：第一次同步时生成，随存档一起上云。
+    ///
+    /// 它回答"这一版是哪台机器传的"，与主机名无关（主机名会变、可能重复）。
+    /// 缺省 `None` = 还没同步过。
+    #[serde(default)]
+    pub machine_id: Option<String>,
 }
 
 /// Machine-wide wine settings shared by all games.
@@ -77,6 +83,13 @@ pub struct GameConfig {
     /// Where this game keeps its saves. Empty means "not configured yet".
     #[serde(default)]
     pub save_paths: Vec<SavePath>,
+    /// 这款游戏在云端的身份：**第一次上传时定下来，之后粘住**。
+    ///
+    /// 它回答的是"两台机器上哪两条档案是同一款游戏"，与本机的键（`games.<id>`）
+    /// 无关 —— 那个键只是本机的名字：两台机器可能起得不一样，也可能**同一个键
+    /// 是两款不同的游戏**（slug 归一化）。指纹只当提议，只有配对能改它。
+    #[serde(default)]
+    pub cloud_id: Option<String>,
     /// Per-game wine prefix; overrides the global [`WineConfig::prefix`].
     #[serde(default)]
     pub wine_prefix: Option<PathBuf>,
@@ -333,6 +346,7 @@ impl Default for DaemonConfig {
             // `false` = "这份配置还没过那次迁移";新装的用户第一次加载就会翻成 true
             // (库里本来没有游戏,翻不翻都一样)。
             auto_watch_migrated: false,
+            machine_id: None,
         }
     }
 }

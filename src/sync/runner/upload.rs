@@ -5,17 +5,21 @@
 
 use super::staging::Staging;
 use super::{COMMAND_TIMEOUT, GameOutcome, LocationOutcome, Runner};
+use crate::sync::cloud::PackIdentity;
 
 impl Runner {
     /// Push every location of a game into the cloud as one package.
     ///
     /// 全量上传，不做"内容没变就跳过"：想省空间的人用 kopia（用户 2026-09-15
     /// 明确）。换来的是"一个包 = 一个时间点的完整存档"，恢复因此不需要拼差量。
+    ///
+    /// `identity` 写进包清单：**取回之前比的就是它**（见 `super::pull`）。
     pub async fn upload(
         &self,
         game_id: &str,
         name: &str,
         targets: &[crate::sync::SaveTarget],
+        identity: Option<&PackIdentity>,
     ) -> GameOutcome {
         if let Err(error) = self.ready() {
             return GameOutcome::failed(game_id, name, error.to_string());
@@ -28,7 +32,14 @@ impl Runner {
         let stamp = crate::sync::version_stamp(chrono::Utc::now());
 
         let send = self
-            .send_version(game_id, &stamp, targets, staging.root(), COMMAND_TIMEOUT)
+            .send_version(
+                game_id,
+                &stamp,
+                targets,
+                identity,
+                staging.root(),
+                COMMAND_TIMEOUT,
+            )
             .await;
 
         // 本机一个存档目录都没有：引擎已经不上传了（两个引擎共用这条判据），
@@ -83,7 +94,18 @@ impl Runner {
 #[cfg(all(test, unix))]
 mod tests {
     use crate::sync::archive;
+    use crate::sync::cloud::PackIdentity;
     use crate::sync::runner::testing::{FakeRclone, target};
+
+    /// 一个"这一版是谁传的"。取回那边比的就是它（见 `super::super::pull`）。
+    fn identity() -> PackIdentity {
+        PackIdentity {
+            cloud_id: "cloud-demo".to_string(),
+            machine_id: Some("machine-a".to_string()),
+            fingerprint: None,
+            locations: vec!["rel-savedata".to_string()],
+        }
+    }
 
     #[tokio::test]
     async fn upload_sends_the_whole_game_as_one_package() {
@@ -99,7 +121,12 @@ mod tests {
 
         let outcome = fake
             .runner(0)
-            .upload("demo", "Demo", std::slice::from_ref(&target))
+            .upload(
+                "demo",
+                "Demo",
+                std::slice::from_ref(&target),
+                Some(&identity()),
+            )
             .await;
         assert!(outcome.ok, "{outcome:?}");
         assert_eq!(outcome.locations[0].action, "uploaded");
@@ -127,6 +154,12 @@ mod tests {
             std::fs::read_to_string(unpacked.join("rel-savedata/save01.sav")).unwrap() == "one"
         );
         assert!(!unpacked.join("rel-savedata/debug.log").exists());
+        // 身份真的进了包，而且读得回来 —— 取回那条路的闸门全靠它。
+        assert_eq!(
+            manifest.identity,
+            Some(identity()),
+            "包必须随身带着身份，否则取回时只能靠猜"
+        );
     }
 
     #[tokio::test]
@@ -139,6 +172,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&absent, "savedata", "rel-savedata")],
+                Some(&identity()),
             )
             .await;
 
@@ -170,6 +204,7 @@ mod tests {
                     target(&present, "here", "rel-here"),
                     target(&fake.dir.join("elsewhere"), "there", "rel-there"),
                 ],
+                Some(&identity()),
             )
             .await;
 
@@ -204,6 +239,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
+                Some(&identity()),
             )
             .await;
 
@@ -235,6 +271,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
+                Some(&identity()),
             )
             .await;
         assert!(outcome.ok, "{outcome:?}");

@@ -78,6 +78,7 @@ mod tests {
         let mut config = Config::default();
         config.wine.prefix = Some(prefix.clone());
         let game = GameConfig {
+            cloud_id: None,
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),
@@ -119,6 +120,7 @@ mod tests {
         use crate::config::{GameConfig, SavePath, SavePathKind, ScaleProfile};
 
         let game = GameConfig {
+            cloud_id: None,
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),

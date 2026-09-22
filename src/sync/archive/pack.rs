@@ -13,6 +13,7 @@ use zip::{CompressionMethod, ZipWriter};
 use super::gather::gather;
 use super::{Entry, FORMAT, MANIFEST, Manifest};
 use crate::sync::SaveTarget;
+use crate::sync::cloud::PackIdentity;
 
 /// 打包过程中攒下来的东西：一个包的内容，以及它没能包含谁。
 #[derive(Debug, Clone)]
@@ -31,16 +32,20 @@ pub struct PackReport {
 /// 把 `targets` 里存在的每个存档位置打进 `zip_path`。
 ///
 /// `now` 只用来写清单里的 `created`，由调用方传进来，测试才好断言。
+/// `identity` 是**这一版是谁传的**：它有值，取回时才有资格比对；没有就如实留空
+/// （那种包在自动取回那条路上会被拒绝，见 [`crate::sync::cloud::identity_match`]）。
 pub fn pack(
     zip_path: &Path,
     targets: &[SaveTarget],
     now: chrono::DateTime<chrono::Utc>,
+    identity: Option<&PackIdentity>,
 ) -> Result<PackReport, String> {
     let gathered = gather(targets)?;
     let manifest = Manifest {
         format: FORMAT,
         created: now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
         locations: gathered.locations,
+        identity: identity.cloned(),
         entries: gathered.entries,
     };
 

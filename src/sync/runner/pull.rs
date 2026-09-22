@@ -12,6 +12,7 @@ use std::collections::HashMap;
 use super::staging::Staging;
 use super::{GameOutcome, LocationOutcome, PULL_TIMEOUT, Runner};
 use crate::sync::archive::{self, Merge};
+use crate::sync::cloud::identity_match;
 
 impl Runner {
     /// Fetch anything that is *newer* in the cloud, keeping newer local files.
@@ -19,11 +20,17 @@ impl Runner {
     /// Used before a launch: a slow network or a broken package must never turn
     /// into "the game did not start", so every failure here is reported, not
     /// raised, and the caller launches anyway.
+    ///
+    /// ⚠ `local_cloud_id` 是**防错配闸**：云端那一版的身份与本机这一款不一致
+    /// （或者两边缺一头）时，这一版**一个文件都不会铺** —— 见 [`identity_match`]。
+    /// 这条是踩过的坑的反面：两台机器给两款不同游戏起的名字撞在一起时，静默铺过去
+    /// 就是**静默损坏存档**。
     pub async fn pull(
         &self,
         game_id: &str,
         name: &str,
         targets: &[crate::sync::SaveTarget],
+        local_cloud_id: Option<&str>,
     ) -> GameOutcome {
         if let Err(error) = self.ready() {
             return GameOutcome::failed(game_id, name, error.to_string());
@@ -64,6 +71,15 @@ impl Runner {
                 );
             }
         };
+        // 闸门在**铺文件之前**：清单已经读出来了，本机还一个字节都没动。
+        if let Some(refusal) = identity_match(local_cloud_id, manifest.identity.as_ref()).refusal()
+        {
+            return GameOutcome::failed(
+                game_id,
+                name,
+                format!("{refusal}（云端最新那一版是 {stamp}，这一局照常启动）"),
+            );
+        }
         let plan = match archive::plan(&manifest, targets, Merge::Newer) {
             Ok(plan) => plan,
             Err(error) => {
@@ -117,20 +133,45 @@ impl Runner {
 #[cfg(all(test, unix))]
 mod tests {
     use crate::sync::archive;
+    use crate::sync::cloud::PackIdentity;
     use crate::sync::runner::testing::{FakeRclone, target};
+
+    /// 本机这一款的云端身份。云端那些包由 [`publish`] 带着它上传。
+    const CLOUD_ID: &str = "cloud-demo";
+
+    fn identity() -> PackIdentity {
+        PackIdentity {
+            cloud_id: CLOUD_ID.to_string(),
+            machine_id: Some("machine-a".to_string()),
+            fingerprint: None,
+            locations: vec!["rel-savedata".to_string()],
+        }
+    }
 
     /// 把一个包放到云端：先在本地打一个，再让假 rclone 搬过去。
     ///
     /// `mtime_ms` 显式给定，不靠"文件刚写完"——两次写入之间只差几毫秒，而 ms
     /// 精度下它们可能落在同一刻度上，那这条测试就会时绿时红。
     fn publish(fake: &FakeRclone, saves: &std::path::Path, stamp: &str, body: &str, mtime_ms: i64) {
+        publish_as(Some(&identity()), fake, saves, stamp, body, mtime_ms);
+    }
+
+    /// 同上，但可以指定包里的身份（`None` = 更早的 kotori 传的那种没有身份的包）。
+    fn publish_as(
+        identity: Option<&PackIdentity>,
+        fake: &FakeRclone,
+        saves: &std::path::Path,
+        stamp: &str,
+        body: &str,
+        mtime_ms: i64,
+    ) {
         std::fs::create_dir_all(saves).unwrap();
         let path = saves.join("save.sav");
         std::fs::write(&path, body).unwrap();
         set_mtime_ms(&path, mtime_ms);
         let target = target(saves, "savedata", "rel-savedata");
         let zip = fake.dir.join("publish.zip");
-        archive::pack(&zip, &[target], chrono::Utc::now()).unwrap();
+        archive::pack(&zip, &[target], chrono::Utc::now(), identity).unwrap();
         fake.put_package("demo", stamp, &zip);
     }
 
@@ -157,7 +198,10 @@ mod tests {
         std::fs::write(saves.join("save.sav"), "local and newer").unwrap();
         let target = target(&saves, "savedata", "rel-savedata");
 
-        let outcome = fake.runner(0).pull("demo", "Demo", &[target]).await;
+        let outcome = fake
+            .runner(0)
+            .pull("demo", "Demo", &[target], Some(CLOUD_ID))
+            .await;
         assert!(outcome.ok, "{outcome:?}");
         assert_eq!(outcome.locations[0].action, "kept");
         assert!(
@@ -191,6 +235,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
+                Some(CLOUD_ID),
             )
             .await;
         assert!(outcome.ok, "{outcome:?}");
@@ -213,6 +258,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
+                Some(CLOUD_ID),
             )
             .await;
 
@@ -240,6 +286,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
+                Some(CLOUD_ID),
             )
             .await;
 
@@ -274,11 +321,117 @@ mod tests {
                     // 这一台机器上还有另一个位置，云端这一版里没有它。
                     target(&saves, "extra", "rel-extra"),
                 ],
+                Some(CLOUD_ID),
             )
             .await;
 
         assert!(outcome.ok, "{outcome:?}");
         assert_eq!(outcome.locations[1].action, "skipped");
         assert!(outcome.locations[1].detail.contains("这个位置"));
+    }
+
+    /// 云端那一版是**别的一款**（身份对不上）：一个文件都不许铺。
+    ///
+    /// 这条盯的是整件事里唯一不可逆的错误：把别人的存档铺进本机这一款，
+    /// 用户下一次上传再把它推回云端 —— **静默损坏存档**。
+    #[tokio::test]
+    async fn a_pull_from_another_identity_touches_nothing() {
+        let fake = FakeRclone::new("pull-other-identity");
+        let cloud = fake.dir.join("cloud");
+        publish(
+            &fake,
+            &cloud,
+            "20260901T000000Z",
+            "someone else's save",
+            2_000,
+        );
+
+        let saves = fake.dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let local = saves.join("save.sav");
+        std::fs::write(&local, "my own progress").unwrap();
+        set_mtime_ms(&local, 1_000);
+
+        let outcome = fake
+            .runner(0)
+            .pull(
+                "demo",
+                "Demo",
+                &[target(&saves, "savedata", "rel-savedata")],
+                Some("another-identity"),
+            )
+            .await;
+
+        assert!(!outcome.ok, "{outcome:?}");
+        let error = outcome.error.unwrap();
+        assert!(error.contains("另一个身份"), "{error}");
+        assert!(error.contains("本机存档一个都没动"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&local).unwrap(),
+            "my own progress",
+            "闸门必须在铺文件之前拦下来"
+        );
+    }
+
+    /// 本机这一款还没认领过身份：不猜，直接跳过（取回那条路**不认领**身份）。
+    #[tokio::test]
+    async fn a_pull_before_this_machine_claimed_an_identity_is_skipped() {
+        let fake = FakeRclone::new("pull-unpaired");
+        let cloud = fake.dir.join("cloud");
+        publish(&fake, &cloud, "20260901T000000Z", "from the cloud", 2_000);
+
+        let saves = fake.dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+
+        let outcome = fake
+            .runner(0)
+            .pull(
+                "demo",
+                "Demo",
+                &[target(&saves, "savedata", "rel-savedata")],
+                None,
+            )
+            .await;
+
+        assert!(!outcome.ok, "{outcome:?}");
+        let error = outcome.error.unwrap();
+        assert!(error.contains("还没有云端身份"), "{error}");
+        assert!(
+            !saves.join("save.sav").exists(),
+            "跳过就是跳过：一个文件都不该落下来"
+        );
+    }
+
+    /// 云端那一版是更早的 kotori 传的（清单里没有身份段）：同样不猜。
+    #[tokio::test]
+    async fn a_pull_refuses_a_package_without_any_identity() {
+        let fake = FakeRclone::new("pull-no-identity");
+        let cloud = fake.dir.join("cloud");
+        publish_as(
+            None,
+            &fake,
+            &cloud,
+            "20260901T000000Z",
+            "old package",
+            2_000,
+        );
+
+        let saves = fake.dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+
+        let outcome = fake
+            .runner(0)
+            .pull(
+                "demo",
+                "Demo",
+                &[target(&saves, "savedata", "rel-savedata")],
+                Some(CLOUD_ID),
+            )
+            .await;
+
+        assert!(!outcome.ok, "{outcome:?}");
+        let error = outcome.error.unwrap();
+        assert!(error.contains("没有身份信息"), "{error}");
+        assert!(!saves.join("save.sav").exists());
     }
 }

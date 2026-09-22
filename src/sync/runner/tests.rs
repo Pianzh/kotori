@@ -52,7 +52,7 @@ async fn credentials_reach_rclone_through_the_environment_only() {
 async fn missing_credentials_stop_the_run_before_rclone_is_started() {
     let fake = FakeRclone::new("no-secrets");
     let runner = Runner::with_binary(&fake.bin, fake.settings(0), Keyring::memory());
-    let outcome = runner.upload("demo", "Demo", &[]).await;
+    let outcome = runner.upload("demo", "Demo", &[], None).await;
 
     assert!(!outcome.ok);
     assert!(outcome.error.unwrap().contains("B2 凭据"));
@@ -123,10 +123,10 @@ async fn the_scratch_directory_is_cleaned_up_even_after_a_failure() {
 
     let runner = fake.runner(0);
     runner
-        .upload("demo", "Demo", std::slice::from_ref(&target))
+        .upload("demo", "Demo", std::slice::from_ref(&target), None)
         .await;
     fake.fail_on("copyto ");
-    runner.upload("demo", "Demo", &[target]).await;
+    runner.upload("demo", "Demo", &[target], None).await;
 
     let leftover: Vec<String> = std::fs::read_dir(fake.dir.join("work"))
         .map(|entries| {

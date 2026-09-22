@@ -159,6 +159,7 @@ async fn game_list_exposes_the_full_scale_profile() {
     config.games.insert(
         "demo".into(),
         crate::config::GameConfig {
+            cloud_id: None,
             name: "demo".into(),
             game_dir: "/games/demo".into(),
             exe_path: "/games/demo/game.exe".into(),
@@ -193,6 +194,7 @@ async fn games_are_sorted_by_name() {
         config.games.insert(
             name.into(),
             crate::config::GameConfig {
+                cloud_id: None,
                 name: name.into(),
                 game_dir: "/g".into(),
                 exe_path: "/g/game.exe".into(),
@@ -234,6 +236,7 @@ async fn games_with_the_same_name_still_have_one_order() {
         config.games.insert(
             id.into(),
             crate::config::GameConfig {
+                cloud_id: None,
                 name: "同名".into(),
                 game_dir: "/g".into(),
                 exe_path: "/g/game.exe".into(),
@@ -301,16 +304,20 @@ async fn status_on_unknown_session_lists_nothing_new() {
 /// `tests/ipc_e2e` 的 `library_entries_are_managed_over_ipc` 覆盖，`[sync]` 那边是
 /// `every_sync_setting_can_actually_be_changed`）。
 ///
-/// 例外只有两个，都是故意的：
+/// 例外只有三个，都是故意的：
 ///   * `created_at` —— daemon 建游戏时自己写的时间戳，没有"让客户端改创建时间"这回事；
-///   * `scale_profile` —— patch 里叫 `profile`（那个键只改缩放档案）。
+///   * `scale_profile` —— patch 里叫 `profile`（那个键只改缩放档案）；
+///   * `cloud_id` —— 云端身份，由 daemon 在**第一次上传**时认领，之后粘住。它不该
+///     由客户端随手写：那等于把"两款游戏对不对得上"交给手滑（将来配对要走专门的
+///     RPC，见 `PLAN-cloud-identity.md`）。
 #[test]
 fn every_game_config_key_is_either_patchable_or_a_known_exception() {
-    const EXCEPTIONS: [&str; 2] = ["created_at", "scale_profile"];
+    const EXCEPTIONS: [&str; 3] = ["created_at", "scale_profile", "cloud_id"];
     /// config 与 patch 里名字不一样的那几个：`(config 里的, patch 里的)`。
     const RENAMED: [(&str, &str); 1] = [("scale_profile", "profile")];
 
     let config = serde_json::to_value(crate::config::GameConfig {
+        cloud_id: None,
         name: "x".into(),
         game_dir: "/g".into(),
         exe_path: "/g/x.exe".into(),

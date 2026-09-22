@@ -22,7 +22,7 @@ use std::time::Duration;
 
 use super::SyncError;
 use super::archive::{Manifest, PackReport};
-use super::cloud::CloudGame;
+use super::cloud::{CloudGame, PackIdentity};
 use super::engine::Backend;
 use super::save_targets::SaveTarget;
 use super::{validate, validate_secrets};
@@ -168,11 +168,12 @@ impl Runner {
         game_id: &str,
         stamp: &str,
         targets: &[SaveTarget],
+        identity: Option<&PackIdentity>,
         work_dir: &Path,
         timeout: Duration,
     ) -> Result<PackReport, SyncError> {
         self.backend
-            .send(game_id, stamp, targets, work_dir, timeout)
+            .send(game_id, stamp, targets, identity, work_dir, timeout)
             .await
     }
 

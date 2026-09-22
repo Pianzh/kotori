@@ -35,7 +35,7 @@ use crate::util::exec::Quiet;
 
 use super::super::SyncError;
 use super::super::archive::{self, Manifest, PackReport};
-use super::super::cloud::CloudGame;
+use super::super::cloud::{CloudGame, PackIdentity};
 use super::super::save_targets::SaveTarget;
 use super::kopia_args as args;
 
@@ -348,13 +348,14 @@ impl Kopia {
         game_id: &str,
         stamp: &str,
         targets: &[SaveTarget],
+        identity: Option<&PackIdentity>,
         work_dir: &Path,
         timeout: Duration,
     ) -> Result<PackReport, SyncError> {
         let payload = work_dir.join("payload");
         std::fs::create_dir_all(&payload)
             .map_err(|e| SyncError::Command(format!("无法创建 {}: {e}", payload.display())))?;
-        let report = archive::materialize(&payload, targets, chrono::Utc::now())
+        let report = archive::materialize(&payload, targets, chrono::Utc::now(), identity)
             .map_err(|e| SyncError::Command(format!("打包失败: {e}")))?;
 
         // 与 rclone 那条路同一条判据：本机一个存档目录都没有就别往上送。

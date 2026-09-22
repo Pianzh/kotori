@@ -153,6 +153,7 @@ fn game_entry(dir: &Path, exe: PathBuf) -> GameConfig {
         .unwrap_or_else(|| dir.to_path_buf());
 
     GameConfig {
+        cloud_id: None,
         name,
         game_dir,
         exe_path: exe,

@@ -10,6 +10,7 @@
 use super::staging::Staging;
 use super::{COMMAND_TIMEOUT, GameOutcome, LocationOutcome, Runner};
 use crate::sync::archive::{self, Merge};
+use crate::sync::cloud::identity_match;
 use crate::sync::{SaveTarget, SyncError, is_snapshot, prune_plan};
 
 impl Runner {
@@ -18,11 +19,16 @@ impl Runner {
     /// `version = None` restores the newest package. A named version restores
     /// exactly that package: it holds *every* file of *every* location as it was
     /// then, so rolling back is laying it down, not un-picking a diff.
+    ///
+    /// ⚠ 手动恢复也过**防错配闸**：用户确实说了"就铺这一版"，但他没说"铺错一款
+    /// 也行"。身份对不上（或者缺一头）时一个文件都不铺，理由与 [`Runner::pull`]
+    /// 同一套 —— 覆盖本机存档是这条路上唯一不可逆的事。
     pub async fn restore(
         &self,
         game_id: &str,
         name: &str,
         targets: &[SaveTarget],
+        local_cloud_id: Option<&str>,
         version: Option<&str>,
     ) -> GameOutcome {
         if let Err(error) = self.ready() {
@@ -71,6 +77,15 @@ impl Runner {
                 return GameOutcome::failed(game_id, name, format!("取不回版本 {stamp}: {error}"));
             }
         };
+        // 闸门在**铺文件之前**：清单已经读出来了，本机还一个字节都没动。
+        if let Some(refusal) = identity_match(local_cloud_id, manifest.identity.as_ref()).refusal()
+        {
+            return GameOutcome::failed(
+                game_id,
+                name,
+                format!("{refusal}（云端那一版是 {stamp}）"),
+            );
+        }
         // 用户点了"恢复"：以云端为准，本机更新的也盖掉。
         let plan = match archive::plan(&manifest, targets, Merge::Replace) {
             Ok(plan) => plan,
@@ -137,14 +152,27 @@ fn summarize(names: &[&String]) -> String {
 #[cfg(all(test, unix))]
 mod tests {
     use crate::sync::archive;
+    use crate::sync::cloud::PackIdentity;
     use crate::sync::runner::testing::{FakeRclone, target};
+
+    /// 本机这一款的云端身份。云端那些包由 [`publish`] 带着它上传。
+    const CLOUD_ID: &str = "cloud-demo";
+
+    fn identity() -> PackIdentity {
+        PackIdentity {
+            cloud_id: CLOUD_ID.to_string(),
+            machine_id: Some("machine-a".to_string()),
+            fingerprint: None,
+            locations: vec!["rel-savedata".to_string()],
+        }
+    }
 
     fn publish(fake: &FakeRclone, saves: &std::path::Path, stamp: &str, body: &str) {
         std::fs::create_dir_all(saves).unwrap();
         std::fs::write(saves.join("save.sav"), body).unwrap();
         let target = target(saves, "savedata", "rel-savedata");
         let zip = fake.dir.join(format!("publish-{stamp}.zip"));
-        archive::pack(&zip, &[target], chrono::Utc::now()).unwrap();
+        archive::pack(&zip, &[target], chrono::Utc::now(), Some(&identity())).unwrap();
         fake.put_package("demo", stamp, &zip);
     }
 
@@ -166,6 +194,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
+                Some(CLOUD_ID),
                 Some("20260901T000000Z"),
             )
             .await;
@@ -203,6 +232,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
+                Some(CLOUD_ID),
                 None,
             )
             .await;
@@ -231,6 +261,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
+                Some(CLOUD_ID),
                 None,
             )
             .await;
@@ -257,6 +288,7 @@ mod tests {
                 "demo",
                 "Demo",
                 &[target(&saves, "savedata", "rel-savedata")],
+                Some(CLOUD_ID),
                 Some("../../../etc"),
             )
             .await;
@@ -305,5 +337,42 @@ mod tests {
         // 保留窗口比版本数大：什么都不该删。
         assert!(fake.runner(5).prune("demo").await.unwrap().is_empty());
         assert!(fake.calls_matching("deletefile").is_empty());
+    }
+
+    /// 手动恢复也过**防错配闸**：身份对不上时一个文件都不铺。
+    ///
+    /// 用户说了"铺这一版"，但他没说"铺错一款也行" —— 覆盖本机存档是这条路上唯一
+    /// 不可逆的事，所以手动这条路与启动前的自动取回同一条规矩。
+    #[tokio::test]
+    async fn restoring_another_identity_is_refused_and_touches_nothing() {
+        let fake = FakeRclone::new("restore-other-identity");
+        let cloud = fake.dir.join("cloud");
+        publish(&fake, &cloud, "20260901T000000Z", "someone else's save");
+
+        let saves = fake.dir.join("saves");
+        std::fs::create_dir_all(&saves).unwrap();
+        let local = saves.join("save.sav");
+        std::fs::write(&local, "my own progress").unwrap();
+
+        let outcome = fake
+            .runner(0)
+            .restore(
+                "demo",
+                "Demo",
+                &[target(&saves, "savedata", "rel-savedata")],
+                Some("another-identity"),
+                None,
+            )
+            .await;
+
+        assert!(!outcome.ok, "{outcome:?}");
+        let error = outcome.error.unwrap();
+        assert!(error.contains("另一个身份"), "{error}");
+        assert!(error.contains("本机存档一个都没动"), "{error}");
+        assert_eq!(
+            std::fs::read_to_string(&local).unwrap(),
+            "my own progress",
+            "闸门必须在铺文件之前拦下来"
+        );
     }
 }

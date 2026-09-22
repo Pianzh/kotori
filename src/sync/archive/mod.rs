@@ -22,6 +22,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::sync::cloud::PackIdentity;
+
 mod gather;
 mod materialize;
 mod pack;
@@ -36,7 +38,11 @@ pub use unpack::{MergePlan, extract, plan, read_dir_manifest};
 /// 包根那份清单的文件名。
 pub const MANIFEST: &str = "kotori-manifest.json";
 /// 清单格式版本。将来改结构时靠它认新旧，而不是猜。
-pub const FORMAT: u32 = 1;
+///
+/// 2 = 清单里多了 `identity`（云端身份，见 [`crate::sync::cloud::PackIdentity`]）。
+/// 读到一个比自己新的格式就**当场拒绝**（见 `unpack`）：宁可说"这个包我读不了"，
+/// 也不要按老规矩去猜新字段的意思。
+pub const FORMAT: u32 = 2;
 
 /// How a transfer treats a file that already exists at the destination.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +67,12 @@ pub struct Manifest {
     /// `#[serde(default)]` 是为了还能读没有这个字段的包。
     #[serde(default)]
     pub locations: Vec<String>,
+    /// 这一版是谁传的（见 [`crate::sync::cloud`]）。
+    ///
+    /// **缺省 = 这一版没有身份**（格式 1 的老包，或者上传时还不知道身份）：
+    /// 取回之前会因此被拒绝，而不会被当成"大概就是同一款吧"。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<PackIdentity>,
     pub entries: Vec<Entry>,
 }
 

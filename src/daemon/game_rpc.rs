@@ -115,6 +115,7 @@ impl Daemon {
             config.games.insert(
                 id.clone(),
                 crate::config::GameConfig {
+                    cloud_id: None,
                     name: name.clone(),
                     game_dir: game_dir.clone(),
                     exe_path: new_game.exe_path.clone(),

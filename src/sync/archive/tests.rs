@@ -56,6 +56,7 @@ fn manifest(entries: Vec<Entry>) -> Manifest {
         format: FORMAT,
         created: "2026-09-15T12:00:00Z".to_string(),
         locations: Vec::new(),
+        identity: None,
         entries,
     }
 }
@@ -68,7 +69,7 @@ fn a_packed_save_comes_back_with_its_contents_and_its_times() {
     write(&saves, "nested/save02.sav", "two");
     let zip = dir.join("v.zip");
 
-    let report = pack(&zip, &[target("rel-savedata", &saves)], now()).unwrap();
+    let report = pack(&zip, &[target("rel-savedata", &saves)], now(), None).unwrap();
     assert_eq!(report.entries.len(), 2);
     assert_eq!(report.locations, vec!["rel-savedata".to_string()]);
     assert!(report.missing.is_empty());
@@ -110,6 +111,7 @@ fn packing_reports_locations_that_are_not_on_this_machine() {
             target("win-appdata", &dir.join("elsewhere")),
         ],
         now(),
+        None,
     )
     .unwrap();
 
@@ -147,7 +149,7 @@ fn exclusions_still_work_without_rclone() {
     target.exclude = vec!["*.log".to_string()];
     let zip = dir.join("v.zip");
 
-    let report = pack(&zip, &[target], now()).unwrap();
+    let report = pack(&zip, &[target], now(), None).unwrap();
     assert_eq!(report.entries.len(), 1);
     assert_eq!(report.excluded, 1);
     assert_eq!(report.entries[0].path, "save01.sav");
