@@ -46,6 +46,7 @@ pub(super) fn daemon_at(keyring: Keyring) -> (Daemon, PathBuf) {
             exe_fingerprint: None,
             cloud_dir: None,
             cloud_rejected: Vec::new(),
+            sync_enabled: true,
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),
@@ -189,4 +190,50 @@ async fn the_machine_identity_is_created_once_and_persisted() {
         Some(first.as_str()),
         "身份卡上要拿它对账，所以必须落盘"
     );
+}
+
+/// 每款一个的云同步开关：关掉这一款 ⇒ **不自动**取回 / 上传；手动那条路不受它限制。
+#[tokio::test]
+async fn switching_one_game_off_stops_its_automatic_sync_only() {
+    let fake = FakeTool::new("per-game-switch");
+    let (daemon, _) = daemon_at(fake.keyring());
+
+    // 开着（默认）：启动前那条路会去干活（这里凭据是齐的，所以给得出回话）。
+    assert!(
+        daemon.sync_pull_before_launch("demo").await.is_some(),
+        "开关开着时，启动前该走同步那条路"
+    );
+
+    // 用户把这一款关掉。
+    let value = call(
+        &daemon,
+        "game.update",
+        r#"{"id":"demo","sync_enabled":false}"#,
+    )
+    .await;
+    assert_eq!(value["result"]["success"], true, "{value}");
+    assert!(!daemon.config.read().await.games["demo"].sync_enabled);
+
+    // 自动取回：一个字都不做（回话是 `None` = 没什么可报的）。
+    assert!(
+        daemon.sync_pull_before_launch("demo").await.is_none(),
+        "关掉之后不许自动取回"
+    );
+
+    // 手动「立即同步」是用户自己按的：不受这个开关限制。
+    let value = call(&daemon, "sync.now", r#"{"id":"demo"}"#).await;
+    assert!(
+        value["result"].is_object() || value["error"].is_object(),
+        "手动同步这一条路不该被开关拦掉: {value}"
+    );
+
+    // 再打开：开关就是个开关，不是一次性的。
+    let value = call(
+        &daemon,
+        "game.update",
+        r#"{"id":"demo","sync_enabled":true}"#,
+    )
+    .await;
+    assert_eq!(value["result"]["success"], true, "{value}");
+    assert!(daemon.config.read().await.games["demo"].sync_enabled);
 }

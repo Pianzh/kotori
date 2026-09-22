@@ -122,6 +122,7 @@ impl Daemon {
                     exe_fingerprint: crate::sync::fingerprint::of_file(&new_game.exe_path),
                     cloud_dir: None,
                     cloud_rejected: Vec::new(),
+                    sync_enabled: true,
                     name: name.clone(),
                     game_dir: game_dir.clone(),
                     exe_path: new_game.exe_path.clone(),
@@ -222,6 +223,11 @@ impl Daemon {
 
             if let Some(auto_watch) = patch.auto_watch {
                 game.auto_watch = auto_watch;
+            }
+
+            // 每款一个的云同步开关（见 `GameConfig::sync_enabled`）。
+            if let Some(sync_enabled) = patch.sync_enabled {
+                game.sync_enabled = sync_enabled;
             }
 
             if let Some(direct_launch) = patch.direct_launch {

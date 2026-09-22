@@ -73,6 +73,8 @@ pub(super) struct GamePatch {
     /// 界面上那只开关改叫「自动追踪」,而配置里曾经叫这个名字。
     #[serde(alias = "watch_only")]
     pub(super) auto_watch: Option<bool>,
+    /// 这一款的云同步开关（每款一个，见 `GameConfig::sync_enabled`）。
+    pub(super) sync_enabled: Option<bool>,
     pub(super) direct_launch: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     pub(super) process_name: Option<Option<String>>,

@@ -221,6 +221,12 @@ impl Daemon {
             if game.save_paths.is_empty() {
                 return None;
             }
+            // 这一款的开关关着 ⇒ **不自动取回**。手动「取回存档」是用户自己按的，
+            // 走的是另一条路（`rpc_sync_restore`），不受这个开关限制。
+            if !game.sync_enabled {
+                tracing::debug!("{game_id}: 这一款的云同步开关关着，启动前不取回");
+                return None;
+            }
             config.sync.clone()
         };
 
@@ -273,6 +279,15 @@ impl Daemon {
         let settings = {
             let config = self.config.read().await;
             if !config.sync.enabled {
+                return;
+            }
+            // 这一款的开关关着 ⇒ **不自动上传**（手动「立即同步」不受限制）。
+            if !config
+                .games
+                .get(game_id)
+                .is_some_and(|game| game.sync_enabled)
+            {
+                tracing::debug!("{game_id}: 这一款的云同步开关关着，退出后不上传");
                 return;
             }
             config.sync.clone()

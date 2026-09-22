@@ -77,6 +77,7 @@ pub(super) fn game_entry(dir: &Path, exe: PathBuf) -> GameConfig {
         // 还没上传过：云端落点就是本机的游戏 id（第一次上传时按身份定下来）。
         cloud_dir: None,
         cloud_rejected: Vec::new(),
+        sync_enabled: true,
         name,
         game_dir,
         exe_path: exe,

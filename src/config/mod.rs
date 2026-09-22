@@ -112,6 +112,16 @@ pub struct GameConfig {
     /// 记忆，下一次扫描就会把用户刚否掉的绑定又绑回来（界面和他自己打架）。
     #[serde(default)]
     pub cloud_rejected: Vec<String>,
+    /// 这一款的云同步开关，默认**开**。
+    ///
+    /// 是**每款一个**，不是全局那个（用户 2026-09-22 拍板："哪个游戏有问题就关哪个游戏
+    /// 的开关"）：关掉 ⇒ 这一款**不再自动同步** —— 启动前不取回、退出后不上传。手动
+    /// 「立即同步」/「取回存档」是明确的用户动作，不受它限制。
+    ///
+    /// 用户在启动前的自检里选"关掉这一款"就是关它；之后他自己再打开，这一款**直接
+    /// 新建身份、不再问**（那是提交 B 的下一半）。
+    #[serde(default = "default_sync_enabled")]
+    pub sync_enabled: bool,
     /// Per-game wine prefix; overrides the global [`WineConfig::prefix`].
     #[serde(default)]
     pub wine_prefix: Option<PathBuf>,
@@ -353,6 +363,11 @@ impl GameConfig {
 
 /// [`GameConfig::auto_watch`] 缺省值:开。
 fn default_auto_watch() -> bool {
+    true
+}
+
+/// [`GameConfig::sync_enabled`] 缺省值:开（存量配置没有这个字段的，行为一个字不变）。
+fn default_sync_enabled() -> bool {
     true
 }
 

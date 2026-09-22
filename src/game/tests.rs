@@ -174,6 +174,7 @@ fn game_config_named(name: &str) -> crate::config::GameConfig {
         exe_fingerprint: None,
         cloud_dir: None,
         cloud_rejected: Vec::new(),
+        sync_enabled: true,
         name: name.to_string(),
         game_dir: PathBuf::from("/games/demo"),
         exe_path: PathBuf::from("/games/demo/game.exe"),
