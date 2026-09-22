@@ -112,7 +112,8 @@ sharpness = 4
 [ "$1" = "--kotori-warmup" ] && exit 0
 dir='{dir}'
 log='{log}'
-bucket='{bucket}'
+# 桶可以换到别处：两台机器共用一个桶就是靠它（见 `share_bucket_with`）。
+bucket="${{KOTORI_FAKE_BUCKET:-{dir}}}"
 printf 'argv:%s\n' "$*" >> "$log"
 
 # Map a remote path onto the on-disk bucket; local paths pass through.
@@ -132,20 +133,37 @@ case "$cmd" in
     mkdir -p "$(dirname "$dp")"
     cp "$sp" "$dp"
     ;;
-  # `lsf --files-only <remote>`: the file names *are* the version list.
+  # `lsf --files-only <game>`: the file names *are* the version list.
+  # `lsf --dirs-only <games>`: the directory names *are* the games.
   lsf)
-    target=''
-    for a in "$@"; do [ "$a" = '--files-only' ] || target="$a"; done
+    target=''; mode='files'
+    for a in "$@"; do
+      case "$a" in
+        --files-only) mode='files' ;;
+        --dirs-only) mode='dirs' ;;
+        *) target="$a" ;;
+      esac
+    done
     p=$(remote_path "$target")
-    if [ -d "$p" ]; then ls -1 "$p" | grep '\.zip$'; fi
+    if [ -d "$p" ]; then
+      if [ "$mode" = 'dirs' ]; then
+        # rclone 给目录名加尾斜杠（--dir-slash 的默认值），假货照做。
+        for d in "$p"/*/; do
+          [ -d "$d" ] || continue
+          d=${{d%/}}
+          printf '%s/\n' "${{d##*/}}"
+        done
+      else
+        ls -1 "$p" | grep '\.zip$'
+      fi
+    fi
     ;;
   deletefile) rm -f "$(remote_path "$1")" ;;
 esac
 exit 0
 "#,
                 dir = self.dir.display(),
-                log = log.display(),
-                bucket = self.dir.display()
+                log = log.display()
             ),
         );
 
@@ -197,6 +215,17 @@ exit 0
 
         // Where the remote root mirrors to: `<dir>/<bucket>/<prefix>`.
         self.dir.join("test-bucket").join("kotori")
+    }
+
+    /// 把这个夹具的假 rclone 指向**另一个夹具**的桶。
+    ///
+    /// 这就是"第二台机器"：配置、数据目录、daemon 进程全是另一份，只有桶是同一个。
+    /// 必须在 [`Self::start`] **之前**调用（环境变量是起进程时给的）。
+    pub(crate) fn share_bucket_with(&mut self, other: &Fixture) {
+        self.envs.push((
+            "KOTORI_FAKE_BUCKET".to_string(),
+            other.dir.display().to_string(),
+        ));
     }
 
     /// Add fake `gamescope`/`wine` that record how they were invoked and exit.

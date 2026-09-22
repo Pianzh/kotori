@@ -216,3 +216,82 @@ async fn a_real_kopia_repository_keeps_two_games_apart() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+/// 另一台机器要用**它自己的** kopia 配置看见这台机器传的版本。
+///
+/// kopia 的"我是谁"（用户名 + 主机名）是**建/连仓库那一刻烧进配置**的 —— 2026-09-22
+/// 实测 0.22.3：事后改主机名再跑，快照仍然记成配置里那个名字，`os.Hostname()` 不管用。
+/// 所以"第二台机器"在这里就是"另一份配置 + 另一个主机名"，不必真开一台机器。
+///
+/// ⚠ 这条**验不出**"少写 `-a` 会看不见"：0.22.3 上不带 `-a` 也能列出别的 source
+/// （`snapshot list` 不带 `<source>` 参数时压根不筛），所以 `-a` 今天是保险。它把
+/// "另一台机器看得见"这件事本身钉住 —— 这正是这台机器上真会坏的那一半。
+#[tokio::test]
+#[ignore = "需要真 kopia：设 KOTORI_KOPIA 指向它再跑 --ignored"]
+async fn a_real_kopia_repository_is_visible_from_another_machine() {
+    let dir = temp("live-two-hosts");
+    let timeout = Duration::from_secs(120);
+    let repo = dir.join("repo");
+
+    // 机器 A：正常那台，上一款游戏的一版。
+    let a = kopia::Kopia::with_binary(real_kopia(), settings(SyncEngine::Kopia), Keyring::memory())
+        .with_home(dir.join("home-a"))
+        .with_local_repository(repo.clone());
+    let saves = dir.join("saves");
+    std::fs::create_dir_all(&saves).unwrap();
+    std::fs::write(saves.join("save01.sav"), "v1").unwrap();
+    let work = dir.join("work-a");
+    std::fs::create_dir_all(&work).unwrap();
+    a.send(
+        "demo",
+        "20260901T000000000Z-aaaa1111",
+        &[target(&saves, "savedata")],
+        &work,
+        timeout,
+    )
+    .await
+    .unwrap();
+
+    // 机器 B：另一份配置，同一个仓库。
+    let b = kopia::Kopia::with_binary(real_kopia(), settings(SyncEngine::Kopia), Keyring::memory())
+        .with_home(dir.join("home-b"))
+        .with_local_repository(repo);
+    b.check().await.unwrap();
+    rewrite_hostname(
+        &dir.join("home-b").join("repository.config"),
+        "another-machine",
+    );
+
+    assert_eq!(
+        b.versions("demo").await.unwrap(),
+        vec!["20260901T000000000Z-aaaa1111"],
+        "B 要看得见 A 拍的版本"
+    );
+    assert_eq!(
+        b.cloud_games().await.unwrap(),
+        vec![CloudGame {
+            id: "demo".to_string(),
+            versions: 1
+        }],
+        "也要说得清云端有哪几款、各有几版"
+    );
+    // B 自己一版都没拍过：上面那两条只可能是从仓库里读来的。
+    assert_eq!(
+        a.versions("demo").await.unwrap(),
+        vec!["20260901T000000000Z-aaaa1111"]
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 把一份 kopia 配置的主机名改成别的机器。
+fn rewrite_hostname(config: &Path, hostname: &str) {
+    let text = std::fs::read_to_string(config).unwrap();
+    let mut json: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert!(
+        json.get("hostname").is_some(),
+        "kopia 配置里没有 hostname 字段，这条测试的前提变了: {text}"
+    );
+    json["hostname"] = serde_json::Value::String(hostname.to_string());
+    std::fs::write(config, serde_json::to_string(&json).unwrap()).unwrap();
+}

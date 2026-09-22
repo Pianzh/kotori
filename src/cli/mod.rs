@@ -130,6 +130,8 @@ pub enum SyncCommand {
         /// Game ID
         game_id: String,
     },
+    /// List the games the cloud holds (not only the ones this machine knows)
+    Cloud,
     /// Put a game's saves back (newest state, or one snapshot)
     Restore {
         /// Game ID

@@ -26,6 +26,7 @@ use crate::secrets::Keyring;
 
 use super::SyncError;
 use super::archive::{Manifest, PackReport};
+use super::cloud::CloudGame;
 use super::save_targets::SaveTarget;
 
 mod diagnostics;
@@ -87,6 +88,18 @@ impl Backend {
         match &self.inner {
             Inner::Rclone(engine) => engine.versions(game_id).await,
             Inner::Kopia(engine) => engine.versions(game_id).await,
+        }
+    }
+
+    /// 云端有哪几款游戏。
+    ///
+    /// 这是"两台机器互相看得见"的那一步（见 [`crate::sync::cloud`]）：从前只有
+    /// **已知 id** 才能列版本，第二台机器于是不知道云端有什么。两个引擎的答案在
+    /// 这一层是同一句话（谁的 id、有几版），上层因此不用分叉。
+    pub async fn cloud_games(&self) -> Result<Vec<CloudGame>, SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.cloud_games().await,
+            Inner::Kopia(engine) => engine.cloud_games().await,
         }
     }
 

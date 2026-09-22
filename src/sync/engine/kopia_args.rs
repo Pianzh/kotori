@@ -15,9 +15,13 @@
 //! 指向的配置文件里，之后每一次快照、恢复、删除都只靠那份配置加环境变量里的密码。
 //! 连上之后再也不会有一条命令行带着 B2 key。
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use crate::config::SyncConfig;
+use crate::sync::cloud::CloudGame;
+use crate::sync::is_snapshot;
 
 /// 仓库在桶里的前缀。
 ///
@@ -103,12 +107,36 @@ pub(super) fn snapshot_create_args(game_id: &str, stamp: &str, source: &str) -> 
 }
 
 /// 列出某个游戏的全部快照。
+///
+/// ⚠ **`-a`（`--all`）不能省**：kopia 的 `snapshot list` 默认只列"当前用户名 /
+/// 当前主机名"拍的快照，而快照的 source 在双系统、双机上是**各写各的**。少了它，
+/// 另一台机器传上去的版本在这台机器上一条都列不出来 —— 现象是"这个游戏云端没有
+/// 版本"这种**静默的谎**（上传其实是成功的），而 `versions` / `latest` / `restore`
+/// 共用这条读路径。
+///
+/// 2026-09-22 本机实测（本地 filesystem 仓库、两份 kopia 配置当两台机器）：0.22.3
+/// 上不带 `-a` 也能列出别的 source 的快照（带 `<source>` 参数那条路才看得出区别），
+/// 所以这个标志今天是**保险**而不是"修好了一个正在犯的错"。它问的是"把所有机器的
+/// 快照都列出来"，正是这条路径想要的语义。
 pub(super) fn snapshot_list_args(game_id: &str) -> Vec<String> {
     vec![
         "snapshot".to_string(),
         "list".to_string(),
+        "-a".to_string(),
         "--json".to_string(),
         format!("--tags=game:{game_id}"),
+    ]
+}
+
+/// 列出仓库里**所有**我们自己的快照（不按游戏筛）。
+///
+/// "云端有哪几款游戏"只能这样问：游戏名是写在标签里的，问之前还不知道该填什么。
+pub(super) fn snapshot_list_all_args() -> Vec<String> {
+    vec![
+        "snapshot".to_string(),
+        "list".to_string(),
+        "-a".to_string(),
+        "--json".to_string(),
     ]
 }
 
@@ -138,6 +166,58 @@ pub(super) struct Snapshot {
     /// 我们自己写进去的版本名；不是 kotori 建的快照这里是空的。
     #[serde(default)]
     pub description: String,
+    /// 快照上的标签。
+    ///
+    /// ⚠ 实测（kopia 0.22.3）：JSON 里的键带 `tag:` 前缀 —— `--tags=game:3days`
+    /// 打出来的是 `{"tag:game":"3days"}`。读标签请走 [`Snapshot::tag`]。
+    #[serde(default)]
+    pub tags: BTreeMap<String, String>,
+}
+
+impl Snapshot {
+    /// 读一个标签，带不带 `tag:` 前缀都认（前缀是 kopia 的输出细节，不是我们的语义）。
+    pub(super) fn tag(&self, key: &str) -> Option<&str> {
+        self.tags
+            .get(key)
+            .or_else(|| self.tags.get(&format!("tag:{key}")))
+            .map(String::as_str)
+    }
+
+    /// 这一条是不是我们自己拍的。
+    ///
+    /// 两条判据任一成立即可：描述长成我们自己的版本名（存档快照），或者带着
+    /// `kind` 标签（身份快照的描述是一句固定的话，本来就不该长得像版本名）。
+    fn is_ours(&self) -> bool {
+        is_snapshot(&self.description) || self.tag("kind").is_some()
+    }
+}
+
+/// 按 `game:` 标签把仓库里的快照归到各自的游戏名下。
+///
+/// 这就是"云端有哪几款游戏"：kopia 的仓库是一个不透明的大块，能认人的只有标签。
+/// 没带 `game:` 标签、也不是我们拍的快照一律不看 —— 用户可能拿同一个仓库放着别的
+/// 备份，那些东西不该出现在游戏的列表里。
+pub(super) fn parse_cloud_games(text: &str) -> Result<Vec<CloudGame>, String> {
+    let all: Vec<Snapshot> =
+        serde_json::from_str(text).map_err(|e| format!("读不懂 kopia 的快照列表: {e}"))?;
+    let mut games: BTreeMap<String, CloudGame> = BTreeMap::new();
+    for snapshot in all {
+        if !snapshot.is_ours() {
+            continue;
+        }
+        let Some(id) = snapshot.tag("game") else {
+            continue;
+        };
+        let game = games.entry(id.to_string()).or_insert_with(|| CloudGame {
+            id: id.to_string(),
+            versions: 0,
+        });
+        // 身份快照不是"一版存档"：它只有一句话，没有存档内容。
+        if is_snapshot(&snapshot.description) {
+            game.versions += 1;
+        }
+    }
+    Ok(games.into_values().collect())
 }
 
 /// 解析 `snapshot list --json`，只留下**我们自己建的**那些，按版本名排序。
@@ -228,6 +308,54 @@ mod tests {
             ["ddd", "aaa"],
             "按版本名排序，最旧在前"
         );
+    }
+
+    #[test]
+    fn listing_asks_for_every_machine_not_just_this_one() {
+        // ⚠ 少了 `-a`，另一台机器传上去的版本会一条都列不出来（"云端没有版本"
+        // 这种静默的谎）。这条把它钉住：这条读路径永远带上 `-a`。
+        let args = snapshot_list_args("3days");
+        assert_eq!(&args[..3], ["snapshot", "list", "-a"]);
+        assert!(args.contains(&"--tags=game:3days".to_string()));
+        assert!(args.contains(&"--json".to_string()));
+
+        // "云端有哪几款游戏"是同一个问法的无筛选版。
+        assert_eq!(
+            snapshot_list_all_args(),
+            vec!["snapshot", "list", "-a", "--json"]
+        );
+    }
+
+    #[test]
+    fn cloud_games_come_from_the_game_tag_and_identity_snapshots_are_not_versions() {
+        // 实测（0.22.3）：JSON 里的标签键带 `tag:` 前缀。
+        let json = r#"[
+          {"id":"a","description":"20260916T120000000Z-abcd1234","tags":{"tag:game":"3days","tag:kind":"save"}},
+          {"id":"b","description":"20260916T130000000Z-abcd1234","tags":{"tag:game":"3days"}},
+          {"id":"c","description":"20260915T100000Z","tags":{"game":"life-game"}},
+          {"id":"d","description":"kotori-identity","tags":{"tag:game":"life-game","tag:kind":"identity"}},
+          {"id":"e","description":"someone else's backup","tags":{"tag:game":"not-ours"}},
+          {"id":"f","description":"20260916T140000000Z-abcd1234","tags":{}},
+          {"id":"g","description":"my own backup","tags":{}}
+        ]"#;
+        let games = parse_cloud_games(json).unwrap();
+        assert_eq!(
+            games,
+            vec![
+                // 两个存档快照（一个带 kind、一个不带都算），身份快照不算版本。
+                CloudGame {
+                    id: "3days".to_string(),
+                    versions: 2
+                },
+                CloudGame {
+                    id: "life-game".to_string(),
+                    versions: 1
+                },
+            ],
+            "按 id 排序；没有 game 标签的、以及别人拍的一律不出现"
+        );
+        assert!(parse_cloud_games("[]").unwrap().is_empty());
+        assert!(parse_cloud_games("not json").is_err());
     }
 
     #[test]

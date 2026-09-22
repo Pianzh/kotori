@@ -22,6 +22,7 @@ use std::time::Duration;
 
 use super::SyncError;
 use super::archive::{Manifest, PackReport};
+use super::cloud::CloudGame;
 use super::engine::Backend;
 use super::save_targets::SaveTarget;
 use super::{validate, validate_secrets};
@@ -141,6 +142,14 @@ impl Runner {
     /// The version packages the cloud holds for a game, oldest first.
     pub async fn packages(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
         self.backend.versions(game_id).await
+    }
+
+    /// 云端有哪几款游戏（名字有序）。
+    ///
+    /// 与 [`Self::packages`] 是同一个问题的两级：那一个问"这一款有几版"（前提是
+    /// 已经知道 id），这一个问"云端到底有什么"。跨机器可见性靠的就是它。
+    pub async fn cloud_games(&self) -> Result<Vec<CloudGame>, SyncError> {
+        self.backend.cloud_games().await
     }
 
     /// The newest package, or `None` when the cloud has never seen this game.

@@ -22,6 +22,7 @@ pub(crate) fn sync_cli(rt: &tokio::runtime::Runtime, action: SyncCommand) -> any
             "sync.versions",
             rpc::params([("id", serde_json::Value::String(game_id))]),
         ),
+        SyncCommand::Cloud => ("sync.cloud_games", rpc::params([])),
         SyncCommand::Unlock => {
             let password = prompt_password("主密码: ")?;
             let result = rt.block_on(async {
@@ -244,6 +245,21 @@ fn print_sync_result(method: &str, value: &serde_json::Value) {
                 println!("版本（最旧在前）:");
                 for version in versions {
                     println!("  {}", version.as_str().unwrap_or("-"));
+                }
+            }
+        }
+        "sync.cloud_games" => {
+            let games = value["games"].as_array().cloned().unwrap_or_default();
+            if games.is_empty() {
+                println!("云端还没有游戏");
+            } else {
+                println!("云端游戏（{} 款）:", games.len());
+                for game in games {
+                    println!(
+                        "  [{}] {} 版存档",
+                        game["id"].as_str().unwrap_or("?"),
+                        game["versions"].as_u64().unwrap_or(0)
+                    );
                 }
             }
         }

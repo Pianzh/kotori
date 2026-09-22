@@ -131,6 +131,28 @@ impl Daemon {
         Ok(json!({ "versions": versions }))
     }
 
+    /// 云端有哪几款游戏 —— **不限于本机有的**。
+    ///
+    /// 这是"两台机器互相看得见"的入口：从前只有已知 id 才能列版本，第二台机器于是
+    /// 不知道云端有什么。界面上的「刷新云端清单」按的就是它。
+    ///
+    /// 与「测试连接」同样的理由给一个总上限：这是一个按钮，用户盯着它等；而 rclone
+    /// 那条路是"列目录 + 每个目录再列一次"，云端的游戏越多，调用越多。
+    pub(in crate::daemon) async fn rpc_sync_cloud_games(&self) -> Result<Value, String> {
+        let settings = self.config.read().await.sync.clone();
+        let runner = self.sync_runner(&settings)?;
+        let games = tokio::time::timeout(CHECK_TIMEOUT, runner.cloud_games())
+            .await
+            .map_err(|_| {
+                format!(
+                    "列云端游戏超过 {} 秒没有回应 —— 网络通不通?云端的东西是不是太多了?",
+                    CHECK_TIMEOUT.as_secs()
+                )
+            })?
+            .map_err(|e| e.to_string())?;
+        Ok(json!({ "games": games }))
+    }
+
     /// Put a game's saves back. Without `version`, the newest state wins.
     pub(in crate::daemon) async fn rpc_sync_restore(
         &self,

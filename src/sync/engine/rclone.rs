@@ -17,10 +17,11 @@ use crate::secrets::{Keyring, SecretKey};
 use crate::util::exec::Quiet;
 
 use super::super::archive::{self, Manifest, PackReport};
+use super::super::cloud::{self, CloudGame};
 use super::super::save_targets::SaveTarget;
 use super::super::{
-    SyncError, copyto_args, deletefile_args, game_remote, list_files_args, package_remote,
-    parse_packages, rclone_env, remote_root,
+    SyncError, copyto_args, deletefile_args, game_remote, list_dirs_args, list_files_args,
+    package_remote, parse_packages, rclone_env, remote_root,
 };
 use super::diagnostics::explain_failure;
 
@@ -137,6 +138,27 @@ impl RcloneZip {
         let output = self.run(&list_files_args(&remote), COMMAND_TIMEOUT).await?;
         // 只报名字长得像我们自己的包的那些。
         Ok(parse_packages(&output))
+    }
+
+    /// 云端有哪几款游戏（`games/` 那一层有哪些目录）。
+    ///
+    /// **先 `mkdir`**：桶里还没有 `games/`（第一次上传之前）不是错误，而 rclone
+    /// 列一个不存在的目录会直接失败 —— "云端还没有游戏"该是一句空列表，不是一个
+    /// 报错。每个目录再数一遍自己的包，用的是与 [`Self::versions`] 同一条判据。
+    pub(super) async fn cloud_games(&self) -> Result<Vec<CloudGame>, SyncError> {
+        let games_dir = format!("{}/games", remote_root(&self.settings));
+        self.run(&["mkdir".to_string(), games_dir.clone()], COMMAND_TIMEOUT)
+            .await?;
+        let listed = self
+            .run(&list_dirs_args(&games_dir), COMMAND_TIMEOUT)
+            .await?;
+
+        let mut games = Vec::new();
+        for id in cloud::parse_dirs(&listed) {
+            let versions = self.versions(&id).await?.len();
+            games.push(CloudGame { id, versions });
+        }
+        Ok(games)
     }
 
     pub(super) async fn send(

@@ -33,6 +33,18 @@ pub fn list_files_args(remote: &str) -> Vec<String> {
     ]
 }
 
+/// Arguments for listing the *directories* of a remote path.
+///
+/// 列的是 `games/` 那一层（云端有哪几款游戏），不是某个游戏里的包 —— 没有这一条，
+/// 第二台机器就不知道云端有什么（[`crate::sync::cloud`] 的说明）。
+pub fn list_dirs_args(remote: &str) -> Vec<String> {
+    vec![
+        "lsf".to_string(),
+        "--dirs-only".to_string(),
+        remote.to_string(),
+    ]
+}
+
 /// Arguments for removing one remote object (an expired version package).
 pub fn deletefile_args(remote: &str) -> Vec<String> {
     vec!["deletefile".to_string(), remote.to_string()]
@@ -61,6 +73,15 @@ mod tests {
                 "lsf".to_string(),
                 "--files-only".to_string(),
                 "kotori:prefix/games/3days".to_string()
+            ]
+        );
+        // 另一层：云端有哪些游戏。`games/` 那一层只有目录，所以 --dirs-only。
+        assert_eq!(
+            list_dirs_args("kotori:prefix/games"),
+            vec![
+                "lsf".to_string(),
+                "--dirs-only".to_string(),
+                "kotori:prefix/games".to_string()
             ]
         );
         assert_eq!(

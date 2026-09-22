@@ -188,6 +188,7 @@ impl Daemon {
                 Ok(game_id) => respond(id, self.rpc_sync_versions(game_id).await),
                 Err(e) => rpc_err(id, -32602, e),
             },
+            "sync.cloud_games" => respond(id, self.rpc_sync_cloud_games().await),
             "sync.restore" => match param_str(&req.params, "id") {
                 Ok(game_id) => {
                     let version = req

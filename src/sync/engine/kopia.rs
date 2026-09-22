@@ -35,6 +35,7 @@ use crate::util::exec::Quiet;
 
 use super::super::SyncError;
 use super::super::archive::{self, Manifest, PackReport};
+use super::super::cloud::CloudGame;
 use super::super::save_targets::SaveTarget;
 use super::kopia_args as args;
 
@@ -327,6 +328,19 @@ impl Kopia {
             .into_iter()
             .map(|snapshot| snapshot.description)
             .collect())
+    }
+
+    /// 云端有哪几款游戏：把仓库里所有我们自己的快照按 `game:` 标签归堆。
+    ///
+    /// 仓库是不透明的一大块，没有"每款游戏一个目录"可以列，所以这是唯一的问法。
+    /// 一次调用就能问清（不像 rclone 要逐个目录数包），但**读身份卡**要另起进程
+    /// （`kopia restore`），那是第 3 步的事。
+    pub(super) async fn cloud_games(&self) -> Result<Vec<CloudGame>, SyncError> {
+        self.ensure_connected().await?;
+        let listed = self
+            .run(&args::snapshot_list_all_args(), COMMAND_TIMEOUT)
+            .await?;
+        args::parse_cloud_games(&listed).map_err(SyncError::Command)
     }
 
     pub(super) async fn send(

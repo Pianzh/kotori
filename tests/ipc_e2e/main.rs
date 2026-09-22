@@ -21,4 +21,5 @@ mod daemon;
 mod library;
 mod session;
 mod sync;
+mod sync_cloud;
 mod watch;
