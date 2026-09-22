@@ -90,6 +90,22 @@ pub struct GameConfig {
     /// 是两款不同的游戏**（slug 归一化）。指纹只当提议，只有配对能改它。
     #[serde(default)]
     pub cloud_id: Option<String>,
+    /// 这个 exe 的指纹（见 [`crate::sync::fingerprint`]）：**添加游戏时**算一次、
+    /// 存在本机，云端身份卡里带的就是它。
+    ///
+    /// `None` = 还没算过（老档案、或者当时那块盘不在）。补齐是幂等的，所以不需要
+    /// 任何"是否补过"的标记。
+    #[serde(default)]
+    pub exe_fingerprint: Option<String>,
+    /// 这一款在云端**放在哪个键下面**：rclone 是 `games/<cloud_dir>/` 的目录名，
+    /// kopia 是快照 `game:` 标签的值（也就是 `cloud_id`）。
+    ///
+    /// 必须有它，因为"包放哪"与"身份是谁"是两件事：另一台机器给同一款游戏起的名字
+    /// 不一样时，指纹会把两台机器绑到**同一个身份**上，而版本要能互相看见就还得放进
+    /// **同一个目录**。所以第一次上传时把云端那个落点记下来，之后一直用它（缺省 =
+    /// 还没上传过，用本机的游戏 id，也就是从前的行为）。
+    #[serde(default)]
+    pub cloud_dir: Option<String>,
     /// Per-game wine prefix; overrides the global [`WineConfig::prefix`].
     #[serde(default)]
     pub wine_prefix: Option<PathBuf>,

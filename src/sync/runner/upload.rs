@@ -18,6 +18,7 @@ impl Runner {
         &self,
         game_id: &str,
         name: &str,
+        cloud_key: &str,
         targets: &[crate::sync::SaveTarget],
         identity: Option<&PackIdentity>,
     ) -> GameOutcome {
@@ -33,7 +34,7 @@ impl Runner {
 
         let send = self
             .send_version(
-                game_id,
+                cloud_key,
                 &stamp,
                 targets,
                 identity,
@@ -82,7 +83,7 @@ impl Runner {
         // never turn a successful upload into a failure.
         if send.is_ok()
             && self.settings.keep_versions > 0
-            && let Err(error) = self.prune(game_id).await
+            && let Err(error) = self.prune(cloud_key).await
         {
             tracing::warn!("{game_id}: 清理旧版本失败: {error}");
         }
@@ -124,6 +125,7 @@ mod tests {
             .upload(
                 "demo",
                 "Demo",
+                "demo",
                 std::slice::from_ref(&target),
                 Some(&identity()),
             )
@@ -171,6 +173,7 @@ mod tests {
             .upload(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&absent, "savedata", "rel-savedata")],
                 Some(&identity()),
             )
@@ -200,6 +203,7 @@ mod tests {
             .upload(
                 "demo",
                 "Demo",
+                "demo",
                 &[
                     target(&present, "here", "rel-here"),
                     target(&fake.dir.join("elsewhere"), "there", "rel-there"),
@@ -238,6 +242,7 @@ mod tests {
             .upload(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(&identity()),
             )
@@ -270,6 +275,7 @@ mod tests {
             .upload(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(&identity()),
             )

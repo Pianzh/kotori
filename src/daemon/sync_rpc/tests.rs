@@ -43,6 +43,8 @@ pub(super) fn daemon_at(keyring: Keyring) -> (Daemon, PathBuf) {
         "demo".into(),
         GameConfig {
             cloud_id: None,
+            exe_fingerprint: None,
+            cloud_dir: None,
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),
@@ -169,48 +171,21 @@ async fn settings_are_validated_before_they_are_stored() {
     );
 }
 
-/// 云同步的「身份」：**认领一次就粘住**，而且一台机器只有一个机器身份。
-///
-/// 身份是"两台机器上哪两条档案是同一款游戏"的唯一答案（游戏名会重复、会不一样），
-/// 所以它绝不能自己变：指纹只当提议，改它要用户点头。
+/// 本机的机器身份：一台机器只有一个，而且**落盘**（重开进程读到的必须是同一个）。
 #[tokio::test]
-async fn a_game_claims_one_cloud_identity_and_keeps_it() {
-    let fake = FakeTool::new("identity");
+async fn the_machine_identity_is_created_once_and_persisted() {
+    let fake = FakeTool::new("machine-id");
     let (daemon, config_path) = daemon_at(fake.keyring());
-    let target = crate::sync::SaveTarget {
-        key: "rel-savedata".to_string(),
-        configured: "savedata".to_string(),
-        local: PathBuf::from("/games/demo/savedata"),
-        exclude: Vec::new(),
-    };
+    assert_eq!(daemon.config.read().await.daemon.machine_id, None);
 
-    // 还没上传过：没有身份，也不会自己冒出来一个。
-    assert_eq!(daemon.cloud_id_of("demo").await.unwrap(), None);
+    let first = daemon.machine_id().await.unwrap();
+    assert_eq!(first.len(), 36, "机器身份是个 uuid: {first}");
+    assert_eq!(daemon.machine_id().await.unwrap(), first, "一台机器一个");
 
-    let first = daemon
-        .pack_identity("demo", std::slice::from_ref(&target))
-        .await
-        .unwrap();
-    assert_eq!(first.locations, vec!["rel-savedata".to_string()]);
-    assert!(first.fingerprint.is_none(), "指纹是下一步的事，绝不编一个");
-    assert_eq!(
-        first.machine_id.as_deref(),
-        Some(daemon.machine_id().await.unwrap().as_str())
-    );
-
-    // 粘住：再问一次还是它。
-    let again = daemon.pack_identity("demo", &[target]).await.unwrap();
-    assert_eq!(again.cloud_id, first.cloud_id);
-    assert_eq!(again.machine_id, first.machine_id);
-
-    // 而且落了盘 —— 重开一个进程读到的必须是同一个身份。
     let persisted = crate::config::load_at(&config_path).unwrap();
     assert_eq!(
-        persisted.games["demo"].cloud_id.as_deref(),
-        Some(first.cloud_id.as_str())
-    );
-    assert_eq!(
         persisted.daemon.machine_id.as_deref(),
-        first.machine_id.as_deref()
+        Some(first.as_str()),
+        "身份卡上要拿它对账，所以必须落盘"
     );
 }

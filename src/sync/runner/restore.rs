@@ -27,6 +27,7 @@ impl Runner {
         &self,
         game_id: &str,
         name: &str,
+        cloud_key: &str,
         targets: &[SaveTarget],
         local_cloud_id: Option<&str>,
         version: Option<&str>,
@@ -46,7 +47,7 @@ impl Runner {
 
         let stamp = match version {
             Some(version) => version.to_string(),
-            None => match self.latest_package(game_id).await {
+            None => match self.latest_package(cloud_key).await {
                 Ok(Some(stamp)) => stamp,
                 Ok(None) => {
                     return GameOutcome::from_locations(
@@ -69,7 +70,7 @@ impl Runner {
             Err(error) => return GameOutcome::failed(game_id, name, error),
         };
         let manifest = match self
-            .fetch_version(game_id, &stamp, &staging.unpacked(), COMMAND_TIMEOUT)
+            .fetch_version(cloud_key, &stamp, &staging.unpacked(), COMMAND_TIMEOUT)
             .await
         {
             Ok(manifest) => manifest,
@@ -127,12 +128,12 @@ impl Runner {
     ///
     /// Never touches local files, and never touches a cloud object that does not
     /// look like one of our own packages.
-    pub async fn prune(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
-        let stamps = self.packages(game_id).await?;
+    pub async fn prune(&self, cloud_key: &str) -> Result<Vec<String>, SyncError> {
+        let stamps = self.packages(cloud_key).await?;
         let doomed = prune_plan(&stamps, self.settings.keep_versions);
         for stamp in &doomed {
-            self.remove_version(game_id, stamp).await?;
-            tracing::info!("{game_id}: 已删除旧版本 {stamp}");
+            self.remove_version(cloud_key, stamp).await?;
+            tracing::info!("{cloud_key}: 已删除旧版本 {stamp}");
         }
         Ok(doomed)
     }
@@ -193,6 +194,7 @@ mod tests {
             .restore(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(CLOUD_ID),
                 Some("20260901T000000Z"),
@@ -231,6 +233,7 @@ mod tests {
             .restore(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(CLOUD_ID),
                 None,
@@ -260,6 +263,7 @@ mod tests {
             .restore(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(CLOUD_ID),
                 None,
@@ -287,6 +291,7 @@ mod tests {
             .restore(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(CLOUD_ID),
                 Some("../../../etc"),
@@ -359,6 +364,7 @@ mod tests {
             .restore(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some("another-identity"),
                 None,

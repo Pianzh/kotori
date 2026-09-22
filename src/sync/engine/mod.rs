@@ -26,12 +26,13 @@ use crate::secrets::Keyring;
 
 use super::SyncError;
 use super::archive::{Manifest, PackReport};
-use super::cloud::{CloudGame, PackIdentity};
+use super::cloud::{CloudGame, GameIdentity, PackIdentity};
 use super::save_targets::SaveTarget;
 
 mod diagnostics;
 mod kopia;
 mod kopia_args;
+mod kopia_identity;
 mod rclone;
 #[cfg(test)]
 mod tests;
@@ -145,6 +146,49 @@ impl Backend {
         match &self.inner {
             Inner::Rclone(engine) => engine.fetch(game_id, stamp, into, timeout).await,
             Inner::Kopia(engine) => engine.fetch(game_id, stamp, into, timeout).await,
+        }
+    }
+
+    /// 云端与这一款对应的**身份卡**（读-改-写里的"读"）。
+    ///
+    /// 两个引擎在这一层仍然是同一句话：rclone 读桶里那份 json，kopia 把最新那条身份
+    /// 快照恢复出来读。`work_dir` 是读它需要的落脚点（kopia 要解到磁盘上）。
+    pub async fn read_identity(
+        &self,
+        game_id: &str,
+        cloud_id: &str,
+        work_dir: &Path,
+    ) -> Result<Option<GameIdentity>, SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.read_identity(game_id, cloud_id).await,
+            Inner::Kopia(engine) => engine.read_identity(game_id, cloud_id, work_dir).await,
+        }
+    }
+
+    /// 云端**所有**身份卡，带上各自在云端的键（"按 exe 指纹找同一款"要用）。
+    ///
+    /// 键对 rclone 是那个目录名、对 kopia 就是身份本身 —— 找到之后要**跟它走同一个
+    /// 键**，版本才会落在同一处、两台机器才互相看得见。
+    pub async fn read_identities(
+        &self,
+        work_dir: &Path,
+    ) -> Result<Vec<(String, GameIdentity)>, SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.read_identities().await,
+            Inner::Kopia(engine) => engine.read_identities(work_dir).await,
+        }
+    }
+
+    /// 写回一张身份卡，返回**这一款在云端该用的键**（读-改-写里的"写"；合并由上层做）。
+    pub async fn write_identity(
+        &self,
+        game_id: &str,
+        identity: &GameIdentity,
+        work_dir: &Path,
+    ) -> Result<String, SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.write_identity(game_id, identity, work_dir).await,
+            Inner::Kopia(engine) => engine.write_identity(game_id, identity, work_dir).await,
         }
     }
 

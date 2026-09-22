@@ -154,10 +154,14 @@ case "$cmd" in
           printf '%s/\n' "${{d##*/}}"
         done
       else
-        ls -1 "$p" | grep '\.zip$'
+        # 真 rclone 的 --files-only 列出**所有**文件（包、身份卡、别人放的东西），
+        # 由 kotori 自己按名字筛；这里只 grep .zip 会让身份卡在测试里"不存在"。
+        ls -1 "$p"
       fi
     fi
     ;;
+  # `cat <remote>`：读回一个对象（身份卡就是这么读的）。
+  cat) cat "$(remote_path "$1")" ;;
   deletefile) rm -f "$(remote_path "$1")" ;;
 esac
 exit 0

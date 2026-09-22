@@ -189,6 +189,7 @@ impl Daemon {
                 Err(e) => rpc_err(id, -32602, e),
             },
             "sync.cloud_games" => respond(id, self.rpc_sync_cloud_games().await),
+            "sync.fingerprints" => respond(id, self.rpc_sync_fingerprints().await),
             "sync.restore" => match param_str(&req.params, "id") {
                 Ok(game_id) => {
                     let version = req

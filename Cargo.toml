@@ -55,7 +55,9 @@ which = "7"
 # 双击就能打开**,而这正是"云端是纯文件"这个承诺的最后一步。
 zip = { version = "8", default-features = false, features = ["deflate"] }
 libc = "0.2"
-nix = { version = "0.29", features = ["signal", "process", "term"] }
+# `hostname`:身份卡上那句"这台机器叫什么"只给人看,但机器名要拿得到
+# (Windows 那边走 COMPUTERNAME,见 `daemon/sync_rpc/identity.rs`)。
+nix = { version = "0.29", features = ["signal", "process", "term", "hostname"] }
 argon2 = "0.6.0"
 chacha20poly1305 = "0.11.0"
 futures-util = "0.3.34"
@@ -64,6 +66,7 @@ futures-util = "0.3.34"
 # of its own Xwayland (see `src/scale/x11.rs`). Already in the tree as a transitive
 # dependency of winit, so this adds nothing to build time.
 x11rb = "0.13.2"
+blake2 = "0.11"
 
 # 「浏览…」在 Linux 上的那一半:走桌面 portal(xdg-desktop-portal)。Windows 那边是
 # 下面那个 rfd,二者由 `src/picker.rs` 的两个 `mod platform` 按平台分开。

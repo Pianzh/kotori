@@ -17,7 +17,7 @@ use crate::secrets::{Keyring, SecretKey};
 use crate::util::exec::Quiet;
 
 use super::super::archive::{self, Manifest, PackReport};
-use super::super::cloud::{self, CloudGame, PackIdentity};
+use super::super::cloud::{self, CloudGame, GameIdentity, PackIdentity};
 use super::super::save_targets::SaveTarget;
 use super::super::{
     SyncError, copyto_args, deletefile_args, game_remote, list_dirs_args, list_files_args,
@@ -207,6 +207,140 @@ impl RcloneZip {
         let remote = package_remote(&self.settings, game_id, stamp);
         let args = deletefile_args(&remote);
         self.run(&args, COMMAND_TIMEOUT).await.map(|_| ())
+    }
+
+    // ── 身份卡 ──────────────────────────────────────────────────────────────
+    // 身份（"两台机器上哪两条档案是同一款游戏"）在 rclone 那边就是桶里一个 json
+    // 文件，与包并排放在 `games/<目录>/` 里。`versions()` 只认包名，所以它不会
+    // 被当成一版存档（§5.8）。
+
+    /// 某个目录里的身份卡；目录不存在、或者还没写过卡就是 `None`。
+    async fn identity_at(&self, dir: &str) -> Result<Option<GameIdentity>, SyncError> {
+        let remote = game_remote(&self.settings, dir);
+        let listed = self.run(&list_files_args(&remote), COMMAND_TIMEOUT).await?;
+        if !listed
+            .lines()
+            .any(|name| name.trim() == cloud::IDENTITY_FILE)
+        {
+            return Ok(None);
+        }
+        let text = self
+            .run(
+                &[
+                    "cat".to_string(),
+                    format!("{remote}/{}", cloud::IDENTITY_FILE),
+                ],
+                COMMAND_TIMEOUT,
+            )
+            .await?;
+        serde_json::from_str(&text)
+            .map(Some)
+            .map_err(|e| SyncError::Command(format!("云端身份卡读不懂: {e}")))
+    }
+
+    /// 这个身份在桶里落在哪个目录 —— 也就是"这一款的包放哪"。
+    ///
+    /// 顺序是有讲究的：
+    ///   1. **云端已经有这个身份的卡** ⇒ 就是那个目录。别的机器先建的目录，我们跟它走：
+    ///      版本要能互相看见就得放进**同一个目录**，这正是"游戏名不一样也要绑到同一款"
+    ///      这件事在 rclone 那条路上的落点（也是 `GameConfig::cloud_dir` 存在的理由）。
+    ///   2. 没有：用游戏 id（人类可读）。
+    ///   3. 那个目录被**别的身份**占了：退到 `<id>-<cloud_id 前 6 位>`
+    ///      （§5.7：不要用 `-2`，那看着像"同款第二份"）。
+    async fn identity_dir(&self, game_id: &str, cloud_id: &str) -> Result<String, SyncError> {
+        if let Some(dir) = self.find_identity_dir(cloud_id).await? {
+            return Ok(dir);
+        }
+        for candidate in [
+            game_id.to_string(),
+            format!("{game_id}-{}", cloud::short_id(cloud_id, 6)),
+        ] {
+            match self.identity_at(&candidate).await? {
+                // 没人占（或者目录还不存在）：就用它。
+                None => return Ok(candidate),
+                // 已经是我们的卡：还是它。
+                Some(identity) if identity.cloud_id == cloud_id => return Ok(candidate),
+                // 别人的：换下一个候选。
+                Some(_) => continue,
+            }
+        }
+        // 两个候选都被占了（身份唯一，所以这几乎不可能）：用完整身份兜底，不再去抢。
+        Ok(format!("{game_id}-{cloud_id}"))
+    }
+
+    /// 云端哪个目录里放着这个身份的卡。
+    async fn find_identity_dir(&self, cloud_id: &str) -> Result<Option<String>, SyncError> {
+        for (dir, identity) in self.read_identities().await? {
+            if identity.cloud_id == cloud_id {
+                return Ok(Some(dir));
+            }
+        }
+        Ok(None)
+    }
+
+    /// 云端与这一款对应的身份卡（读-改-写里的"读"）。
+    pub(super) async fn read_identity(
+        &self,
+        game_id: &str,
+        cloud_id: &str,
+    ) -> Result<Option<GameIdentity>, SyncError> {
+        let dir = self.identity_dir(game_id, cloud_id).await?;
+        self.identity_at(&dir).await
+    }
+
+    /// 云端**所有**身份卡，带上它所在的目录（"按指纹找同一款"要用）。
+    ///
+    /// 带目录是因为找到之后要**跟它走同一个目录**（见 [`Self::identity_dir`]）。
+    pub(super) async fn read_identities(&self) -> Result<Vec<(String, GameIdentity)>, SyncError> {
+        let games_dir = format!("{}/games", remote_root(&self.settings));
+        // 桶里还没有 `games/` 时 `lsf` 会失败：先 mkdir（幂等，也顺便把桶建出来）。
+        self.run(&["mkdir".to_string(), games_dir.clone()], COMMAND_TIMEOUT)
+            .await?;
+        let listed = self
+            .run(&list_dirs_args(&games_dir), COMMAND_TIMEOUT)
+            .await?;
+
+        let mut identities = Vec::new();
+        for dir in cloud::parse_dirs(&listed) {
+            if let Some(identity) = self.identity_at(&dir).await? {
+                identities.push((dir, identity));
+            }
+        }
+        Ok(identities)
+    }
+
+    /// 把身份卡放回云端（读-改-写里的"写"；合并由上层做）。
+    ///
+    /// 返回**这一款在云端该用的键**（rclone 就是那个目录名）：调用方要把它记进配置，
+    /// 之后所有版本都往那儿放。
+    pub(super) async fn write_identity(
+        &self,
+        game_id: &str,
+        identity: &GameIdentity,
+        work_dir: &Path,
+    ) -> Result<String, SyncError> {
+        let dir = self.identity_dir(game_id, &identity.cloud_id).await?;
+        // 身份卡要在**这一步**就写下去，而临时目录可能还没被建出来（上传那条路是
+        // 先定身份、再进打包流程，`Staging` 是后建的）。
+        std::fs::create_dir_all(work_dir)
+            .map_err(|e| SyncError::Command(format!("无法创建 {}: {e}", work_dir.display())))?;
+        let local = work_dir.join(cloud::IDENTITY_FILE);
+        let text = serde_json::to_string_pretty(identity)
+            .map_err(|e| SyncError::Command(format!("身份卡序列化失败: {e}")))?;
+        std::fs::write(&local, text)
+            .map_err(|e| SyncError::Command(format!("写不了 {}: {e}", local.display())))?;
+
+        let remote = format!(
+            "{}/{}",
+            game_remote(&self.settings, &dir),
+            cloud::IDENTITY_FILE
+        );
+        self.run(
+            &copyto_args(&local.to_string_lossy(), &remote),
+            COMMAND_TIMEOUT,
+        )
+        .await?;
+        Ok(dir)
     }
 }
 

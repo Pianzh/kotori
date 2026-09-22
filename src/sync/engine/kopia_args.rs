@@ -20,7 +20,7 @@ use std::collections::BTreeMap;
 use serde::Deserialize;
 
 use crate::config::SyncConfig;
-use crate::sync::cloud::CloudGame;
+use crate::sync::cloud::{CloudGame, IDENTITY_DESCRIPTION, KIND_IDENTITY, KIND_SAVE};
 use crate::sync::is_snapshot;
 
 /// 仓库在桶里的前缀。
@@ -95,13 +95,36 @@ fn repository_flags(settings: &SyncConfig, key_id: &str, key: &str) -> Vec<Strin
 /// `description` 存的是我们自己的版本名：两个引擎因此共用同一套版本标识，
 /// "最新的一版"和"保留最近 N 版"在上层不用分叉。`game:` 标签是列快照时的筛子
 /// ——快照的 source 是**本机绝对路径**，双系统/多机上根本对不上，不能用它认游戏。
+///
+/// `kind=save` 也是筛子：同一个仓库里还放着**身份快照**（见
+/// [`identity_snapshot_args`]），`versions()` 与保留窗口只许看存档那一种（§5.3）。
 pub(super) fn snapshot_create_args(game_id: &str, stamp: &str, source: &str) -> Vec<String> {
     vec![
         "snapshot".to_string(),
         "create".to_string(),
         "--json".to_string(),
         format!("--tags=game:{game_id}"),
+        format!("--tags=kind:{KIND_SAVE}"),
         format!("--description={stamp}"),
+        source.to_string(),
+    ]
+}
+
+/// 拍一条**身份快照**：源目录里只有那份 `kotori-game.json`。
+///
+/// kopia 的仓库是它自己的私有格式，没有"每款游戏一个目录"可以摆身份卡，所以身份也
+/// 只能靠快照。两条约束：
+///   * `description` 是一句**固定的话**，绝不能长得像版本名 —— 否则它会被
+///     [`parse_snapshots`] 当成一版存档，进而被保留窗口删掉（§5.3）；
+///   * `kind=identity` 是它自己的筛子（列身份、以及"哪些不是存档"都靠它）。
+pub(super) fn identity_snapshot_args(cloud_id: &str, source: &str) -> Vec<String> {
+    vec![
+        "snapshot".to_string(),
+        "create".to_string(),
+        "--json".to_string(),
+        format!("--tags=game:{cloud_id}"),
+        format!("--tags=kind:{KIND_IDENTITY}"),
+        format!("--description={IDENTITY_DESCRIPTION}"),
         source.to_string(),
     ]
 }
@@ -172,6 +195,12 @@ pub(super) struct Snapshot {
     /// 打出来的是 `{"tag:game":"3days"}`。读标签请走 [`Snapshot::tag`]。
     #[serde(default)]
     pub tags: BTreeMap<String, String>,
+    /// 快照开始时刻（kopia 的 RFC3339，纳秒精度）。
+    ///
+    /// 身份快照的描述是固定的一句话，所以"最新的那条"只能靠时间认（见
+    /// [`identity_snapshots`]）。定长零填充的 RFC3339 字符串可以直接比大小。
+    #[serde(default, rename = "startTime")]
+    pub start_time: String,
 }
 
 impl Snapshot {
@@ -189,6 +218,11 @@ impl Snapshot {
     /// `kind` 标签（身份快照的描述是一句固定的话，本来就不该长得像版本名）。
     fn is_ours(&self) -> bool {
         is_snapshot(&self.description) || self.tag("kind").is_some()
+    }
+
+    /// 这一条是身份快照吗（不是"一版存档"）。
+    fn is_identity(&self) -> bool {
+        self.tag("kind") == Some(KIND_IDENTITY)
     }
 }
 
@@ -220,6 +254,35 @@ pub(super) fn parse_cloud_games(text: &str) -> Result<Vec<CloudGame>, String> {
     Ok(games.into_values().collect())
 }
 
+/// 每个云端身份最新的那条**身份快照**：`(cloud_id, 快照 id)`。
+///
+/// 同一个身份每次上传都会再拍一条（快照不可变，改不了旧的），所以这里按时间取最新
+/// 的一条。读它的内容还要一次 `kopia restore`（§5.4：一次读 = 起一个进程），
+/// 所以调用方要缓存。
+pub(super) fn identity_snapshots(text: &str) -> Result<Vec<(String, String)>, String> {
+    let all: Vec<Snapshot> =
+        serde_json::from_str(text).map_err(|e| format!("读不懂 kopia 的快照列表: {e}"))?;
+    let mut newest: BTreeMap<String, Snapshot> = BTreeMap::new();
+    for snapshot in all {
+        if !snapshot.is_identity() {
+            continue;
+        }
+        let Some(cloud_id) = snapshot.tag("game") else {
+            continue;
+        };
+        match newest.get(cloud_id) {
+            Some(known) if known.start_time >= snapshot.start_time => {}
+            _ => {
+                newest.insert(cloud_id.to_string(), snapshot);
+            }
+        }
+    }
+    Ok(newest
+        .into_iter()
+        .map(|(cloud_id, snapshot)| (cloud_id, snapshot.id))
+        .collect())
+}
+
 /// 解析 `snapshot list --json`，只留下**我们自己建的**那些，按版本名排序。
 ///
 /// 判据与 rclone 那条路同一套（[`super::super::is_snapshot`]）：描述不像我们写的
@@ -229,7 +292,11 @@ pub(super) fn parse_snapshots(text: &str) -> Result<Vec<Snapshot>, String> {
         serde_json::from_str(text).map_err(|e| format!("读不懂 kopia 的快照列表: {e}"))?;
     let mut ours: Vec<Snapshot> = all
         .into_iter()
-        .filter(|snapshot| super::super::is_snapshot(&snapshot.description))
+        .filter(|snapshot| {
+            // 描述得像版本名，而且**不是**身份快照：两种快照躺在同一个仓库里，
+            // 版本列表与保留窗口只许看存档那一种（§5.3）。
+            super::super::is_snapshot(&snapshot.description) && !snapshot.is_identity()
+        })
         .collect();
     ours.sort_by(|a, b| a.description.cmp(&b.description));
     Ok(ours)
@@ -361,5 +428,53 @@ mod tests {
     #[test]
     fn broken_json_is_reported_not_swallowed() {
         assert!(parse_snapshots("not json").is_err());
+    }
+    #[test]
+    fn the_identity_snapshot_is_marked_as_identity_and_never_looks_like_a_version() {
+        let args = identity_snapshot_args("cloud-1", "/tmp/identity");
+        assert_eq!(&args[..2], ["snapshot", "create"]);
+        assert!(args.contains(&"--tags=game:cloud-1".to_string()));
+        // ⚠ kopia 的标签是 `key:value`（实测：写成 `kind=identity` 会被拒：
+        // "Invalid tag format (kind=identity). Requires <key>:<value>"）。
+        assert!(args.contains(&"--tags=kind:identity".to_string()));
+        assert!(args.contains(&format!("--description={IDENTITY_DESCRIPTION}")));
+        assert_eq!(args.last().unwrap(), "/tmp/identity");
+        // ⚠ 描述绝不能长得像版本名：那它就会被当成一版存档，进而被保留窗口删掉。
+        assert!(!is_snapshot(IDENTITY_DESCRIPTION), "{IDENTITY_DESCRIPTION}");
+
+        // 存档快照那边带的是 kind=save —— 两种快照在同一个仓库里靠它分家。
+        let save = snapshot_create_args("3days", "20260901T000000000Z-aaaa1111", "/tmp/payload");
+        assert!(save.contains(&"--tags=kind:save".to_string()));
+    }
+
+    #[test]
+    fn identity_snapshots_are_never_counted_as_versions() {
+        // 即使描述被改成了版本名，`kind=identity` 也说了算：保留窗口绝不许碰它。
+        let json = r#"[
+              {"id":"s1","description":"20260916T120000000Z-abcd1234","tags":{"tag:game":"3days","tag:kind":"save"},"startTime":"2026-09-16T12:00:00Z"},
+              {"id":"i1","description":"20260915T000000000Z-abcd1234","tags":{"tag:game":"3days","tag:kind":"identity"},"startTime":"2026-09-15T10:00:00Z"}
+            ]"#;
+        let ours = parse_snapshots(json).unwrap();
+        assert_eq!(
+            ours.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
+            ["s1"],
+            "身份快照不是一版存档"
+        );
+
+        // 身份快照按**时间**取最新的一条（描述是固定的一句话，分不出新旧）。
+        let json = r#"[
+              {"id":"old","description":"kotori-identity","tags":{"tag:game":"c1","tag:kind":"identity"},"startTime":"2026-09-15T10:00:00Z"},
+              {"id":"new","description":"kotori-identity","tags":{"tag:game":"c1","tag:kind":"identity"},"startTime":"2026-09-16T10:00:00Z"},
+              {"id":"c2","description":"kotori-identity","tags":{"tag:game":"c2","tag:kind":"identity"},"startTime":"2026-09-14T10:00:00Z"},
+              {"id":"save","description":"20260916T120000000Z-abcd1234","tags":{"tag:game":"c1","tag:kind":"save"},"startTime":"2026-09-17T10:00:00Z"}
+            ]"#;
+        assert_eq!(
+            identity_snapshots(json).unwrap(),
+            vec![
+                ("c1".to_string(), "new".to_string()),
+                ("c2".to_string(), "c2".to_string()),
+            ],
+            "每个身份取最新那条；存档快照不算身份快照"
+        );
     }
 }

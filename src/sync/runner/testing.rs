@@ -61,6 +61,8 @@ case "$1" in
     target="$bucket/$(resolve "$3")"
     [ -d "$target" ] && ls -1 "$target"
     ;;
+  # 读回一个对象:身份卡就是这么读的。
+  cat) cat "$bucket/$(resolve "$2")" ;;
   deletefile)
     rm -f "$bucket/$(resolve "$2")"
     ;;

@@ -2844,6 +2844,7 @@ dependencies = [
  "argon2",
  "ashpd",
  "async-trait",
+ "blake2",
  "bytes",
  "chacha20poly1305",
  "chrono",

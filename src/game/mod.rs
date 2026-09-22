@@ -152,8 +152,15 @@ fn game_entry(dir: &Path, exe: PathBuf) -> GameConfig {
         .map(Path::to_path_buf)
         .unwrap_or_else(|| dir.to_path_buf());
 
+    // 指纹在这一刻算（**三条添加路径共用这里**的这条，以及 `game.create` 那条）：
+    // 云端要认"两台机器上哪两条档案是同一款游戏"，靠的就是它（见 `sync::fingerprint`）。
+    let exe_fingerprint = crate::sync::fingerprint::of_file(&exe);
+
     GameConfig {
         cloud_id: None,
+        exe_fingerprint,
+        // 还没上传过：云端落点就是本机的游戏 id（第一次上传时按身份定下来）。
+        cloud_dir: None,
         name,
         game_dir,
         exe_path: exe,

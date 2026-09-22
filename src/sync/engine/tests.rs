@@ -299,3 +299,110 @@ fn rewrite_hostname(config: &Path, hostname: &str) {
     json["hostname"] = serde_json::Value::String(hostname.to_string());
     std::fs::write(config, serde_json::to_string(&json).unwrap()).unwrap();
 }
+
+/// 真 kopia 仓库里的**身份卡**：写进去、读回来、列得出来，而且不算"一版存档"。
+///
+/// 身份在 kopia 那边只能是一条只装着 `kotori-game.json` 的快照（仓库是它的私有格式）。
+/// 这条盯三件事：读得回来、`cloud_games()` 认得它、以及 `versions()` **不**把它当成一版
+/// ——最后一条最要命：当成版本就会被保留窗口删掉。
+#[tokio::test]
+#[ignore = "需要真 kopia：设 KOTORI_KOPIA 指向它再跑 --ignored"]
+async fn a_real_kopia_repository_keeps_the_identity_card_beside_the_saves() {
+    use crate::sync::cloud::{GameIdentity, MachineIdentity};
+
+    let dir = temp("live-identity");
+    let engine =
+        kopia::Kopia::with_binary(real_kopia(), settings(SyncEngine::Kopia), Keyring::memory())
+            .with_home(dir.join("home"))
+            .with_local_repository(dir.join("repo"));
+    let work = dir.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    let timeout = Duration::from_secs(120);
+
+    // 一版存档 + 一张身份卡。
+    let saves = dir.join("saves");
+    std::fs::create_dir_all(&saves).unwrap();
+    std::fs::write(saves.join("save01.sav"), "v1").unwrap();
+    engine
+        .send(
+            "demo",
+            "20260901T000000000Z-aaaa1111",
+            &[target(&saves, "savedata")],
+            None,
+            &work,
+            timeout,
+        )
+        .await
+        .unwrap();
+
+    let mut identity = GameIdentity::new("cloud-1", "Demo");
+    identity.merge_machine(MachineIdentity {
+        machine_id: "machine-a".to_string(),
+        label: "linux-box".to_string(),
+        fingerprints: vec!["v1:10:aa".to_string()],
+        locations: vec!["rel-savedata".to_string()],
+    });
+    let key = engine
+        .write_identity("demo", &identity, &work)
+        .await
+        .unwrap();
+    assert_eq!(key, "cloud-1", "kopia 那边键就是身份本身");
+
+    // 读得回来，而且是同一张卡。
+    let read = engine
+        .read_identity("demo", "cloud-1", &work)
+        .await
+        .unwrap()
+        .expect("身份卡应当读得回来");
+    assert_eq!(read, identity);
+
+    // 列表里认得它；存档那一版照样在。
+    let cards = engine.read_identities(&work).await.unwrap();
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    assert_eq!(cards[0].0, "cloud-1");
+    assert_eq!(cards[0].1, identity);
+    let games = engine.cloud_games().await.unwrap();
+    let demo = games.iter().find(|game| game.id == "demo").unwrap();
+    assert_eq!(demo.versions, 1, "存档那一版照样数得出来");
+    let identity_only = games.iter().find(|game| game.id == "cloud-1").unwrap();
+    assert_eq!(
+        identity_only.versions, 0,
+        "只有身份卡、没有存档的那个身份，版本数是 0"
+    );
+
+    // 再写一次（同一个身份、多一台机器）：新的一条身份快照，读回来是最新那条。
+    let mut again = identity.clone();
+    again.merge_machine(MachineIdentity {
+        machine_id: "machine-b".to_string(),
+        label: "windows-box".to_string(),
+        fingerprints: vec!["v1:20:bb".to_string()],
+        locations: Vec::new(),
+    });
+    engine.write_identity("demo", &again, &work).await.unwrap();
+    let read = engine
+        .read_identity("demo", "cloud-1", &work)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.machines.len(), 2, "读到的必须是最新那一条身份快照");
+
+    // ⚠ 身份快照绝不是"一版存档"：版本列表里只有那两版存档……这里只有一版。
+    assert_eq!(
+        engine.versions("demo").await.unwrap(),
+        vec!["20260901T000000000Z-aaaa1111"],
+        "身份快照不许出现在版本列表里"
+    );
+    // 保留窗口只留 0 版（= 全留）时什么都不删；留 1 版时也只该盯着存档那一版。
+    engine
+        .remove("demo", "20260901T000000000Z-aaaa1111")
+        .await
+        .unwrap();
+    assert!(engine.versions("demo").await.unwrap().is_empty());
+    assert_eq!(
+        engine.read_identities(&work).await.unwrap().len(),
+        1,
+        "删存档版本绝不能连身份卡一起删掉"
+    );
+
+    std::fs::remove_dir_all(&dir).ok();
+}

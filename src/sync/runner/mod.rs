@@ -32,6 +32,7 @@ use crate::secrets::Keyring;
 pub use self::outcome::{GameOutcome, LocationOutcome};
 pub(crate) use self::staging::sweep_stale;
 
+mod identity;
 mod outcome;
 mod pull;
 mod restore;
@@ -140,8 +141,11 @@ impl Runner {
     }
 
     /// The version packages the cloud holds for a game, oldest first.
-    pub async fn packages(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
-        self.backend.versions(game_id).await
+    ///
+    /// `cloud_key` 是**这一款在云端的落点**（见 [`crate::config::GameConfig::cloud_dir`]），
+    /// 不是本机的游戏 id：两台机器给同一款游戏起不同名字时，靠它把版本放进同一处。
+    pub async fn packages(&self, cloud_key: &str) -> Result<Vec<String>, SyncError> {
+        self.backend.versions(cloud_key).await
     }
 
     /// 云端有哪几款游戏（名字有序）。
@@ -158,14 +162,14 @@ impl Runner {
     /// millisecond, so lexicographic order is chronological order and no
     /// pointer file has to be kept in sync. kopia 那条路把同一个名字写进快照的
     /// description，于是这条判据在两个引擎下逐字相同。
-    pub async fn latest_package(&self, game_id: &str) -> Result<Option<String>, SyncError> {
-        self.backend.latest(game_id).await
+    pub async fn latest_package(&self, cloud_key: &str) -> Result<Option<String>, SyncError> {
+        self.backend.latest(cloud_key).await
     }
 
     /// Upload this machine's version as one package.
     pub(super) async fn send_version(
         &self,
-        game_id: &str,
+        cloud_key: &str,
         stamp: &str,
         targets: &[SaveTarget],
         identity: Option<&PackIdentity>,
@@ -173,23 +177,27 @@ impl Runner {
         timeout: Duration,
     ) -> Result<PackReport, SyncError> {
         self.backend
-            .send(game_id, stamp, targets, identity, work_dir, timeout)
+            .send(cloud_key, stamp, targets, identity, work_dir, timeout)
             .await
     }
 
     /// Fetch one version and unpack it into `into`.
     pub(super) async fn fetch_version(
         &self,
-        game_id: &str,
+        cloud_key: &str,
         stamp: &str,
         into: &Path,
         timeout: Duration,
     ) -> Result<Manifest, SyncError> {
-        self.backend.fetch(game_id, stamp, into, timeout).await
+        self.backend.fetch(cloud_key, stamp, into, timeout).await
     }
 
     /// Delete one version package.
-    pub(super) async fn remove_version(&self, game_id: &str, stamp: &str) -> Result<(), SyncError> {
-        self.backend.remove(game_id, stamp).await
+    pub(super) async fn remove_version(
+        &self,
+        cloud_key: &str,
+        stamp: &str,
+    ) -> Result<(), SyncError> {
+        self.backend.remove(cloud_key, stamp).await
     }
 }

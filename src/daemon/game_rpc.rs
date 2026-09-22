@@ -116,6 +116,10 @@ impl Daemon {
                 id.clone(),
                 crate::config::GameConfig {
                     cloud_id: None,
+                    // 指纹与 `game::game_entry`（扫描那条路）同一个算法：见
+                    // `sync::fingerprint`。读不到就是 `None`，之后由同步页补齐。
+                    exe_fingerprint: crate::sync::fingerprint::of_file(&new_game.exe_path),
+                    cloud_dir: None,
                     name: name.clone(),
                     game_dir: game_dir.clone(),
                     exe_path: new_game.exe_path.clone(),

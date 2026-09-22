@@ -79,6 +79,8 @@ mod tests {
         config.wine.prefix = Some(prefix.clone());
         let game = GameConfig {
             cloud_id: None,
+            exe_fingerprint: None,
+            cloud_dir: None,
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),
@@ -121,6 +123,8 @@ mod tests {
 
         let game = GameConfig {
             cloud_id: None,
+            exe_fingerprint: None,
+            cloud_dir: None,
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),

@@ -111,14 +111,22 @@ impl Daemon {
             };
             // 身份在这一刻定下来（第一次上传 = 这台机器认领这一款），并写进包里 ——
             // 取回之前比的就是它（见 `crate::sync::cloud::identity_match`）。
-            let identity = match self.pack_identity(&id, &targets).await {
-                Ok(identity) => identity,
+            let packed = match self.pack_identity(&runner, &id, &name, &targets).await {
+                Ok(packed) => packed,
                 Err(error) => {
                     outcomes.push(GameOutcome::failed(&id, &name, error));
                     continue;
                 }
             };
-            let outcome = runner.upload(&id, &name, &targets, Some(&identity)).await;
+            let outcome = runner
+                .upload(
+                    &id,
+                    &name,
+                    &packed.cloud_key,
+                    &targets,
+                    Some(&packed.identity),
+                )
+                .await;
             self.sync.remember(&id, "上传", &outcome);
             outcomes.push(outcome);
         }
@@ -138,6 +146,32 @@ impl Daemon {
         let runner = self.sync_runner(&settings)?;
         let versions = runner.packages(game_id).await.map_err(|e| e.to_string())?;
         Ok(json!({ "versions": versions }))
+    }
+
+    /// 给存量档案补齐 exe 指纹。
+    ///
+    /// 打开同步页时问一次就够：幂等（已经有的一个都不碰），补不上的（那块盘不在）
+    /// 下次再补。返回**这一次真的补上的**那些 id，界面据此说一句
+    /// "已为 N 款游戏建立指纹" —— 这是本机的事，与云端无关（§2.10）。
+    pub(in crate::daemon) async fn rpc_sync_fingerprints(&self) -> Result<Value, String> {
+        let missing = self
+            .config
+            .read()
+            .await
+            .games
+            .values()
+            .any(|game| game.exe_fingerprint.is_none());
+        if !missing {
+            // 一条都不缺就别写配置：动一次 config.toml 是看得见的副作用。
+            return Ok(json!({ "filled": Vec::<String>::new() }));
+        }
+        let filled = self
+            .mutate_config(|config| {
+                let filled = crate::sync::fingerprint::fill_missing(config);
+                Ok(json!(filled))
+            })
+            .await?;
+        Ok(json!({ "filled": filled }))
     }
 
     /// 云端有哪几款游戏 —— **不限于本机有的**。
@@ -183,8 +217,16 @@ impl Daemon {
         let (name, targets) = self.sync_targets(game_id).await?;
         let cloud_id = self.cloud_id_of(game_id).await?;
 
+        let cloud_key = self.cloud_key_of(game_id).await?;
         let outcome = runner
-            .restore(game_id, &name, &targets, cloud_id.as_deref(), version)
+            .restore(
+                game_id,
+                &name,
+                &cloud_key,
+                &targets,
+                cloud_id.as_deref(),
+                version,
+            )
             .await;
         self.sync.remember(game_id, "恢复", &outcome);
         Ok(json!({ "ok": outcome.ok, "game": outcome }))
@@ -220,10 +262,15 @@ impl Daemon {
         // ⚠ 取回那条路**绝不认领身份**：认领是上传的事。没认领过就是"还没配对"，
         // 闸门据此拒绝取回（宁可不动，也不猜）——见 `crate::sync::cloud`。
         let cloud_id = self.cloud_id_of(game_id).await.unwrap_or(None);
+        // 这条路的失败**绝不能拦住启动**（用户要的是玩游戏），所以错误也变成回话。
+        let cloud_key = match self.cloud_key_of(game_id).await {
+            Ok(key) => key,
+            Err(error) => return Some(json!({ "ok": false, "error": error })),
+        };
 
         let outcome = match tokio::time::timeout(
             PULL_TIMEOUT,
-            runner.pull(game_id, &name, &targets, cloud_id.as_deref()),
+            runner.pull(game_id, &name, &cloud_key, &targets, cloud_id.as_deref()),
         )
         .await
         {
@@ -276,15 +323,21 @@ impl Daemon {
         tokio::time::sleep(SETTLE_DELAY).await;
 
         // 身份先定下来：包要带着它上云（第一次上传就在这一刻认领）。
-        let identity = match self.pack_identity(game_id, &targets).await {
-            Ok(identity) => identity,
+        let packed = match self.pack_identity(&runner, game_id, &name, &targets).await {
+            Ok(packed) => packed,
             Err(error) => {
                 tracing::warn!("{game_id}: 退出后上传失败: {error}");
                 return;
             }
         };
         let outcome = runner
-            .upload(game_id, &name, &targets, Some(&identity))
+            .upload(
+                game_id,
+                &name,
+                &packed.cloud_key,
+                &targets,
+                Some(&packed.identity),
+            )
             .await;
         self.sync.remember(game_id, "上传", &outcome);
         if outcome.ok {

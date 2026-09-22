@@ -44,7 +44,7 @@ use super::kopia_args as args;
 pub(super) const DEFAULT_PASSWORD: &str = "kotori";
 
 /// 一次 kopia 调用的时间上限。
-const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
+pub(super) const COMMAND_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// kopia 0.22 的仓库与快照。
 pub(super) struct Kopia {
@@ -192,7 +192,11 @@ impl Kopia {
         Ok(())
     }
 
-    async fn run(&self, argv: &[String], timeout: Duration) -> Result<String, SyncError> {
+    pub(super) async fn run(
+        &self,
+        argv: &[String],
+        timeout: Duration,
+    ) -> Result<String, SyncError> {
         self.prepare_dirs()?;
         let env = self.env()?;
         let mut command = tokio::process::Command::new(&self.binary);
@@ -237,7 +241,7 @@ impl Kopia {
     }
 
     /// 需要"已经连上仓库"的每一步都先过这里。
-    async fn ensure_connected(&self) -> Result<(), SyncError> {
+    pub(super) async fn ensure_connected(&self) -> Result<(), SyncError> {
         let marker = self.target_marker();
         let target = self.current_target();
         let connected = self.config_path().exists()

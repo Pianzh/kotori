@@ -102,6 +102,8 @@ watch_only = false
 fn the_watched_process_name_falls_back_to_the_exe_file_name() {
     let game = |process_name: Option<&str>| GameConfig {
         cloud_id: None,
+        exe_fingerprint: None,
+        cloud_dir: None,
         name: "探针".into(),
         game_dir: PathBuf::from("/games/probe"),
         exe_path: PathBuf::from("/games/probe/Game.exe"),
@@ -158,6 +160,8 @@ fn sample_config() -> Config {
         "demo".into(),
         GameConfig {
             cloud_id: None,
+            exe_fingerprint: None,
+            cloud_dir: None,
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),

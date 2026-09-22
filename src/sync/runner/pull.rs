@@ -29,6 +29,7 @@ impl Runner {
         &self,
         game_id: &str,
         name: &str,
+        cloud_key: &str,
         targets: &[crate::sync::SaveTarget],
         local_cloud_id: Option<&str>,
     ) -> GameOutcome {
@@ -36,7 +37,7 @@ impl Runner {
             return GameOutcome::failed(game_id, name, error.to_string());
         }
 
-        let stamp = match self.latest_package(game_id).await {
+        let stamp = match self.latest_package(cloud_key).await {
             Ok(Some(stamp)) => stamp,
             // Nothing has ever been uploaded: not an error, just nothing to do.
             Ok(None) => {
@@ -59,7 +60,7 @@ impl Runner {
             Err(error) => return GameOutcome::failed(game_id, name, error),
         };
         let manifest = match self
-            .fetch_version(game_id, &stamp, &staging.unpacked(), PULL_TIMEOUT)
+            .fetch_version(cloud_key, &stamp, &staging.unpacked(), PULL_TIMEOUT)
             .await
         {
             Ok(manifest) => manifest,
@@ -200,7 +201,7 @@ mod tests {
 
         let outcome = fake
             .runner(0)
-            .pull("demo", "Demo", &[target], Some(CLOUD_ID))
+            .pull("demo", "Demo", "demo", &[target], Some(CLOUD_ID))
             .await;
         assert!(outcome.ok, "{outcome:?}");
         assert_eq!(outcome.locations[0].action, "kept");
@@ -234,6 +235,7 @@ mod tests {
             .pull(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(CLOUD_ID),
             )
@@ -257,6 +259,7 @@ mod tests {
             .pull(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(CLOUD_ID),
             )
@@ -285,6 +288,7 @@ mod tests {
             .pull(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(CLOUD_ID),
             )
@@ -316,6 +320,7 @@ mod tests {
             .pull(
                 "demo",
                 "Demo",
+                "demo",
                 &[
                     target(&saves, "savedata", "rel-savedata"),
                     // 这一台机器上还有另一个位置，云端这一版里没有它。
@@ -357,6 +362,7 @@ mod tests {
             .pull(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some("another-identity"),
             )
@@ -388,6 +394,7 @@ mod tests {
             .pull(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 None,
             )
@@ -424,6 +431,7 @@ mod tests {
             .pull(
                 "demo",
                 "Demo",
+                "demo",
                 &[target(&saves, "savedata", "rel-savedata")],
                 Some(CLOUD_ID),
             )
