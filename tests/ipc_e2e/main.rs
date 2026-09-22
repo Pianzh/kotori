@@ -19,6 +19,7 @@ mod helpers;
 
 mod daemon;
 mod library;
+mod pairing;
 mod session;
 mod sync;
 mod sync_cloud;

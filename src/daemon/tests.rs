@@ -162,6 +162,7 @@ async fn game_list_exposes_the_full_scale_profile() {
             cloud_id: None,
             exe_fingerprint: None,
             cloud_dir: None,
+            cloud_rejected: Vec::new(),
             name: "demo".into(),
             game_dir: "/games/demo".into(),
             exe_path: "/games/demo/game.exe".into(),
@@ -199,6 +200,7 @@ async fn games_are_sorted_by_name() {
                 cloud_id: None,
                 exe_fingerprint: None,
                 cloud_dir: None,
+                cloud_rejected: Vec::new(),
                 name: name.into(),
                 game_dir: "/g".into(),
                 exe_path: "/g/game.exe".into(),
@@ -243,6 +245,7 @@ async fn games_with_the_same_name_still_have_one_order() {
                 cloud_id: None,
                 exe_fingerprint: None,
                 cloud_dir: None,
+                cloud_rejected: Vec::new(),
                 name: "同名".into(),
                 game_dir: "/g".into(),
                 exe_path: "/g/game.exe".into(),
@@ -317,14 +320,17 @@ async fn status_on_unknown_session_lists_nothing_new() {
 ///     定下来，之后粘住。它们不该由客户端随手写：那等于把"两款游戏对不对得上""版本
 ///     放进哪个目录"交给手滑（将来配对要走专门的 RPC）；
 ///   * `exe_fingerprint` —— 由 daemon 拿 exe 现算（添加时算、缺了补齐）。让客户端写
-///     等于允许伪造"这就是同一款"的提议，而这个提议正是自动绑定的依据。
+///     等于允许伪造"这就是同一款"的提议，而这个提议正是自动绑定的依据；
+///   * `cloud_rejected` —— 用户点过「不是同一款」的账，由配对的 RPC 记（`sync.reject`），
+///     客户端直接写它等于绕过那条路。
 #[test]
 fn every_game_config_key_is_either_patchable_or_a_known_exception() {
-    const EXCEPTIONS: [&str; 5] = [
+    const EXCEPTIONS: [&str; 6] = [
         "created_at",
         "scale_profile",
         "cloud_id",
         "cloud_dir",
+        "cloud_rejected",
         "exe_fingerprint",
     ];
     /// config 与 patch 里名字不一样的那几个：`(config 里的, patch 里的)`。
@@ -334,6 +340,7 @@ fn every_game_config_key_is_either_patchable_or_a_known_exception() {
         cloud_id: None,
         exe_fingerprint: None,
         cloud_dir: None,
+        cloud_rejected: Vec::new(),
         name: "x".into(),
         game_dir: "/g".into(),
         exe_path: "/g/x.exe".into(),

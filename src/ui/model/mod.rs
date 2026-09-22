@@ -19,7 +19,7 @@ pub use environment::{ConfigSource, WineStatus};
 pub use game::{SavePathDraft, UiGame};
 pub use picker::ProcessRow;
 pub use session::SessionInfo;
-pub use sync::{SyncGameRow, SyncStatus};
+pub use sync::{PairingRow, PairingState, SyncGameRow, SyncStatus};
 
 pub(super) use environment::{EnvCheck, Environment};
 pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, SAVE_PATH_KINDS, SaveAttempt};

@@ -208,6 +208,22 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_sync_browse_rclone_binary(|| dispatch(Message::PickPath(PathTarget::RcloneBinary)));
     window.on_sync_browse_kopia_binary(|| dispatch(Message::PickPath(PathTarget::KopiaBinary)));
     window.on_sync_test(|| dispatch(Message::SyncTest));
+    // 配对那一块的状态在一个 Slint 全局里，回调也从那儿接（照 `ProcessPickerState`）。
+    let pairing = window.global::<PairingBoard>();
+    pairing.on_scan(|| dispatch(Message::SyncScanCloud));
+    pairing.on_pair(|local_id, cloud_key, cloud_id| {
+        dispatch(Message::SyncPair(
+            local_id.to_string(),
+            cloud_key.to_string(),
+            cloud_id.to_string(),
+        ));
+    });
+    pairing.on_reject(|local_id, cloud_id| {
+        dispatch(Message::SyncRejectPairing(
+            local_id.to_string(),
+            cloud_id.to_string(),
+        ));
+    });
     window.on_sync_now(|id| {
         let id = id.to_string();
         dispatch(Message::SyncNow((!id.is_empty()).then_some(id)));

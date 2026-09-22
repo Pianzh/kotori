@@ -45,6 +45,7 @@ pub(super) fn daemon_at(keyring: Keyring) -> (Daemon, PathBuf) {
             cloud_id: None,
             exe_fingerprint: None,
             cloud_dir: None,
+            cloud_rejected: Vec::new(),
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),

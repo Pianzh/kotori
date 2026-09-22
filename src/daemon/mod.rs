@@ -140,6 +140,7 @@ impl Daemon {
             tracing::info!("清掉了上次留下的 {swept} 个临时包目录");
         }
 
+        self.spawn_fingerprint_backfill();
         self.spawn_sync_events();
         // 自动追踪:不是 kotori 启动的游戏也要有一局记录(见 `watch`)。
         self.spawn_process_watch();

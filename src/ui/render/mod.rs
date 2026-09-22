@@ -18,7 +18,7 @@ use add::push_add;
 use detail::push_detail;
 use games::push_games;
 use settings::push_settings;
-use sync::push_sync;
+use sync::{push_pairing, push_sync};
 
 mod add;
 mod detail;
@@ -41,6 +41,7 @@ pub(super) fn render(ui: &mut Ui) {
     push_detail(ui);
     push_add(ui);
     push_sync(ui);
+    push_pairing(ui);
     push_settings(ui);
 }
 /// 「浏览…」:按钮能不能点,以及不能点时那行理由。

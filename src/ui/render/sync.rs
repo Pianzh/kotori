@@ -149,6 +149,54 @@ pub(super) fn push_sync(ui: &mut Ui) {
         |v| w.set_sync_master_hint(v),
     );
 }
+/// 配对表：一句话（扫描结果）+ 一张表。
+///
+/// 表本身由 [`Ui::pairing`] 持有（Slint 的数组属性不可变），这里只把模型推过去。
+pub(super) fn push_pairing(ui: &mut Ui) {
+    let app = &ui.app;
+    // 状态在一个 Slint 全局里（见 `widgets/pairing.slint`）：页面只管画，不转发。
+    let board = ui.window.global::<PairingBoard>();
+
+    push_bool(board.get_scanned(), app.pairing_scanned, |v| {
+        board.set_scanned(v)
+    });
+    push_bool(board.get_scanning(), app.scanning, |v| {
+        board.set_scanning(v)
+    });
+    push_str(
+        board.get_message(),
+        app.pairing_msg.as_deref().unwrap_or(""),
+        |v| board.set_message(v),
+    );
+    push_bool(board.get_ok(), app.pairing_ok, |v| board.set_ok(v));
+
+    let items: Vec<PairingItem> = app
+        .pairing
+        .iter()
+        .map(|row| PairingItem {
+            cloud_key: row.cloud_key.clone().into(),
+            cloud_id: row.cloud_id.clone().into(),
+            cloud_short: crate::sync::cloud::short_id(&row.cloud_id, 8).into(),
+            cloud_name: row.cloud_name.clone().into(),
+            machines: row.machines as i32,
+            state: row.state as i32,
+            local_id: row.local_id.clone().into(),
+            local_name: row.local_name.clone().into(),
+            detail: row.detail().into(),
+            choices: ModelRc::new(VecModel::from(
+                row.choices
+                    .iter()
+                    .map(|(id, name)| PairingChoice {
+                        local_id: id.clone().into(),
+                        local_name: name.clone().into(),
+                    })
+                    .collect::<Vec<_>>(),
+            )),
+        })
+        .collect();
+    push_model(&ui.pairing, items);
+}
+
 /// `sync.status` reports the credential store by name; the page wants a number
 /// (it decides which of the three blocks to draw). The mapping itself lives on
 /// [`CredentialStore`] — the wording and the index must not drift apart.

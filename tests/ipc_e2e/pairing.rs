@@ -1,0 +1,207 @@
+//! 配对：`sync.pairing` / `sync.pair` / `sync.reject` 的端到端。
+//!
+//! 与 `sync_cloud.rs` 分开：那边管"云端有什么、看不看得见"，这边管"云端那一条与本机
+//! 哪一条档案是同一款"。规则本身在 `src/sync/pairing.rs`（纯函数），这里验的是它接上
+//! 真实配置、真实桶之后的样子：自动绑、跟着对方的目录走、否掉之后不再绑回来。
+
+use serde_json::json;
+
+use crate::fixture::Fixture;
+use crate::helpers::{cloud_packages, field};
+
+/// 第二台机器**按 exe 指纹**认领第一款：配对扫描自动绑上，而且跟着对方的目录走。
+///
+/// 这是整件事的目的：两台机器给同一款游戏起的名字不一样，也能对上号；对上之后版本
+/// 落在**同一个目录**里，于是互相看得见。名字一样不算数 —— 这条测试故意让两边的游戏
+/// 名字与 slug 都不同。
+#[test]
+fn a_second_machine_pairs_by_fingerprint_and_follows_the_same_directory() {
+    // 同一个 exe（内容一样 = 指纹一样），放在两台机器各自的目录里。
+    let exe_bytes = b"\x7fELF kotori pairing probe".to_vec();
+
+    let mut machine_a = Fixture::new("pair-a");
+    let remote = machine_a.enable_fake_sync(true);
+    machine_a.start();
+
+    let dir_a = machine_a.dir.join("Original Name");
+    let saves_a = dir_a.join("savedata");
+    std::fs::create_dir_all(&saves_a).unwrap();
+    let exe_a = dir_a.join("game.exe");
+    std::fs::write(&exe_a, &exe_bytes).unwrap();
+    std::fs::write(saves_a.join("save.dat"), b"from-a").unwrap();
+
+    let created = machine_a.rpc(
+        "game.create",
+        json!({ "name": "Original Name", "exe_path": exe_a, "game_dir": dir_a }),
+    );
+    assert_eq!(created["result"]["id"], "original-name", "{created}");
+    machine_a.rpc(
+        "game.update",
+        json!({ "id": "original-name", "save_paths": ["savedata"] }),
+    );
+    machine_a.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+    let uploaded = machine_a.rpc("sync.now", json!({ "id": "original-name" }));
+    assert_eq!(uploaded["result"]["ok"], true, "{uploaded}");
+    assert_eq!(cloud_packages(&remote.join("games/original-name")).len(), 1);
+
+    // --- 第二台机器：另一个名字、另一个 slug，但 exe 一样 ---------------------
+    let mut machine_b = Fixture::new("pair-b");
+    machine_b.enable_fake_sync(true);
+    machine_b.share_bucket_with(&machine_a);
+    machine_b.start();
+    machine_b.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+
+    let dir_b = machine_b.dir.join("Renamed");
+    let saves_b = dir_b.join("savedata");
+    std::fs::create_dir_all(&saves_b).unwrap();
+    let exe_b = dir_b.join("game.exe");
+    std::fs::write(&exe_b, &exe_bytes).unwrap();
+    let created = machine_b.rpc(
+        "game.create",
+        json!({ "name": "Renamed", "exe_path": exe_b, "game_dir": dir_b }),
+    );
+    assert_eq!(created["result"]["id"], "renamed", "{created}");
+    machine_b.rpc(
+        "game.update",
+        json!({ "id": "renamed", "save_paths": ["savedata"] }),
+    );
+
+    // 扫描：指纹恰好命中一条，于是**自动绑上**（界面上那一行会写明依据）。
+    let scan = machine_b.rpc("sync.pairing", json!({}));
+    assert_eq!(scan["result"]["bound"], 1, "{scan}");
+    let row = &scan["result"]["rows"][0];
+    assert_eq!(row["state"], 1, "自动绑定: {scan}");
+    assert_eq!(row["local_name"], "Renamed", "{scan}");
+    assert_eq!(row["evidence"], "fingerprint", "{scan}");
+
+    // 绑定落进配置：身份是 A 的，**云端落点也是 A 那个目录**。
+    let written = std::fs::read_to_string(machine_b.config.clone()).unwrap();
+    let a_config = std::fs::read_to_string(machine_a.config.clone()).unwrap();
+    let a_cloud_id = field(&a_config, "cloud_id").unwrap();
+    assert_eq!(
+        field(&written, "cloud_id").as_deref(),
+        Some(a_cloud_id.as_str())
+    );
+    assert_eq!(
+        field(&written, "cloud_dir").as_deref(),
+        Some("original-name"),
+        "包要跟着身份放进同一个目录，否则两台机器永远互相看不见"
+    );
+
+    // 配对之后，B 能取回 A 传的那一版（身份对得上，闸门放行）。
+    let restored = machine_b.rpc("sync.restore", json!({ "id": "renamed" }));
+    assert_eq!(restored["result"]["ok"], true, "{restored}");
+    assert_eq!(
+        std::fs::read_to_string(saves_b.join("save.dat")).unwrap(),
+        "from-a",
+        "配对之后，另一台机器传的存档取回来了"
+    );
+
+    // B 再上传一版：它落在 **A 的目录**里，所以这一款现在有两版。
+    std::fs::write(saves_b.join("save.dat"), b"progress-on-b").unwrap();
+    let uploaded = machine_b.rpc("sync.now", json!({ "id": "renamed" }));
+    assert_eq!(uploaded["result"]["ok"], true, "{uploaded}");
+    assert_eq!(
+        cloud_packages(&remote.join("games/original-name")).len(),
+        2,
+        "B 的版本要与 A 的放在一起"
+    );
+    assert!(!remote.join("games/renamed").exists(), "不该另立一个目录");
+}
+
+/// 「不是同一款」要**记住**：下一次扫描不许再自动绑回来。
+///
+/// 没有这份记忆，用户否掉一次、界面下一次扫描又绑回去 —— 界面和他自己打架。
+#[test]
+fn rejecting_a_pairing_sticks() {
+    let mut machine_a = Fixture::new("reject-a");
+    let remote = machine_a.enable_fake_sync(true);
+    machine_a.start();
+
+    let dir_a = machine_a.dir.join("Probe");
+    std::fs::create_dir_all(&dir_a).unwrap();
+    let exe = dir_a.join("game.exe");
+    std::fs::write(&exe, b"same bytes everywhere").unwrap();
+    machine_a.rpc(
+        "game.create",
+        json!({ "name": "Probe", "exe_path": exe, "game_dir": dir_a }),
+    );
+    machine_a.rpc("game.update", json!({ "id": "probe", "save_paths": ["."] }));
+    machine_a.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+    assert_eq!(
+        machine_a.rpc("sync.now", json!({ "id": "probe" }))["result"]["ok"],
+        true
+    );
+    let cloud_id = field(
+        &std::fs::read_to_string(machine_a.config.clone()).unwrap(),
+        "cloud_id",
+    )
+    .unwrap();
+
+    // 第二台机器：指纹一样，于是扫描时会自动绑上。
+    let mut machine_b = Fixture::new("reject-b");
+    machine_b.enable_fake_sync(true);
+    machine_b.share_bucket_with(&machine_a);
+    machine_b.start();
+    machine_b.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+    let dir_b = machine_b.dir.join("Other Game");
+    std::fs::create_dir_all(&dir_b).unwrap();
+    let exe_b = dir_b.join("game.exe");
+    std::fs::write(&exe_b, b"same bytes everywhere").unwrap();
+    machine_b.rpc(
+        "game.create",
+        json!({ "name": "Other Game", "exe_path": exe_b, "game_dir": dir_b }),
+    );
+    machine_b.rpc(
+        "game.update",
+        json!({ "id": "other-game", "save_paths": ["."] }),
+    );
+
+    let scan = machine_b.rpc("sync.pairing", json!({}));
+    assert_eq!(scan["result"]["bound"], 1, "{scan}");
+
+    // 用户说：不是同一款。
+    let rejected = machine_b.rpc(
+        "sync.reject",
+        json!({ "id": "other-game", "cloud_id": cloud_id }),
+    );
+    assert_eq!(rejected["result"]["ok"], true, "{rejected}");
+
+    // 再扫一遍：不许再绑（连候选都不该出现）。
+    let scan = machine_b.rpc("sync.pairing", json!({}));
+    assert_eq!(scan["result"]["bound"], 0, "{scan}");
+    let row = &scan["result"]["rows"][0];
+    assert!(
+        row["choices"].as_array().unwrap().is_empty(),
+        "否掉过的不该再当候选: {scan}"
+    );
+    let written = std::fs::read_to_string(machine_b.config.clone()).unwrap();
+    assert!(!written.contains("cloud_id"), "{written}");
+    assert!(written.contains(&cloud_id), "要记下否掉了哪一个: {written}");
+
+    // 而手动绑定照样可以（用户改主意了）。
+    let paired = machine_b.rpc(
+        "sync.pair",
+        json!({ "id": "other-game", "cloud_key": "probe", "cloud_id": cloud_id }),
+    );
+    assert_eq!(paired["result"]["ok"], true, "{paired}");
+    let written = std::fs::read_to_string(machine_b.config.clone()).unwrap();
+    assert_eq!(
+        field(&written, "cloud_id").as_deref(),
+        Some(cloud_id.as_str())
+    );
+    assert_eq!(field(&written, "cloud_dir").as_deref(), Some("probe"));
+    assert_eq!(cloud_packages(&remote.join("games/probe")).len(), 1);
+}

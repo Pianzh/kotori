@@ -148,32 +148,6 @@ impl Daemon {
         Ok(json!({ "versions": versions }))
     }
 
-    /// 给存量档案补齐 exe 指纹。
-    ///
-    /// 打开同步页时问一次就够：幂等（已经有的一个都不碰），补不上的（那块盘不在）
-    /// 下次再补。返回**这一次真的补上的**那些 id，界面据此说一句
-    /// "已为 N 款游戏建立指纹" —— 这是本机的事，与云端无关（§2.10）。
-    pub(in crate::daemon) async fn rpc_sync_fingerprints(&self) -> Result<Value, String> {
-        let missing = self
-            .config
-            .read()
-            .await
-            .games
-            .values()
-            .any(|game| game.exe_fingerprint.is_none());
-        if !missing {
-            // 一条都不缺就别写配置：动一次 config.toml 是看得见的副作用。
-            return Ok(json!({ "filled": Vec::<String>::new() }));
-        }
-        let filled = self
-            .mutate_config(|config| {
-                let filled = crate::sync::fingerprint::fill_missing(config);
-                Ok(json!(filled))
-            })
-            .await?;
-        Ok(json!({ "filled": filled }))
-    }
-
     /// 云端有哪几款游戏 —— **不限于本机有的**。
     ///
     /// 这是"两台机器互相看得见"的入口：从前只有已知 id 才能列版本，第二台机器于是

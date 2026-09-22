@@ -30,6 +30,9 @@ pub(super) struct Ui {
     /// to be held here and handed over as a model.
     pub(super) games: Rc<VecModel<GameItem>>,
     pub(super) saves: Rc<VecModel<SaveItem>>,
+    /// 配对表（`sync.pairing` 的结果）。同 `games`/`saves`：Slint 的数组属性不可变，
+    /// 所以表由这边持有、整份推过去。
+    pub(super) pairing: Rc<VecModel<PairingItem>>,
     /// 「从正在运行的进程里挑」浮层里那些行。整表只在内容变了时重建(见
     /// `render::push_process_picker`)。
     pub(super) process_rows: Rc<VecModel<ProcessPickRow>>,
@@ -111,9 +114,13 @@ pub(super) fn run() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Handle::current();
     let games = Rc::new(VecModel::<GameItem>::default());
     let saves = Rc::new(VecModel::<SaveItem>::default());
+    let pairing = Rc::new(VecModel::<PairingItem>::default());
     let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
     window.set_games(games.clone().into());
     window.set_saves(saves.clone().into());
+    window
+        .global::<PairingBoard>()
+        .set_rows(pairing.clone().into());
     window
         .global::<ProcessPickerState>()
         .set_rows(process_rows.clone().into());
@@ -125,6 +132,7 @@ pub(super) fn run() -> anyhow::Result<()> {
         runtime,
         games,
         saves,
+        pairing,
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,

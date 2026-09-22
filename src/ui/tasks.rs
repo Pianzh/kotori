@@ -257,6 +257,45 @@ pub(super) async fn sync_test(socket: &Path) -> Result<String, String> {
     Ok(str_field(&value, "remote"))
 }
 
+/// 扫一遍云端，拿回配对表（`sync.pairing`）。
+///
+/// ⚠ 这是**唯一**一条会读云端身份的路（kopia 那边读一次 = 一次 `restore`），所以它
+/// 只挂在「扫描云端」那个按钮上，不跟着状态刷新跑。
+pub(super) async fn sync_scan_cloud(socket: &Path) -> Result<Vec<PairingRow>, String> {
+    let value = crate::rpc::call(socket, "sync.pairing", None).await?;
+    parse_pairing(&value)
+}
+
+/// 把本机这一款绑到云端那个身份上，然后重新扫一遍（表要反映刚做的决定）。
+pub(super) async fn sync_pair(
+    socket: &Path,
+    local_id: String,
+    cloud_key: String,
+    cloud_id: String,
+) -> Result<Vec<PairingRow>, String> {
+    let params = crate::rpc::params([
+        ("id", Value::String(local_id)),
+        ("cloud_key", Value::String(cloud_key)),
+        ("cloud_id", Value::String(cloud_id)),
+    ]);
+    crate::rpc::call(socket, "sync.pair", Some(params)).await?;
+    sync_scan_cloud(socket).await
+}
+
+/// 「不是同一款」：撤掉绑定并记住，然后重新扫一遍。
+pub(super) async fn sync_reject_pairing(
+    socket: &Path,
+    local_id: String,
+    cloud_id: String,
+) -> Result<Vec<PairingRow>, String> {
+    let params = crate::rpc::params([
+        ("id", Value::String(local_id)),
+        ("cloud_id", Value::String(cloud_id)),
+    ]);
+    crate::rpc::call(socket, "sync.reject", Some(params)).await?;
+    sync_scan_cloud(socket).await
+}
+
 /// Upload now, and turn the daemon's per-location report into one line.
 pub(super) async fn sync_now(socket: &Path, game_id: Option<String>) -> Result<String, String> {
     let params = crate::rpc::params(game_id.map(|id| ("id", Value::String(id))));

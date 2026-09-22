@@ -30,6 +30,37 @@ pub(super) struct Packed {
 }
 
 impl Daemon {
+    /// 后台把存量档案缺的 exe 指纹补上。
+    ///
+    /// 这是**本机自己的事**，用户不需要看见它：指纹没算出来只意味着"这一款暂时认不出
+    /// 云端那一款"，界面上没有任何东西可点。所以跟着启动跑一次（幂等、只补缺的），
+    /// 一块盘不在就算那一款这次补不上，下次启动再说。
+    pub(in crate::daemon) fn spawn_fingerprint_backfill(&self) {
+        let this = self.clone_shares();
+        tokio::spawn(async move {
+            let missing = this
+                .config
+                .read()
+                .await
+                .games
+                .values()
+                .filter(|game| game.exe_fingerprint.is_none())
+                .count();
+            if missing == 0 {
+                return;
+            }
+            let filled = this
+                .mutate_config(|config| Ok(json!(crate::sync::fingerprint::fill_missing(config))))
+                .await;
+            match filled {
+                Ok(filled) => {
+                    tracing::info!("补齐了 {filled} 款游戏的 exe 指纹（还差 {missing} 款）")
+                }
+                Err(error) => tracing::warn!("补齐 exe 指纹失败: {error}"),
+            }
+        });
+    }
+
     /// 这一款在云端的落点（本机 id 是缺省值：还没上传过的游戏就用它）。
     ///
     /// 传给引擎的**所有**调用都走这个键，别用游戏 id —— 那个只是本机的名字。
@@ -157,7 +188,7 @@ impl Daemon {
     }
 
     /// 把认领下来的身份与它的云端落点写进配置（落盘、粘住）。
-    async fn remember_identity(
+    pub(super) async fn remember_identity(
         &self,
         game_id: &str,
         cloud_id: &str,

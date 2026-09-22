@@ -189,7 +189,24 @@ impl Daemon {
                 Err(e) => rpc_err(id, -32602, e),
             },
             "sync.cloud_games" => respond(id, self.rpc_sync_cloud_games().await),
-            "sync.fingerprints" => respond(id, self.rpc_sync_fingerprints().await),
+            "sync.pairing" => respond(id, self.rpc_sync_pairing().await),
+            "sync.pair" => match (
+                param_str(&req.params, "id"),
+                param_str(&req.params, "cloud_key"),
+                param_str(&req.params, "cloud_id"),
+            ) {
+                (Ok(local), Ok(key), Ok(cloud)) => {
+                    respond(id, self.rpc_sync_pair(local, key, cloud).await)
+                }
+                (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => rpc_err(id, -32602, e),
+            },
+            "sync.reject" => match (
+                param_str(&req.params, "id"),
+                param_str(&req.params, "cloud_id"),
+            ) {
+                (Ok(local), Ok(cloud)) => respond(id, self.rpc_sync_reject(local, cloud).await),
+                (Err(e), _) | (_, Err(e)) => rpc_err(id, -32602, e),
+            },
             "sync.restore" => match param_str(&req.params, "id") {
                 Ok(game_id) => {
                     let version = req

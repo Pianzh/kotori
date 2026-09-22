@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use super::scan::{game_entry, is_helper, pick_game_exe};
 use super::*;
 
 /// Self-cleaning scratch directory under the system temp dir.
@@ -172,6 +173,7 @@ fn game_config_named(name: &str) -> crate::config::GameConfig {
         cloud_id: None,
         exe_fingerprint: None,
         cloud_dir: None,
+        cloud_rejected: Vec::new(),
         name: name.to_string(),
         game_dir: PathBuf::from("/games/demo"),
         exe_path: PathBuf::from("/games/demo/game.exe"),

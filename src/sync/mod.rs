@@ -51,6 +51,7 @@ pub mod cloud;
 pub mod engine;
 pub mod executables;
 pub mod fingerprint;
+pub mod pairing;
 pub mod runner;
 
 /// Suffix of a version package in the bucket.

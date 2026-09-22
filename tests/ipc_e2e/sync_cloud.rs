@@ -9,7 +9,7 @@
 use serde_json::json;
 
 use crate::fixture::Fixture;
-use crate::helpers::{cloud_packages, rclone_calls};
+use crate::helpers::{cloud_packages, field, rclone_calls};
 
 /// 第二台机器要**看得见**第一台传上去的游戏 —— 这是"云同步身份"那件事的地基。
 ///
@@ -294,14 +294,6 @@ fn a_mismatched_identity_stops_both_pull_and_restore() {
         "from-cloud",
         "身份对得上时，启动前照样把云端的存档取回来"
     );
-}
-
-/// 从 `config.toml` 里抠出一个键的值（测试只关心"写没写、写成了什么"）。
-fn field(text: &str, key: &str) -> Option<String> {
-    text.lines()
-        .map(str::trim)
-        .find_map(|line| line.strip_prefix(&format!("{key} = ")))
-        .map(|value| value.trim_matches('"').to_string())
 }
 
 /// 解开一个包，返回它清单的原文（断言身份写在里面）。

@@ -46,7 +46,8 @@ mod wire;
 pub use app::App;
 pub use message::{Message, PathTarget, SyncField, Tab};
 pub use model::{
-    ConfigSource, SavePathDraft, SessionInfo, SyncGameRow, SyncStatus, UiGame, WineStatus,
+    ConfigSource, PairingRow, PairingState, SavePathDraft, SessionInfo, SyncGameRow, SyncStatus,
+    UiGame, WineStatus,
 };
 
 /// 界面跑在哪个平台上。

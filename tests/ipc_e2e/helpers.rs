@@ -82,3 +82,11 @@ pub(crate) fn rclone_calls(fixture: &Fixture) -> Vec<String> {
         .map(str::to_string)
         .collect()
 }
+
+/// 从 `config.toml` 里抠出一个键的值（测试只关心"写没写、写成了什么"）。
+pub(crate) fn field(text: &str, key: &str) -> Option<String> {
+    text.lines()
+        .map(str::trim)
+        .find_map(|line| line.strip_prefix(&format!("{key} = ")))
+        .map(|value| value.trim_matches('"').to_string())
+}

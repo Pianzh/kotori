@@ -120,6 +120,7 @@ impl Daemon {
                     // `sync::fingerprint`。读不到就是 `None`，之后由同步页补齐。
                     exe_fingerprint: crate::sync::fingerprint::of_file(&new_game.exe_path),
                     cloud_dir: None,
+                    cloud_rejected: Vec::new(),
                     name: name.clone(),
                     game_dir: game_dir.clone(),
                     exe_path: new_game.exe_path.clone(),

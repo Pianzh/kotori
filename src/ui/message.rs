@@ -172,6 +172,15 @@ pub enum Message {
     SyncCredentialsCleared(Result<(), String>),
     SyncTest,
     SyncTested(Result<String, String>),
+    /// 扫一遍云端，算出配对表（并把指纹唯一命中的那些直接绑上）。
+    SyncScanCloud,
+    SyncPairingScanned(Result<Vec<PairingRow>, String>),
+    /// 用户点了一条候选：`(本机 id, 云端键, 云端身份)`。
+    SyncPair(String, String, String),
+    SyncPaired(Result<Vec<PairingRow>, String>),
+    /// 「不是同一款」：`(本机 id, 云端身份)` —— 撤掉绑定，并记住别再自动绑。
+    SyncRejectPairing(String, String),
+    SyncPairingRejected(Result<Vec<PairingRow>, String>),
     SyncMasterPasswordChanged(String),
     SyncUnlock,
     SyncUnlocked(Result<(), String>),

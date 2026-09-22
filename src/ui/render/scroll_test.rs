@@ -69,6 +69,7 @@ fn dragging_the_pointer_scrolls_the_list() {
         runtime: runtime.handle().clone(),
         games,
         saves,
+        pairing: Rc::new(VecModel::default()),
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,

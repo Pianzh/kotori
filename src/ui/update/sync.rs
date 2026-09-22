@@ -208,6 +208,95 @@ impl App {
                 let socket = self.daemon_socket.clone();
                 Task::perform(async move { sync_test(&socket).await }, Message::SyncTested)
             }
+            Message::SyncScanCloud => {
+                self.scanning = true;
+                self.pairing_msg = Some("正在扫描云端…".to_string());
+                self.pairing_ok = true;
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { sync_scan_cloud(&socket).await },
+                    Message::SyncPairingScanned,
+                )
+            }
+            Message::SyncPairingScanned(result) => {
+                self.scanning = false;
+                match result {
+                    Ok(rows) => {
+                        // 自动绑上的那几条要留一句账：用户得知道我们**动过**手，
+                        // 而且有一个「不是同一款」可以撤销。
+                        let auto = rows
+                            .iter()
+                            .filter(|row| row.state == PairingState::AutoBound)
+                            .count();
+                        self.pairing_msg = Some(if rows.is_empty() {
+                            "云端还没有游戏。".to_string()
+                        } else if auto > 0 {
+                            format!(
+                                "云端 {} 条身份，其中 {auto} 条按 exe 指纹自动绑上了（不对的话点「不是同一款」）。",
+                                rows.len()
+                            )
+                        } else {
+                            format!("云端 {} 条身份，没有可以自动绑的。", rows.len())
+                        });
+                        self.pairing_ok = true;
+                        self.pairing = rows;
+                        self.pairing_scanned = true;
+                    }
+                    Err(e) => {
+                        self.pairing_ok = false;
+                        self.pairing_msg = Some(format!("扫描云端失败: {e}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::SyncPair(local_id, cloud_key, cloud_id) => {
+                self.scanning = true;
+                self.pairing_msg = Some("正在绑定…".to_string());
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { sync_pair(&socket, local_id, cloud_key, cloud_id).await },
+                    Message::SyncPaired,
+                )
+            }
+            Message::SyncPaired(result) => {
+                self.scanning = false;
+                match result {
+                    Ok(rows) => {
+                        self.pairing = rows;
+                        self.pairing_ok = true;
+                        self.pairing_msg = Some("已绑定。".to_string());
+                    }
+                    Err(e) => {
+                        self.pairing_ok = false;
+                        self.pairing_msg = Some(format!("绑定失败: {e}"));
+                    }
+                }
+                Task::none()
+            }
+            Message::SyncRejectPairing(local_id, cloud_id) => {
+                self.scanning = true;
+                self.pairing_msg = Some("正在取消绑定…".to_string());
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { sync_reject_pairing(&socket, local_id, cloud_id).await },
+                    Message::SyncPairingRejected,
+                )
+            }
+            Message::SyncPairingRejected(result) => {
+                self.scanning = false;
+                match result {
+                    Ok(rows) => {
+                        self.pairing = rows;
+                        self.pairing_ok = true;
+                        self.pairing_msg = Some("已取消绑定，并且不会再自动绑它。".to_string());
+                    }
+                    Err(e) => {
+                        self.pairing_ok = false;
+                        self.pairing_msg = Some(format!("取消绑定失败: {e}"));
+                    }
+                }
+                Task::none()
+            }
             Message::SyncTested(result) => {
                 self.sync_form.busy = false;
                 self.sync_form.msg = Some(match result {

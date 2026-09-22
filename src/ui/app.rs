@@ -6,6 +6,12 @@ use super::*;
 pub struct App {
     pub(super) tab: Tab,
     pub(super) games: Vec<UiGame>,
+    /// 配对表（`sync.pairing` 扫出来的），以及这一块的几句话。
+    pub(super) pairing: Vec<PairingRow>,
+    pub(super) pairing_scanned: bool,
+    pub(super) scanning: bool,
+    pub(super) pairing_msg: Option<String>,
+    pub(super) pairing_ok: bool,
     pub(super) daemon_socket: PathBuf,
     pub(super) daemon_connected: Option<bool>,
     pub(super) loading: bool,
@@ -100,6 +106,11 @@ impl App {
             Self {
                 tab: Tab::Games,
                 games: Vec::new(),
+                pairing: Vec::new(),
+                pairing_scanned: false,
+                scanning: false,
+                pairing_msg: None,
+                pairing_ok: true,
                 daemon_socket: socket,
                 daemon_connected: None,
                 loading: false,

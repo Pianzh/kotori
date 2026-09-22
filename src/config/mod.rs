@@ -106,6 +106,12 @@ pub struct GameConfig {
     /// 还没上传过，用本机的游戏 id，也就是从前的行为）。
     #[serde(default)]
     pub cloud_dir: Option<String>,
+    /// 用户明确说过"**不是同一款**"的云端身份。
+    ///
+    /// 配对时指纹命中就会自动绑定，而"不是同一款"是那条自动规则唯一的刹车：没有这份
+    /// 记忆，下一次扫描就会把用户刚否掉的绑定又绑回来（界面和他自己打架）。
+    #[serde(default)]
+    pub cloud_rejected: Vec<String>,
     /// Per-game wine prefix; overrides the global [`WineConfig::prefix`].
     #[serde(default)]
     pub wine_prefix: Option<PathBuf>,

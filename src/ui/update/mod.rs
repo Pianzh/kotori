@@ -276,6 +276,12 @@ impl App {
             | Message::SyncCredentialsCleared(..)
             | Message::SyncTest
             | Message::SyncTested(..)
+            | Message::SyncScanCloud
+            | Message::SyncPairingScanned(..)
+            | Message::SyncPair(..)
+            | Message::SyncPaired(..)
+            | Message::SyncRejectPairing(..)
+            | Message::SyncPairingRejected(..)
             | Message::SyncMasterPasswordChanged(..)
             | Message::SyncUnlock
             | Message::SyncUnlocked(..)
