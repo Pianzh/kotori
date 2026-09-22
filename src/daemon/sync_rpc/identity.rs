@@ -30,35 +30,37 @@ pub(super) struct Packed {
 }
 
 impl Daemon {
-    /// 后台把存量档案缺的 exe 指纹补上。
+    /// 把存量档案里缺的 exe 指纹补上，返回这一次真的补了几条。
     ///
-    /// 这是**本机自己的事**，用户不需要看见它：指纹没算出来只意味着"这一款暂时认不出
-    /// 云端那一款"，界面上没有任何东西可点。所以跟着启动跑一次（幂等、只补缺的），
-    /// 一块盘不在就算那一款这次补不上，下次启动再说。
-    pub(in crate::daemon) fn spawn_fingerprint_backfill(&self) {
-        let this = self.clone_shares();
-        tokio::spawn(async move {
-            let missing = this
-                .config
-                .read()
-                .await
-                .games
-                .values()
-                .filter(|game| game.exe_fingerprint.is_none())
-                .count();
-            if missing == 0 {
-                return;
-            }
-            let filled = this
-                .mutate_config(|config| Ok(json!(crate::sync::fingerprint::fill_missing(config))))
-                .await;
-            match filled {
-                Ok(filled) => {
-                    tracing::info!("补齐了 {filled} 款游戏的 exe 指纹（还差 {missing} 款）")
-                }
-                Err(error) => tracing::warn!("补齐 exe 指纹失败: {error}"),
-            }
-        });
+    /// 指纹**只在用得着的时候算**，不在启动时扫全库：添加游戏时算（`game.create`）、
+    /// exe 换了时重算（`game.update`）、以及这里 —— 配对扫描前把缺的一次补齐。启动扫
+    /// 全库的代价是每次开机都要去碰每一个 exe，而一块盘不在就白等一次 IO，补上了也
+    /// 没人看。
+    ///
+    /// 幂等：已经有指纹的一条都不碰（见 `sync::fingerprint::fill_missing`）。
+    pub(in crate::daemon) async fn fill_fingerprints(&self) -> Result<usize, String> {
+        let missing = self
+            .config
+            .read()
+            .await
+            .games
+            .values()
+            .filter(|game| game.exe_fingerprint.is_none())
+            .count();
+        if missing == 0 {
+            return Ok(0);
+        }
+        let filled = self
+            .mutate_config(|config| Ok(json!(crate::sync::fingerprint::fill_missing(config).len())))
+            .await?;
+        let filled = filled.as_u64().unwrap_or(0) as usize;
+        if filled > 0 {
+            tracing::info!(
+                "补上了 {filled} 款游戏的 exe 指纹（还有 {} 款读不到 exe）",
+                missing - filled
+            );
+        }
+        Ok(filled)
     }
 
     /// 这一款在云端的落点（本机 id 是缺省值：还没上传过的游戏就用它）。
@@ -153,7 +155,7 @@ impl Daemon {
 
     /// 这一款 exe 的指纹；缺了就当场算一次并落盘（读不到就如实返回 `None`）。
     ///
-    /// 这是"存量补齐"的单条版本：同步页开一次会把整个库补齐（`sync.fingerprints`），
+    /// 这是"按需补齐"的单条版本：配对扫描前会把整个库补齐（`fill_fingerprints`），
     /// 而上传这条路自己也得保证手上有指纹，否则第一次上传就认不出云端已有的那一款。
     async fn ensure_fingerprint(&self, game_id: &str) -> Result<Option<String>, String> {
         let (known, exe) = {

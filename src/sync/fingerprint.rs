@@ -168,4 +168,52 @@ mod tests {
         assert_eq!(of_file(&dir), None);
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    /// 补缺**只补缺的**：已经有指纹的一条都不碰，读不到的如实留空。
+    #[test]
+    fn filling_missing_fingerprints_touches_only_the_ones_without_one() {
+        let dir = temp("fill");
+        let exe = dir.join("game.exe");
+        std::fs::write(&exe, b"content").unwrap();
+        let known = of_file(&exe).unwrap();
+
+        let mut config = crate::config::Config::default();
+        config
+            .games
+            .insert("has-one".into(), game("has-one", &exe, Some("v1:1:keepme")));
+        config
+            .games
+            .insert("missing".into(), game("missing", &exe, None));
+        // 盘不在：这一款这次补不上。
+        config.games.insert(
+            "no-disk".into(),
+            game("no-disk", &dir.join("gone.exe"), None),
+        );
+
+        assert_eq!(fill_missing(&mut config), vec!["missing".to_string()]);
+        assert_eq!(
+            config.games["missing"].exe_fingerprint.as_deref(),
+            Some(known.as_str())
+        );
+        assert_eq!(
+            config.games["has-one"].exe_fingerprint.as_deref(),
+            Some("v1:1:keepme"),
+            "已有的指纹不许被悄悄换掉"
+        );
+        assert_eq!(config.games["no-disk"].exe_fingerprint, None);
+
+        // 幂等：再跑一次没东西可补。
+        assert!(fill_missing(&mut config).is_empty());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn game(name: &str, exe: &Path, fingerprint: Option<&str>) -> crate::config::GameConfig {
+        serde_json::from_value(serde_json::json!({
+            "name": name,
+            "exe_path": exe.to_string_lossy(),
+            "exe_fingerprint": fingerprint,
+            "created_at": "2026-01-01T00:00:00Z",
+        }))
+        .unwrap()
+    }
 }

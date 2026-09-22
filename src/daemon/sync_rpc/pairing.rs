@@ -20,6 +20,13 @@ impl Daemon {
         let settings = self.config.read().await.sync.clone();
         let runner = self.sync_runner(&settings)?;
 
+        // 指纹是配对的判据，缺了指纹的档案在这一趟里根本认不出云端那一款。这里按需
+        // 补齐（三个时刻里的最后一个：添加时、exe 换时、扫描前）。
+        let filled = self.fill_fingerprints().await?;
+        if filled > 0 {
+            tracing::info!("配对扫描前补了 {filled} 条 exe 指纹");
+        }
+
         let clouds: Vec<CloudCard> = runner
             .read_identities()
             .await

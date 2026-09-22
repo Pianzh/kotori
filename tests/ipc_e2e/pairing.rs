@@ -115,6 +115,100 @@ fn a_second_machine_pairs_by_fingerprint_and_follows_the_same_directory() {
     assert!(!remote.join("games/renamed").exists(), "不该另立一个目录");
 }
 
+/// exe 换了（就地打了补丁、换了版本）：指纹跟着换，**云端身份一个字不动**；换过之后
+/// 另一台机器按新内容照样认得出这一款。
+///
+/// 这条钉住的是"指纹是'这个文件是什么'、身份是'这一款在云端是谁'"这条分界：指纹会变，
+/// 身份不会 —— 换了版本还是同一款游戏，那是整个功能的立身之本。
+#[test]
+fn changing_the_exe_updates_the_fingerprint_but_not_the_cloud_identity() {
+    let mut machine_a = Fixture::new("exe-change-a");
+    let remote = machine_a.enable_fake_sync(true);
+    machine_a.start();
+
+    let dir_a = machine_a.dir.join("Patched");
+    let saves_a = dir_a.join("savedata");
+    std::fs::create_dir_all(&saves_a).unwrap();
+    let exe_a = dir_a.join("game.exe");
+    std::fs::write(&exe_a, b"version one").unwrap();
+    std::fs::write(saves_a.join("save.dat"), b"from-a").unwrap();
+    machine_a.rpc(
+        "game.create",
+        json!({ "name": "Patched", "exe_path": exe_a, "game_dir": dir_a }),
+    );
+    machine_a.rpc(
+        "game.update",
+        json!({ "id": "patched", "save_paths": ["savedata"] }),
+    );
+    machine_a.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+    assert_eq!(
+        machine_a.rpc("sync.now", json!({ "id": "patched" }))["result"]["ok"],
+        true
+    );
+
+    let before = std::fs::read_to_string(machine_a.config.clone()).unwrap();
+    let cloud_id = field(&before, "cloud_id").expect("上传之后该有身份");
+    let fingerprint = field(&before, "exe_fingerprint").expect("添加时就该算过指纹");
+
+    // 就地换成另一份内容：**同一个路径**。用户走的是"改一下 exe"这条路，不是删了重建。
+    std::fs::write(&exe_a, b"version two, patched").unwrap();
+    let updated = machine_a.rpc(
+        "game.update",
+        json!({ "id": "patched", "exe_path": exe_a.to_string_lossy() }),
+    );
+    assert_eq!(updated["result"]["success"], true, "{updated}");
+
+    let after = std::fs::read_to_string(machine_a.config.clone()).unwrap();
+    assert_ne!(
+        field(&after, "exe_fingerprint").as_deref(),
+        Some(fingerprint.as_str()),
+        "换了 exe，指纹必须跟着换: {after}"
+    );
+    assert_eq!(
+        field(&after, "cloud_id").as_deref(),
+        Some(cloud_id.as_str()),
+        "身份是粘住的：换版本不是换游戏: {after}"
+    );
+
+    // 换过之后 A 再上传一版：身份卡里的指纹清单**跟着长**（老的那条留着，机器上装的
+    // 是哪一份都可能遇到），身份本身还是原来那一条。
+    let reuploaded = machine_a.rpc("sync.now", json!({ "id": "patched" }));
+    assert_eq!(reuploaded["result"]["ok"], true, "{reuploaded}");
+
+    // 另一台机器拿**新那份内容**：照样自动绑到同一条云端身份、同一个目录。
+    let mut machine_b = Fixture::new("exe-change-b");
+    machine_b.enable_fake_sync(true);
+    machine_b.share_bucket_with(&machine_a);
+    machine_b.start();
+    machine_b.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+    let dir_b = machine_b.dir.join("Renamed Patched");
+    std::fs::create_dir_all(&dir_b).unwrap();
+    let exe_b = dir_b.join("game.exe");
+    std::fs::write(&exe_b, b"version two, patched").unwrap();
+    machine_b.rpc(
+        "game.create",
+        json!({ "name": "Renamed Patched", "exe_path": exe_b, "game_dir": dir_b }),
+    );
+    let scan = machine_b.rpc("sync.pairing", json!({}));
+    assert_eq!(scan["result"]["bound"], 1, "{scan}");
+    let written = std::fs::read_to_string(machine_b.config.clone()).unwrap();
+    assert_eq!(
+        field(&written, "cloud_id").as_deref(),
+        Some(cloud_id.as_str())
+    );
+    assert_eq!(field(&written, "cloud_dir").as_deref(), Some("patched"));
+    assert!(
+        !cloud_packages(&remote.join("games/patched")).is_empty(),
+        "换了版本之后照样落在同一个目录里"
+    );
+}
+
 /// 「不是同一款」要**记住**：下一次扫描不许再自动绑回来。
 ///
 /// 没有这份记忆，用户否掉一次、界面下一次扫描又绑回去 —— 界面和他自己打架。

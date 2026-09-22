@@ -117,7 +117,8 @@ impl Daemon {
                 crate::config::GameConfig {
                     cloud_id: None,
                     // 指纹与 `game::game_entry`（扫描那条路）同一个算法：见
-                    // `sync::fingerprint`。读不到就是 `None`，之后由同步页补齐。
+                    // `sync::fingerprint`。读不到（盘不在）就是 `None`，等配对扫描
+                    // 或者第一次上传时再补（`fill_fingerprints`）。
                     exe_fingerprint: crate::sync::fingerprint::of_file(&new_game.exe_path),
                     cloud_dir: None,
                     cloud_rejected: Vec::new(),
@@ -192,6 +193,14 @@ impl Daemon {
                 if !exe.is_file() {
                     return Err(format!("可执行文件不存在: {}", exe.display()));
                 }
+                // exe 是这一款要跑的那个可执行文件 —— 指纹的三个时刻之一，**每次用户
+                // 交上来都重算**（路径没变也要算：就地换了版本、打了补丁都该认出来）。
+                // 算不出就如实记成"还不知道"，**不留上一次的答案** —— 一个过期的指纹
+                // 会把这一款绑到别的云端身份上，那是唯一不可逆的错误。
+                //
+                // `cloud_id` / `cloud_dir` 一个字都不动：身份是"这一款在云端是谁"，
+                // 粘住的，只有用户能改（配对界面）。换了版本也还是同一款游戏。
+                game.exe_fingerprint = crate::sync::fingerprint::of_file(exe);
                 game.exe_path = exe.clone();
             }
 
