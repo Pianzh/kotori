@@ -154,22 +154,29 @@ export struct PairingItem {
     choices: [PairingChoice],
 }
 
-// 「云端存档」里的一款：云端落点 + 有几版。
+// 「云端存档」里的一款游戏。
 //
-// ⚠ 这里**没有名字**：名字在身份卡里，而读一次身份卡（kopia 那边）就是一次
-// `restore`，这一块刻意不读它。所以列表上写的就是云端落点。
-export struct CloudSaveItem {
+// 名字是**云端记下的那个**（身份卡里的 `name`），不是云端落点 —— 落点只是我们认人的
+// 机器话。每一行右侧的几栏文案都在 Rust 里拼好（见 `CloudGameRow` 的几个 `*_label`）。
+export struct CloudGameItem {
     key: string,
-    // 有几版。既用来决定「看版本」能不能按,也是下面那行文案的来源。
-    versions: int,
-    // 「3 版」/「还没有存档」—— 措辞在 Rust 里定（见 `CloudSaveRow::versions_label`）。
+    name: string,
+    /// 「2 台机器见过 · 8f2c1234」。
+    meta: string,
+    /// 「3 版」/「还没有存档」。
     versions-label: string,
+    /// 「2026-09-11 18:15 · 4.0 KiB」；一版都没有时是空串。
+    latest-label: string,
+    /// 「本机《某某》」/「本机没有它」/「你说过不是这一款」。
+    local-label: string,
 }
 
-// 「云端存档」里的一个版本。
+// 「云端存档」详情里的一个版本。
 export struct CloudVersionItem {
     /// 给人看的一行（本机时区，见 `describe_stamp`）。
     label: string,
+    /// 「4.0 KiB」/「大小不知道」。
+    size-label: string,
     /// 原始版本名 —— 与 CLI/桶里看到的逐字一致，删与下载也是按它认人。
     name: string,
 }

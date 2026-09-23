@@ -158,23 +158,30 @@ pub(in crate::ui) async fn sync_scan_cloud(socket: &Path) -> Result<Vec<PairingR
     parse_pairing(&value)
 }
 
-/// 云端有哪几款、各几版（`sync.cloud_games`）。
+/// 云端现在有哪些游戏 —— 读**一个桶一份的索引**（一次读，不遍历身份卡）。
 ///
-/// 与配对扫描分开：这一条**不读身份卡**（kopia 那边是一条轻快的列出快照，不是
-/// `restore`），所以「云端存档」这一块可以随用户按刷新就走，不必等他扫配对。
-pub(in crate::ui) async fn sync_cloud_games(socket: &Path) -> Result<Vec<CloudSaveRow>, String> {
-    let value = crate::rpc::call(socket, "sync.cloud_games", None).await?;
-    parse_cloud_games(&value)
+/// 回的是 `(桶里建过索引没有, 清单)`：没建过时界面要提示去点一次深度扫描，而不是说
+/// "云端没有游戏"。
+pub(in crate::ui) async fn cloud_list(socket: &Path) -> Result<(bool, Vec<CloudGameRow>), String> {
+    let value = crate::rpc::call(socket, "sync.cloud_list", None).await?;
+    parse_cloud_list(&value)
 }
 
-/// 云端某一款有哪几版（`sync.cloud_versions`）。
+/// **深度扫描**：读所有身份卡、重建索引、顺手把指纹唯一命中的绑上（`sync.pairing`），
+/// 然后再读一次索引给界面。
 ///
-/// ⚠ 参数是**云端落点**（`sync.cloud_games` 给的 key），不是本机游戏 id ——
-/// 云端有而本机没有的游戏没有 id 可用。
-pub(in crate::ui) async fn sync_cloud_versions(
+/// 这条路很慢（kopia 那边读一张卡就是一次 `restore`），所以只挂在用户主动按的那颗
+/// 按钮上；平时刷新走 [`cloud_list`]。
+pub(in crate::ui) async fn cloud_scan(socket: &Path) -> Result<(bool, Vec<CloudGameRow>), String> {
+    crate::rpc::call(socket, "sync.pairing", None).await?;
+    cloud_list(socket).await
+}
+
+/// 云端某一款有哪几版（名字 + 大小 + 时间）。参数是**云端落点**，不是本机 id。
+pub(in crate::ui) async fn cloud_versions(
     socket: &Path,
     cloud_key: String,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<CloudVersionRow>, String> {
     let params = crate::rpc::params([("key", Value::String(cloud_key))]);
     let value = crate::rpc::call(socket, "sync.cloud_versions", Some(params)).await?;
     parse_cloud_versions(&value)

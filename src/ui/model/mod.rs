@@ -22,7 +22,7 @@ pub use picker::ProcessRow;
 pub use session::SessionInfo;
 pub use sync::{PairingRow, PairingState, SyncGameRow, SyncStatus};
 
-pub(super) use cloud::{CloudBoard, CloudSaveRow};
+pub(super) use cloud::{CloudGameRow, CloudState, CloudVersionRow};
 pub(super) use environment::{EnvCheck, Environment};
 pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, SAVE_PATH_KINDS, SaveAttempt};
 pub(super) use picker::ProcessPicker;

@@ -19,9 +19,9 @@ import { SettingsPage } from "pages/settings.slint";
 import { ProcessPicker, ProcessPickerState } from "widgets/process-picker.slint";
 import { PairingBoard } from "widgets/pairing.slint";
 import { SyncAskDialog, SyncAskState } from "widgets/sync-ask.slint";
-import { CloudSavesBoard } from "widgets/cloud-saves.slint";
+import { CloudPage, CloudBoard } from "pages/cloud.slint";
 // 再导出一次是**给 Rust 看的**:只有主文件导出过的全局才生成 `window.global::<…>()`。
-export { ProcessPickerState, PairingBoard, SyncAskState, CloudSavesBoard }
+export { ProcessPickerState, PairingBoard, SyncAskState, CloudBoard }
 
 export component AppWindow inherits Window {
     title: "Kotori";
@@ -300,8 +300,7 @@ export component AppWindow inherits Window {
                         background: #00000000;
 
                         if (root.tab == 0) && !root.game-open : GamesPage {
-                            width: 100%;
-                            height: 100%;
+                            width: 100%; height: 100%;
                             games: root.games;
                             subtitle: root.library-subtitle;
                             empty: root.library-empty;
@@ -314,8 +313,7 @@ export component AppWindow inherits Window {
                         }
 
                         if (root.tab == 0) && root.game-open : GameSettingsPage {
-                            width: 100%;
-                            height: 100%;
+                            width: 100%; height: 100%;
                             game: root.game;
                             stored: root.detail;
                             seed: root.detail-seed;
@@ -375,8 +373,7 @@ export component AppWindow inherits Window {
                         }
 
                         if root.tab == 1 : AddPage {
-                            width: 100%;
-                            height: 100%;
+                            width: 100%; height: 100%;
                             new-name <=> root.new-name;
                             new-game-dir <=> root.new-game-dir;
                             new-exe <=> root.new-exe;
@@ -393,9 +390,10 @@ export component AppWindow inherits Window {
                             create-requested => { root.create-requested(); }
                         }
 
-                        if root.tab == 2 : SyncPage {
-                            width: 100%;
-                            height: 100%;
+                        if root.tab == 2 : CloudPage { }
+
+                        if root.tab == 3 : SyncPage {
+                            width: 100%; height: 100%;
                             loaded: root.sync-loaded;
                             remote: root.sync-remote;
                             rclone: root.sync-rclone;
@@ -455,9 +453,8 @@ export component AppWindow inherits Window {
                             delete-master-confirmed => { root.sync-delete-master-confirmed(); }
                         }
 
-                        if root.tab == 3 : SettingsPage {
-                            width: 100%;
-                            height: 100%;
+                        if root.tab == 4 : SettingsPage {
+                            width: 100%; height: 100%;
                             service-status: root.service-status;
                             service-state: root.service-state;
                             service-running: root.service-running;

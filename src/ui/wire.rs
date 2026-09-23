@@ -43,8 +43,9 @@ fn no_breaks(text: &str) -> String {
 fn tab_at(index: i32) -> Tab {
     match index {
         1 => Tab::Add,
-        2 => Tab::Sync,
-        3 => Tab::Settings,
+        2 => Tab::Cloud,
+        3 => Tab::Sync,
+        4 => Tab::Settings,
         _ => Tab::Games,
     }
 }
@@ -228,10 +229,13 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     let ask = window.global::<SyncAskState>();
     ask.on_answered(|choice| dispatch(Message::SyncAskAnswered(choice.to_string())));
     ask.on_dismissed(|| dispatch(Message::SyncAskDismissed));
-    // 「云端存档」那一块：刷新要用户按（它读云端），点开一款再问一次版本。
-    let cloud = window.global::<CloudSavesBoard>();
-    cloud.on_refresh(|| dispatch(Message::SyncCloudRefresh));
-    cloud.on_toggle(|key| dispatch(Message::SyncCloudToggle(key.to_string())));
+    // 「云端存档」页：刷新读索引、深度扫描读所有卡、点开一款再问一次版本、搜索是本地过滤。
+    let cloud = window.global::<CloudBoard>();
+    cloud.on_refresh(|| dispatch(Message::CloudRefresh));
+    cloud.on_scan(|| dispatch(Message::CloudScan));
+    cloud.on_search_changed(|text| dispatch(Message::CloudSearch(one_line(&text))));
+    cloud.on_toggle(|key| dispatch(Message::CloudToggle(key.to_string())));
+    cloud.on_back(|| dispatch(Message::CloudBack));
     window.on_sync_now(|id| {
         let id = id.to_string();
         dispatch(Message::SyncNow((!id.is_empty()).then_some(id)));

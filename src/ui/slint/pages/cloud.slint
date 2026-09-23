@@ -1,0 +1,330 @@
+// 「云端存档」：云上有哪些游戏、各存了几版，点开一款看它每一版。
+//
+// 页面形态与**游戏库**对齐：搜索框（本地过滤，不打网络）+ 列表 + 点开进详情。
+// 数据来自**一个桶一份的云端索引**（见 `src/sync/index.rs`）：平时刷新只读索引，
+// 「深度扫描云端」才去读每一张身份卡（那条路慢，所以由用户自己按）。
+//
+// 状态放在 `CloudBoard` 全局里（照 `PairingBoard` 的先例）：这一页只负责画，窗口不必
+// 替它转发一串属性与回调。
+
+import { ScrollView } from "std-widgets.slint";
+import { Tokens } from "../theme.slint";
+import { Divider, RevealItem } from "../widgets/base.slint";
+import { TextField } from "../widgets/controls.slint";
+import { AccentButton, StdButton } from "../widgets/buttons.slint";
+import { SectionTitle } from "../widgets/card.slint";
+import { CloudGameItem, CloudVersionItem } from "../types.slint";
+
+export global CloudBoard {
+    /// 桶里**建过索引**没有。`false` = 还没建过（提示去点一次深度扫描），
+    /// 与"云端没有游戏"是两句话。
+    in-out property <bool> indexed: false;
+    in-out property <bool> loading: false;
+    /// 正在深度扫描（读所有身份卡，慢）。
+    in-out property <bool> scanning: false;
+    /// 一句话状态（读完 / 出错）。空串 = 什么都别说。
+    in-out property <string> message: "";
+    in-out property <bool> ok: true;
+    /// 搜索框里的字（本地过滤）。
+    in-out property <string> search: "";
+    /// 在详情页、还是列表上。
+    in-out property <bool> open: false;
+    in-out property <string> open-name: "";
+    /// 详情页那行小字：云端身份、几台机器见过、本机状态。
+    in-out property <string> open-meta: "";
+    /// 这台/那台机器用过的 exe 路径（只作参考信息与搜索参数）。
+    in-out property <string> open-exe: "";
+    /// 过滤**之后**要显示的行（搜索是本地做的，不打网络）。
+    in-out property <[CloudGameItem]> rows: [];
+    /// 云端一共几款（过滤前）—— "云端没有游戏"与"没有匹配的"靠这两个数分开。
+    in-out property <int> total: 0;
+    in-out property <[CloudVersionItem]> versions: [];
+    in-out property <bool> versions-loading: false;
+
+    callback refresh();
+    callback scan();
+    callback search-changed(string);
+    callback toggle(string);
+    callback back();
+}
+
+export component CloudPage inherits ScrollView {
+    // 见 `games.slint` 里的长注释:fluent 默认关掉拖拽滚动,没有滚轮的机器要靠这一行。
+    mouse-drag-pan-enabled: true;
+    in-out property <bool> revealed: false;
+
+    Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
+
+    VerticalLayout {
+        padding: 28px;
+        spacing: 0px;
+
+        RevealItem {
+            revealed: root.revealed;
+            step: 0;
+            bottom: 8px;
+            HorizontalLayout {
+                spacing: 12px;
+                SectionTitle {
+                    text: "云端存档";
+                    horizontal-stretch: 1;
+                    vertical-alignment: center;
+                }
+                StdButton {
+                    label: CloudBoard.scanning ? "扫描中…" : "深度扫描云端";
+                    button-width: 132px;
+                    button-enabled: !CloudBoard.loading && !CloudBoard.scanning;
+                    clicked => { CloudBoard.scan(); }
+                }
+                AccentButton {
+                    label: CloudBoard.loading ? "读取中…" : "刷新";
+                    button-width: 92px;
+                    button-enabled: !CloudBoard.loading && !CloudBoard.scanning;
+                    clicked => { CloudBoard.refresh(); }
+                }
+            }
+        }
+
+        RevealItem {
+            revealed: root.revealed;
+            step: 1;
+            bottom: 16px;
+            Text {
+                text: "云上有哪些游戏、各存了几版 —— 包括本机没装的那些。这里只看，不动任何东西；时间是本机时区的。";
+                font-size: 12px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+        }
+
+        // ── 列表 ──────────────────────────────────────────────────────────
+        if !CloudBoard.open : VerticalLayout {
+            spacing: 0px;
+
+            RevealItem {
+                revealed: root.revealed;
+                step: 2;
+                bottom: 12px;
+                TextField {
+                    width: 100%;
+                    placeholder: "搜索游戏名、云端落点或用过的 exe 路径…";
+                    text <=> CloudBoard.search;
+                    edited(text) => { CloudBoard.search-changed(text); }
+                }
+            }
+
+            if CloudBoard.message != "" : RevealItem {
+                revealed: root.revealed;
+                step: 3;
+                bottom: 12px;
+                Text {
+                    text: CloudBoard.message;
+                    font-size: 12px;
+                    color: CloudBoard.ok ? Tokens.text-3 : Tokens.danger;
+                    wrap: word-wrap;
+                }
+            }
+
+            if !CloudBoard.indexed && !CloudBoard.loading : RevealItem {
+                revealed: root.revealed;
+                step: 3;
+                bottom: 12px;
+                Text {
+                    text: "云端还没有这份索引（第一次用，或者换了机器）。点右上角「深度扫描云端」扫一次，之后刷新就快了。";
+                    font-size: 12px;
+                    color: Tokens.warn;
+                    wrap: word-wrap;
+                }
+            }
+
+            if CloudBoard.indexed && CloudBoard.total == 0 : RevealItem {
+                revealed: root.revealed;
+                step: 3;
+                bottom: 12px;
+                Text {
+                    text: "云端还没有游戏。先在本机把某一款同步上去，再回来刷新。";
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                    wrap: word-wrap;
+                }
+            }
+
+            if CloudBoard.indexed && CloudBoard.total > 0 && CloudBoard.rows.length == 0 : RevealItem {
+                revealed: root.revealed;
+                step: 4;
+                bottom: 12px;
+                Text {
+                    text: "没有匹配的游戏。";
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                }
+            }
+
+            for row[index] in CloudBoard.rows : RevealItem {
+                revealed: root.revealed;
+                step: 4 + index;
+                bottom: 8px;
+                Rectangle {
+                    background: Tokens.card;
+                    border-color: Tokens.stroke;
+                    border-width: 1px;
+                    border-radius: Tokens.radius-card;
+                    height: layout.preferred-height;
+                    layout := VerticalLayout {
+                        padding: 12px;
+                        spacing: 6px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text {
+                                text: row.name;
+                                font-size: 14px;
+                                color: Tokens.text;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.versions-label;
+                                font-size: 11px;
+                                color: Tokens.text-3;
+                                vertical-alignment: center;
+                            }
+                            StdButton {
+                                label: "看每一版";
+                                button-width: 92px;
+                                clicked => { CloudBoard.toggle(row.key); }
+                            }
+                        }
+                        Text {
+                            text: row.meta + row.local-label;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
+                        if row.latest-label != "" : Text {
+                            text: "最近一版：" + row.latest-label;
+                            font-size: 11px;
+                            color: Tokens.text-2;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 详情 ──────────────────────────────────────────────────────────
+        if CloudBoard.open : VerticalLayout {
+            spacing: 0px;
+
+            RevealItem {
+                revealed: root.revealed;
+                step: 2;
+                bottom: 12px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    StdButton {
+                        label: "← 返回";
+                        button-width: 84px;
+                        clicked => { CloudBoard.back(); }
+                    }
+                    Text {
+                        text: CloudBoard.open-name;
+                        font-size: 18px;
+                        font-weight: 600;
+                        color: Tokens.text;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            RevealItem {
+                revealed: root.revealed;
+                step: 3;
+                bottom: 12px;
+                Rectangle {
+                    background: Tokens.card;
+                    border-color: Tokens.stroke;
+                    border-width: 1px;
+                    border-radius: Tokens.radius-card;
+                    height: meta.preferred-height;
+                    meta := VerticalLayout {
+                        padding: 12px;
+                        spacing: 8px;
+                        Text {
+                            text: CloudBoard.open-meta;
+                            font-size: 12px;
+                            color: Tokens.text-2;
+                            wrap: word-wrap;
+                        }
+                        if CloudBoard.open-exe != "" : Text {
+                            text: "用过的 exe（只作参考，不参与判断）：\n" + CloudBoard.open-exe;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
+                        Divider { }
+                        Text {
+                            text: "原版本名与桶里看到的一致，删与下载都按它认人。";
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+            }
+
+            if CloudBoard.versions-loading : RevealItem {
+                revealed: root.revealed;
+                step: 4;
+                bottom: 8px;
+                Text {
+                    text: "正在列这一款的版本…";
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                }
+            }
+
+            if !CloudBoard.versions-loading && CloudBoard.versions.length == 0 : RevealItem {
+                revealed: root.revealed;
+                step: 4;
+                bottom: 8px;
+                Text {
+                    text: "这一款在云端还没有存档。";
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                }
+            }
+
+            for version[index] in CloudBoard.versions : RevealItem {
+                revealed: root.revealed;
+                step: 4 + index;
+                bottom: 6px;
+                HorizontalLayout {
+                    spacing: 10px;
+                    Text {
+                        text: version.label;
+                        font-size: 13px;
+                        color: Tokens.text;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: version.size-label;
+                        font-size: 12px;
+                        color: Tokens.text-2;
+                        vertical-alignment: center;
+                    }
+                    Text {
+                        text: version.name;
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+        }
+    }
+}

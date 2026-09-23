@@ -25,6 +25,9 @@ impl App {
                 self.confirm_delete = false;
                 self.confirm_stop = false;
                 self.error = None;
+                if tab == Tab::Cloud {
+                    return self.cloud_entered();
+                }
                 if tab == Tab::Settings || tab == Tab::Sync {
                     // Re-read them all, they may have changed on disk (or in the
                     // daemon, which is the only writer).
@@ -313,10 +316,14 @@ impl App {
 
             // ── 「云端存档」的浏览（处理在 `update::update_cloud`） ──
             // 它只读云端、一个字都不改本机配置，所以与上面那一族分开列。
-            m @ (Message::SyncCloudRefresh
-            | Message::SyncCloudLoaded(..)
-            | Message::SyncCloudToggle(..)
-            | Message::SyncCloudVersionsLoaded(..)) => self.update_cloud(m),
+            m @ (Message::CloudRefresh
+            | Message::CloudLoaded(..)
+            | Message::CloudScan
+            | Message::CloudScanned(..)
+            | Message::CloudSearch(..)
+            | Message::CloudToggle(..)
+            | Message::CloudBack
+            | Message::CloudVersionsLoaded(..)) => self.update_cloud(m),
 
             // ── 服务、wine 与单游戏设置（处理在 `update::update_settings`） ──
             m @ (Message::ServiceStart

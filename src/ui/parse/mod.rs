@@ -3,7 +3,7 @@
 //! No widget is built here.
 //!
 //! 按「一条回包 / 一个请求的完整生命周期」拆成子模块:环境检查(`environment`)、
-//! Wine(`wine`)、云同步(`sync`)、游戏列表(`games`)、存档位置(`save_paths`)、
+//! Wine(`wine`)、云同步(`sync`)、云端存档(`cloud`)、游戏列表(`games`)、存档位置(`save_paths`)、
 //! 缩放档案(`scale`)、自动重连退避(`reconnect`)。每个子模块只负责一条线,顶部
 //! 写清它为什么和邻居分开 —— 不按类型分堆。
 //!
@@ -13,6 +13,7 @@
 
 use super::*;
 
+mod cloud;
 mod environment;
 mod games;
 mod process;
@@ -22,6 +23,7 @@ mod scale;
 mod sync;
 mod wine;
 
+pub(super) use cloud::*;
 pub(super) use environment::*;
 pub(super) use games::*;
 pub(super) use process::*;

@@ -200,53 +200,6 @@ pub(super) fn push_pairing(ui: &mut Ui) {
 /// `sync.status` reports the credential store by name; the page wants a number
 /// (it decides which of the three blocks to draw). The mapping itself lives on
 /// [`CredentialStore`] — the wording and the index must not drift apart.
-/// 「云端存档」那一块：云端有哪几款、每款几版、点开的那一款有哪几版。
-///
-/// 状态在一个 Slint 全局里（见 `widgets/cloud-saves.slint`）：页面只管画，不转发。
-/// 两张表都按 `push_model` 的规矩"内容真变了才重建"——正在展开的那一行不该因为
-/// 一次无关的刷新丢掉自己的位置。
-pub(super) fn push_cloud_saves(ui: &mut Ui) {
-    let cloud = &ui.app.cloud;
-    let board = ui.window.global::<CloudSavesBoard>();
-
-    push_bool(board.get_loading(), cloud.loading, |v| board.set_loading(v));
-    push_bool(board.get_scanned(), cloud.scanned, |v| board.set_scanned(v));
-    push_str(
-        board.get_message(),
-        cloud.msg.as_deref().unwrap_or(""),
-        |v| board.set_message(v),
-    );
-    push_bool(board.get_ok(), cloud.ok, |v| board.set_ok(v));
-    push_str(board.get_open(), cloud.open.as_deref().unwrap_or(""), |v| {
-        board.set_open(v)
-    });
-    push_bool(board.get_versions_loading(), cloud.versions_loading, |v| {
-        board.set_versions_loading(v)
-    });
-
-    let versions: Vec<CloudVersionItem> = cloud
-        .versions
-        .iter()
-        .map(|name| CloudVersionItem {
-            // 给人看的那一行在这一层算：时间格式与措辞都在 Rust 里，测得到。
-            label: crate::sync::describe_stamp(name).into(),
-            name: name.clone().into(),
-        })
-        .collect();
-    push_model(&ui.cloud_versions, versions);
-
-    let rows: Vec<CloudSaveItem> = cloud
-        .rows
-        .iter()
-        .map(|row| CloudSaveItem {
-            key: row.key.clone().into(),
-            versions: row.versions as i32,
-            versions_label: row.versions_label().into(),
-        })
-        .collect();
-    push_model(&ui.cloud_rows, rows);
-}
-
 /// 启动前那一问：开不开、问的是哪一款、以及那三行说明。
 ///
 /// 状态在一个 Slint 全局里（见 `widgets/sync-ask.slint`）：它不属于任何一页，哪个

@@ -231,53 +231,6 @@ pub(in crate::ui) fn parse_pairing(value: &Value) -> Result<Vec<PairingRow>, Str
         .collect()
 }
 
-/// `sync.cloud_games` 的回包：云端有哪些游戏（**不限于本机有的**）。
-///
-/// 只有"落点"与"几版"两样东西 —— 名字要读身份卡才拿得到，而这一条路刻意不读它
-/// （kopia 那边读一次身份 = 一次 `restore`）。所以列表上写的名字就是云端落点。
-pub(in crate::ui) fn parse_cloud_games(value: &Value) -> Result<Vec<CloudSaveRow>, String> {
-    let games = value
-        .get("games")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "回包里没有 games".to_string())?;
-
-    Ok(games
-        .iter()
-        .map(|game| CloudSaveRow {
-            key: game
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-            versions: game.get("versions").and_then(Value::as_u64).unwrap_or(0) as usize,
-        })
-        .collect())
-}
-
-/// `sync.cloud_versions` 的回包：某一款在云端有哪几版（最旧在前）。
-///
-/// `versions` 缺失或不是数组都算坏回包 —— 空的版本列表与"没问成"必须分得开，
-/// 不然界面会把一次失败画成"云端一版都没有"。
-pub(in crate::ui) fn parse_cloud_versions(value: &Value) -> Result<Vec<String>, String> {
-    let versions = value
-        .get("versions")
-        .and_then(Value::as_array)
-        .ok_or_else(|| "回包里没有 versions".to_string())?;
-    // 每一版是一个对象（名字 + 大小 + 时间）。老的"只有名字"的形状也收着认 —— 界面上
-    // 少显示一栏，总比整块报错强。
-    Ok(versions
-        .iter()
-        .map(|version| match version {
-            Value::String(name) => name.clone(),
-            other => other
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
-        })
-        .collect())
-}
-
 #[cfg(test)]
 mod tests {
     #[test]
@@ -310,48 +263,6 @@ mod tests {
 
         // 少了 rows 就是坏回包，不是"没有配对"。
         assert!(parse_pairing(&serde_json::json!({})).is_err());
-    }
-
-    #[test]
-    fn cloud_games_and_their_versions_come_back_keyed_by_landing_spot() {
-        // 云端那一款本机没有，所以这里只有落点与版数 —— 界面不许去猜一个名字出来。
-        let payload = serde_json::json!({
-            "games": [
-                { "id": "demo", "versions": 3 },
-                { "id": "only-on-the-other-machine", "versions": 0 },
-            ],
-        });
-        let rows = parse_cloud_games(&payload).unwrap();
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].key, "demo");
-        assert_eq!(rows[0].versions_label(), "3 版");
-        assert_eq!(rows[1].versions_label(), "还没有存档");
-        assert!(
-            parse_cloud_games(&serde_json::json!({ "games": [] }))
-                .unwrap()
-                .is_empty()
-        );
-        assert!(parse_cloud_games(&serde_json::json!({})).is_err());
-
-        let versions = serde_json::json!({
-            "versions": [
-                { "name": "20260910T090000Z", "size": 128, "time": "2026-09-10T09:00:00Z" },
-                { "name": "20260911T101500123Z-1a2b3c4d", "size": 4096, "time": "2026-09-11T10:15:00Z" },
-            ],
-        });
-        let versions = parse_cloud_versions(&versions).unwrap();
-        assert_eq!(versions.len(), 2);
-        assert!(versions[0] < versions[1], "最旧在前");
-        // 只有名字的老形状也认（少一栏，不是报错）。
-        let bare = serde_json::json!({ "versions": ["20260910T090000Z"] });
-        assert_eq!(parse_cloud_versions(&bare).unwrap().len(), 1);
-        // 空的版本列表与"没问成"必须分得开：一个是 `[]`，一个是错。
-        assert!(
-            parse_cloud_versions(&serde_json::json!({ "versions": [] }))
-                .unwrap()
-                .is_empty()
-        );
-        assert!(parse_cloud_versions(&serde_json::json!({ "ok": true })).is_err());
     }
 
     use super::*;

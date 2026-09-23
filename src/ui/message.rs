@@ -6,7 +6,12 @@ use super::*;
 pub enum Tab {
     Games,
     Add,
+    /// 「云端存档」：云端有哪些游戏、点开看每一版（只读云端）。
+    Cloud,
     /// 云同步独占一页(旧 UI 把它塞在「设置」里,Win11 的导航更适合分开)。
+    ///
+    /// ⚠ 用户 2026-09-23 定了：这一页最后要**整页搬进「设置」**（导航只剩
+    /// 游戏库 / 添加 / 云端存档 / 设置），那一步与配对表的合并一起做。
     Sync,
     Settings,
 }
@@ -186,13 +191,20 @@ pub enum Message {
     /// 「不是同一款」：`(本机 id, 云端身份)` —— 撤掉绑定，并记住别再自动绑。
     SyncRejectPairing(String, String),
     SyncPairingRejected(Result<Vec<PairingRow>, String>),
-    /// 「云端存档」那一块：列云端有哪些游戏（用户按刷新才走）。
-    SyncCloudRefresh,
-    SyncCloudLoaded(Result<Vec<CloudSaveRow>, String>),
-    /// 点开 / 收起某一款：参数是**云端落点**（`sync.cloud_games` 给的 key）。
-    SyncCloudToggle(String),
-    /// `(云端落点, 这一款的版本列表)`。
-    SyncCloudVersionsLoaded(String, Result<Vec<String>, String>),
+    /// 「云端存档」页：读**索引**列云端有哪些游戏（用户按刷新才走，一次读）。
+    CloudRefresh,
+    CloudLoaded(Result<(bool, Vec<CloudGameRow>), String>),
+    /// 深度扫描：读**所有身份卡**、重建索引、顺手把能自动绑的绑上（慢，用户主动按）。
+    CloudScan,
+    CloudScanned(Result<(bool, Vec<CloudGameRow>), String>),
+    /// 搜索框变了（本地过滤，不打网络）。
+    CloudSearch(String),
+    /// 点开 / 收起某一款：参数是**云端落点**。
+    CloudToggle(String),
+    /// 返回列表。
+    CloudBack,
+    /// `(云端落点, 这一款的版本明细)`。
+    CloudVersionsLoaded(String, Result<Vec<CloudVersionRow>, String>),
     SyncMasterPasswordChanged(String),
     SyncUnlock,
     SyncUnlocked(Result<(), String>),

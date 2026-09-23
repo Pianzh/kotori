@@ -164,8 +164,16 @@ pub(super) fn settings_page(mut ui: Ui) {
     let assert_app = |check: &dyn Fn(&App)| with_ui(|ui| check(&ui.app));
     let draft = || with_ui(|ui| ui.app.draft.clone().expect("单游戏设置页要有草稿"));
 
-    window.invoke_tab_changed(2);
-    assert_app(&|app| assert_eq!(app.tab, Tab::Sync));
+    // 页签编号与导航栏一一对应：0 游戏库 / 1 添加 / 2 云端存档 / 3 云同步 / 4 设置。
+    for (index, tab) in [
+        (1, Tab::Add),
+        (2, Tab::Cloud),
+        (3, Tab::Sync),
+        (4, Tab::Settings),
+    ] {
+        window.invoke_tab_changed(index);
+        assert_app(&|app| assert_eq!(app.tab, tab));
+    }
     window.invoke_tab_changed(99);
     assert_app(&|app| assert_eq!(app.tab, Tab::Games));
 

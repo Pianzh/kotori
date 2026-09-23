@@ -47,8 +47,9 @@ fn seed() {
     {
         let tab = match index {
             1 => Tab::Add,
-            2 => Tab::Sync,
-            3 => Tab::Settings,
+            2 => Tab::Cloud,
+            3 => Tab::Sync,
+            4 => Tab::Settings,
             _ => Tab::Games,
         };
         // `tab` 是窗口自己的属性(点导航栏时由 .slint 直接改),所以这里要两边都做 ——
