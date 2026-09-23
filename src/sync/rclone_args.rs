@@ -37,6 +37,14 @@ pub fn list_files_args(remote: &str) -> Vec<String> {
 ///
 /// 列的是 `games/` 那一层（云端有哪几款游戏），不是某个游戏里的包 —— 没有这一条，
 /// 第二台机器就不知道云端有什么（[`crate::sync::cloud`] 的说明）。
+/// 读回一个**小对象**（身份卡、索引）。
+///
+/// 与 `copyto` 对称：`copyto` 把本地文件推上去，`cat` 把它读成 stdout。两者都只用于
+/// 我们自己写的小 json —— 包（zip）走 `copyto`/`copyto` 那一对。
+pub fn cat_args(remote: &str) -> Vec<String> {
+    vec!["cat".to_string(), remote.to_string()]
+}
+
 pub fn list_dirs_args(remote: &str) -> Vec<String> {
     vec![
         "lsf".to_string(),

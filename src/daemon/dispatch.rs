@@ -199,6 +199,8 @@ impl Daemon {
                 Err(e) => rpc_err(id, -32602, e),
             },
             "sync.cloud_games" => respond(id, self.rpc_sync_cloud_games().await),
+            // 云端现在有哪些游戏：读**索引**（一个桶一份），不读身份卡。
+            "sync.cloud_list" => respond(id, self.rpc_sync_cloud_list().await),
             // 云端某一款的版本：参数是**云端落点**（`sync.cloud_games` 给的 id），不是
             // 本机 id —— 云端有而本机没有的游戏也要能列出它的版本。
             "sync.cloud_versions" => match param_str(&req.params, "key") {

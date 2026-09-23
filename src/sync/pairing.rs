@@ -286,6 +286,7 @@ mod tests {
             label: "somewhere".to_string(),
             fingerprints: fingerprints.iter().map(|p| p.to_string()).collect(),
             locations: locations.iter().map(|l| l.to_string()).collect(),
+            exe_paths: Vec::new(),
         });
         CloudCard {
             key: key.to_string(),

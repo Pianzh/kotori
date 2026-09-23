@@ -41,6 +41,29 @@ pub fn package_remote(settings: &SyncConfig, game_id: &str, stamp: &str) -> Stri
     )
 }
 
+/// 索引在桶里的目录：`<root>/index`。
+///
+/// 与 `games/<id>/` 平级、互不干扰：`games/` 那一层是包与身份卡，`index/` 这一层只有
+/// 索引（一个桶一份，见 `crate::sync::index`）。
+pub fn index_root(settings: &SyncConfig) -> String {
+    format!("{}/{}", remote_root(settings), super::index::INDEX_DIR)
+}
+
+/// 合并快照的完整远端路径。
+pub fn index_main_path(settings: &SyncConfig) -> String {
+    format!("{}/{}", index_root(settings), super::index::INDEX_FILE)
+}
+
+/// 增量放的目录。
+pub fn index_log_path(settings: &SyncConfig) -> String {
+    format!("{}/{}", index_root(settings), super::index::INDEX_LOG)
+}
+
+/// 一条增量的完整远端路径。
+pub fn index_delta_path(settings: &SyncConfig, name: &str) -> String {
+    format!("{}/{}", index_log_path(settings), name)
+}
+
 /// A stable, readable directory name for one save location.
 ///
 /// Derived from the location description (not its index) so that reordering

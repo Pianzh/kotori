@@ -24,6 +24,7 @@ use super::SyncError;
 use super::archive::{Manifest, PackReport};
 use super::cloud::{CloudGame, PackIdentity};
 use super::engine::Backend;
+use super::index::{CloudIndex, IndexGame};
 use super::save_targets::SaveTarget;
 use super::{validate, validate_secrets};
 use crate::config::SyncConfig;
@@ -41,6 +42,9 @@ mod staging;
 // 193);runner 的测试因此整体 Unix 限定,Windows 覆盖等有 Windows 版假货再补。
 #[cfg(all(test, unix))]
 mod testing;
+// 索引的测试也全靠那个假 rclone，所以同样 Unix 限定。
+#[cfg(all(test, unix))]
+mod index_tests;
 #[cfg(all(test, unix))]
 mod tests;
 mod upload;
@@ -146,6 +150,82 @@ impl Runner {
     /// 不是本机的游戏 id：两台机器给同一款游戏起不同名字时，靠它把版本放进同一处。
     pub async fn packages(&self, cloud_key: &str) -> Result<Vec<String>, SyncError> {
         self.backend.versions(cloud_key).await
+    }
+
+    /// 云端索引现在的样子（合并快照 + 未合并增量的并集）；`None` = 桶里还没建过。
+    ///
+    /// ⚠ 这一条**不读身份卡**：一个桶一份索引就是为了把"列云端"从 N 次 restore 变成
+    /// 一次读（见 `crate::sync::index`）。
+    pub async fn read_index(&self) -> Result<Option<CloudIndex>, SyncError> {
+        let bundle = self.backend.read_index(self.work_dir()).await?;
+        if bundle.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(bundle.merged_view()))
+    }
+
+    /// 把这几条改动并进云端索引，返回合并之后的并集。
+    ///
+    /// 顺序是**先写增量、再写合并快照**（见 `crate::sync::index`）：这么写，两台机器同时
+    /// 同步也不会互相抹掉条目 —— 谁也覆盖不了谁，读的时候一定能把没并上的那条捡回来。
+    ///
+    /// 索引是加速用的**镜像**，不是真相（真相是身份卡）：所以调用方应当把这里的失败
+    /// 当成"这一次没记上"，**绝不能让上传失败**。
+    pub async fn update_index(
+        &self,
+        machine_id: &str,
+        changes: Vec<IndexGame>,
+    ) -> Result<CloudIndex, SyncError> {
+        let work_dir = self.work_dir().to_path_buf();
+        let bundle = self.backend.read_index(&work_dir).await?;
+        let mut union = bundle.merged_view();
+        if changes.is_empty() {
+            return Ok(union);
+        }
+
+        // 动过的条目：同一个身份就把"我这台机器"并进去（**不整条覆盖**，否则会把别的
+        // 机器记下的指纹/位置抹掉），摘要以这一次为准。
+        let mut touched = Vec::new();
+        for change in changes {
+            let cloud_id = change.identity.cloud_id.clone();
+            match union
+                .games
+                .iter_mut()
+                .find(|game| game.identity.cloud_id == cloud_id)
+            {
+                Some(existing) => {
+                    for machine in change.identity.machines {
+                        existing.merge_machine(machine);
+                    }
+                    if existing.identity.name.is_empty() {
+                        existing.identity.name = change.identity.name.clone();
+                    }
+                    // 落点以这一次为准：认领之后它才是"该往哪儿放"。
+                    existing.cloud_key = change.cloud_key.clone();
+                    existing.set_summary(change.versions, change.latest.clone(), change.size);
+                    touched.push(existing.clone());
+                }
+                None => {
+                    union.merge(change.clone());
+                    touched.push(change);
+                }
+            }
+        }
+        union.sort();
+
+        let name = crate::sync::index::delta_name(machine_id, &crate::sync::index::stamp());
+        self.backend
+            .write_index_delta(&name, &CloudIndex::delta(touched), &work_dir)
+            .await?;
+
+        let mut main = union.clone();
+        // 这次读到的增量（它们已经被并进 `games` 了）连自己刚写的那条一起记账。
+        for (already, _) in &bundle.deltas {
+            main.mark_merged(already);
+        }
+        main.mark_merged(&name);
+        self.backend.write_index_main(&main, &work_dir).await?;
+        Ok(union)
     }
 
     /// 云端有哪几款游戏（名字有序）。

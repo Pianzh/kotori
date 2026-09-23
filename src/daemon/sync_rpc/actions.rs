@@ -128,6 +128,10 @@ impl Daemon {
                 )
                 .await;
             self.sync.remember(&id, "上传", &outcome);
+            if outcome.ok {
+                // 索引：**尽力而为**（写坏了不影响"这一版已经上去了"这件事）。
+                self.refresh_index_for(&runner, &id).await;
+            }
             outcomes.push(outcome);
         }
 
@@ -358,6 +362,8 @@ impl Daemon {
             .await;
         self.sync.remember(game_id, "上传", &outcome);
         if outcome.ok {
+            // 索引：**尽力而为** —— 这里出错只记日志，绝不让同步报错。
+            self.refresh_index_for(&runner, game_id).await;
             tracing::info!("{game_id}: 退出后已同步存档");
         } else {
             tracing::warn!("{game_id}: 退出后同步失败: {:?}", outcome.error);

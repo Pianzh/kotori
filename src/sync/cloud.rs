@@ -40,6 +40,8 @@ pub const IDENTITY_DESCRIPTION: &str = "kotori-identity";
 /// [`KIND_SAVE`] 那一种（§5.3）。
 pub const KIND_SAVE: &str = "save";
 pub const KIND_IDENTITY: &str = "identity";
+/// 索引（`crate::sync::index`）：一个桶一份的"云端现在有什么"。
+pub const KIND_INDEX: &str = "index";
 
 /// 云端的一款游戏的身份（`kotori-game.json`）。
 ///
@@ -79,6 +81,14 @@ pub struct MachineIdentity {
     /// 这台机器上这款游戏配了哪些存档位置（`save_key`），用来做位置对齐（§2.7）。
     #[serde(default)]
     pub locations: Vec<String>,
+    /// 这台机器上这款游戏**用过的 exe 路径**。
+    ///
+    /// ⚠ **只作参考信息与搜索参数**（用户 2026-09-23："以前的不上云只是我们不根据目录来
+    /// 判断本机目录而已，这次的 exe 路径仅仅只做信息参考使用"）。所以它**绝不参与任何
+    /// 判断**（谁是谁只看指纹）、**绝不写回本机配置**、**绝不拿来还原本机目录**。
+    /// 它在桶里，是为了让云端存档页能按"我记得那个 exe 叫啥"搜到。
+    #[serde(default)]
+    pub exe_paths: Vec<String>,
 }
 
 impl GameIdentity {
@@ -124,6 +134,13 @@ impl GameIdentity {
                 for location in machine.locations {
                     if !known.locations.contains(&location) {
                         known.locations.push(location);
+                    }
+                }
+                // 用过的 exe 路径：与指纹同样**只追加**（换过 exe、装过别处都要记得住，
+                // 它只是个搜索参数，多一点没坏处）。
+                for path in machine.exe_paths {
+                    if !known.exe_paths.contains(&path) {
+                        known.exe_paths.push(path);
                     }
                 }
             }
@@ -359,6 +376,7 @@ mod tests {
             label: format!("host-{machine_id}"),
             fingerprints: prints.iter().map(|p| p.to_string()).collect(),
             locations: vec!["rel-savedata".to_string()],
+            exe_paths: vec![format!("/games/{machine_id}/game.exe")],
         }
     }
 
@@ -388,6 +406,23 @@ mod tests {
             vec!["v1:20:bb".to_string()],
             "别人的指纹一个都没动"
         );
+
+        // 用过的 exe 路径与指纹同一条规矩：只追加，不重复，也不动别人的。
+        let mut moved = machine("machine-a", &["v1:10:aa"]);
+        moved.exe_paths = vec![
+            "/games/machine-a/game.exe".to_string(),
+            "/mnt/games/elsewhere/game.exe".to_string(),
+        ];
+        identity.merge_machine(moved);
+        assert_eq!(
+            identity.machines[0].exe_paths,
+            vec![
+                "/games/machine-a/game.exe".to_string(),
+                "/mnt/games/elsewhere/game.exe".to_string()
+            ],
+            "新路径追加在后面，已有的不再写一遍"
+        );
+        assert_eq!(identity.machines[1].exe_paths.len(), 1);
     }
 
     #[test]

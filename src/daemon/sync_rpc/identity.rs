@@ -78,6 +78,46 @@ impl Daemon {
             .unwrap_or_else(|| game_id.to_string()))
     }
 
+    /// "我这台机器 + 这一款"的那条身份：指纹、机器名、配了哪些存档位置、用过哪些 exe。
+    ///
+    /// 上传（写进身份卡）与索引（写进索引里那一条）共用它 —— 两处必须说同一句话，
+    /// 否则"卡里有这个指纹、索引里没有"这种事迟早发生。
+    ///
+    /// 指纹**按需算**（没有就当场算一次并落盘）：没有指纹就没法在云端认出同一款。
+    pub(super) async fn machine_identity_of(
+        &self,
+        game_id: &str,
+    ) -> Result<MachineIdentity, String> {
+        let fingerprint = self.ensure_fingerprint(game_id).await?;
+        let (locations, exe_path) = {
+            let config = self.config.read().await;
+            let game = config
+                .games
+                .get(game_id)
+                .ok_or_else(|| format!("配置中找不到游戏: {game_id}"))?;
+            // 这台机器上这一款**配了**哪些位置 —— 位置对齐（§2.7）要的就是这份清单，
+            // 而不是"这一次恰好有文件的那几个"。
+            let locations = game
+                .save_paths
+                .iter()
+                .map(crate::sync::save_key)
+                .collect::<Vec<String>>();
+            (locations, game.exe_path.to_string_lossy().to_string())
+        };
+        Ok(MachineIdentity {
+            machine_id: self.machine_id().await?,
+            label: machine_label(),
+            // 没有指纹就空着：**绝不编一个**（那会让两台机器认错人）。
+            fingerprints: fingerprint.into_iter().collect(),
+            locations,
+            // 用过的 exe 路径：只是参考信息（见 `MachineIdentity::exe_paths`）。
+            exe_paths: (!exe_path.is_empty())
+                .then_some(exe_path)
+                .into_iter()
+                .collect(),
+        })
+    }
+
     /// 这一款在云端的身份；还没认领过就是 `None`。
     pub(super) async fn cloud_id_of(&self, game_id: &str) -> Result<Option<String>, String> {
         let config = self.config.read().await;
@@ -98,29 +138,14 @@ impl Daemon {
         runner: &Runner,
         game_id: &str,
         name: &str,
-        targets: &[SaveTarget],
+        _targets: &[SaveTarget],
     ) -> Result<Packed, String> {
-        let fingerprint = self.ensure_fingerprint(game_id).await?;
         let local = self.cloud_id_of(game_id).await?;
         let local_key = self.cloud_key_of(game_id).await?;
-        let machine_id = self.machine_id().await?;
-        let locations: Vec<String> = targets.iter().map(|target| target.key.clone()).collect();
+        let machine = self.machine_identity_of(game_id).await?;
 
         let resolved = runner
-            .resolve_identity(
-                game_id,
-                name,
-                local.as_deref(),
-                MachineIdentity {
-                    machine_id: machine_id.clone(),
-                    label: machine_label(),
-                    // 没有指纹就空着：**绝不编一个**（那会让两台机器认错人）。
-                    fingerprints: fingerprint.clone().into_iter().collect(),
-                    // 这台机器上这一款**配了**哪些位置 —— 位置对齐（§2.7）要的就是这份
-                    // 清单，而不是"这一次恰好有文件的那几个"。
-                    locations: locations.clone(),
-                },
-            )
+            .resolve_identity(game_id, name, local.as_deref(), machine.clone())
             .await
             .map_err(|e| e.to_string())?;
 
@@ -146,9 +171,10 @@ impl Daemon {
             cloud_key: resolved.key,
             identity: PackIdentity {
                 cloud_id: resolved.identity.cloud_id,
-                machine_id: Some(machine_id),
-                fingerprint,
-                locations,
+                machine_id: Some(machine.machine_id),
+                // 包里只带**一个**指纹（这一台机器此刻用的那个）；卡里的那一串是历史。
+                fingerprint: machine.fingerprints.first().cloned(),
+                locations: machine.locations,
             },
         })
     }

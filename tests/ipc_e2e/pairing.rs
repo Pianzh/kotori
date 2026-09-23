@@ -94,6 +94,15 @@ fn a_second_machine_pairs_by_fingerprint_and_follows_the_same_directory() {
         "包要跟着身份放进同一个目录，否则两台机器永远互相看不见"
     );
 
+    // 扫描顺带把**云端索引**写出来了：之后「云端存档」页读的就是它（一个桶一份），
+    // 不必再读一遍每一张身份卡。
+    let listed = machine_b.rpc("sync.cloud_list", json!({}));
+    assert_eq!(listed["result"]["indexed"], true, "{listed}");
+    let row = &listed["result"]["games"][0];
+    assert_eq!(row["cloud_key"], "original-name", "{listed}");
+    assert_eq!(row["name"], "Original Name", "云端记下的名字: {listed}");
+    assert_eq!(row["local_id"], "renamed", "本机哪一条认了它: {listed}");
+
     // 配对之后，B 能取回 A 传的那一版（身份对得上，闸门放行）。
     let restored = machine_b.rpc("sync.restore", json!({ "id": "renamed" }));
     assert_eq!(restored["result"]["ok"], true, "{restored}");

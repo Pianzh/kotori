@@ -27,10 +27,11 @@ impl Daemon {
             tracing::info!("配对扫描前补了 {filled} 条 exe 指纹");
         }
 
-        let clouds: Vec<CloudCard> = runner
-            .read_identities()
-            .await
-            .map_err(|e| e.to_string())?
+        let cards = runner.read_identities().await.map_err(|e| e.to_string())?;
+        // 顺手把云端索引写出来：**此刻所有身份卡都在手上**，正是重建它的最好时机
+        // （界面上的「深度扫描云端」走的就是这条路）。索引是镜像，写不进去也不影响这一趟。
+        self.rebuild_index(&runner, &cards).await;
+        let clouds: Vec<CloudCard> = cards
             .into_iter()
             .map(|(key, identity)| CloudCard { key, identity })
             .collect();

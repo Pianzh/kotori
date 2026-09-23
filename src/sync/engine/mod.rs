@@ -27,12 +27,15 @@ use crate::secrets::Keyring;
 use super::SyncError;
 use super::archive::{Manifest, PackReport};
 use super::cloud::{CloudGame, GameIdentity, PackIdentity};
+use super::index::{CloudIndex, IndexBundle};
 use super::save_targets::SaveTarget;
 
 mod diagnostics;
 mod kopia;
 mod kopia_args;
 mod kopia_identity;
+mod kopia_index;
+mod kopia_index_args;
 mod rclone;
 #[cfg(test)]
 mod tests;
@@ -189,6 +192,39 @@ impl Backend {
         match &self.inner {
             Inner::Rclone(engine) => engine.write_identity(game_id, identity, work_dir).await,
             Inner::Kopia(engine) => engine.write_identity(game_id, identity, work_dir).await,
+        }
+    }
+
+    /// 读云端索引：合并快照 + **还没并进去**的那些增量（一个桶一份，见 `crate::sync::index`）。
+    pub async fn read_index(&self, work_dir: &Path) -> Result<IndexBundle, SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.read_index().await,
+            Inner::Kopia(engine) => engine.read_index(work_dir).await,
+        }
+    }
+
+    /// 写一条索引增量（**必须先写它**：对象名唯一，谁也覆盖不了谁）。
+    pub async fn write_index_delta(
+        &self,
+        name: &str,
+        index: &CloudIndex,
+        work_dir: &Path,
+    ) -> Result<(), SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.write_index_delta(name, index, work_dir).await,
+            Inner::Kopia(engine) => engine.write_index_delta(name, index, work_dir).await,
+        }
+    }
+
+    /// 重写索引的合并快照（**后写它**）。
+    pub async fn write_index_main(
+        &self,
+        index: &CloudIndex,
+        work_dir: &Path,
+    ) -> Result<(), SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.write_index_main(index, work_dir).await,
+            Inner::Kopia(engine) => engine.write_index_main(index, work_dir).await,
         }
     }
 
