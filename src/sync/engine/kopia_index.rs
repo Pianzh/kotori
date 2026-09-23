@@ -52,8 +52,17 @@ impl Kopia {
             .await?;
         let slots = index_args::index_snapshots(&listed).map_err(SyncError::Command)?;
 
+        // ⚠ 读不懂的合并快照当"没有"处理，而不是硬报错：索引只是镜像（真相在身份卡），
+        // 它坏了必须还能靠「深度扫描云端」重写一份 —— 硬报错的话 `update_index` 一上来
+        // 就读它，连重建都做不了。
         let main = match slots.iter().find(|(slot, _)| slot == INDEX_MAIN) {
-            Some((_, id)) => self.index_from_snapshot(id, work_dir, INDEX_MAIN).await?,
+            Some((_, id)) => match self.index_from_snapshot(id, work_dir, INDEX_MAIN).await {
+                Ok(main) => main,
+                Err(error) => {
+                    tracing::warn!("云端索引读不懂，先当没有（深度扫描会重写一份）: {error}");
+                    None
+                }
+            },
             // 桶里还没有索引：这不是错误，是"第一次"（上层据此提示深扫一次）。
             None => None,
         };

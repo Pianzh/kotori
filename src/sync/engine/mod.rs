@@ -38,6 +38,7 @@ mod kopia_index;
 mod kopia_index_args;
 mod kopia_parse;
 mod rclone;
+mod rclone_index;
 #[cfg(test)]
 mod tests;
 

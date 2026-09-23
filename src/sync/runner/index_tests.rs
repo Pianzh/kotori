@@ -227,3 +227,41 @@ fn has(index: &CloudIndex, cloud_id: &str) -> bool {
         .iter()
         .any(|game| game.identity.cloud_id == cloud_id)
 }
+
+#[tokio::test]
+async fn a_corrupt_index_is_treated_as_missing_and_can_be_rebuilt() {
+    let fake = FakeRclone::new("index-corrupt");
+    fake.runner(0)
+        .update_index(
+            "machine-a",
+            vec![entry("c1", "one", "一", "machine-a", "v1:10:aa")],
+        )
+        .await
+        .unwrap();
+    let delta = main_on_disk(&fake).unwrap().merged[0].clone();
+    assert!(is_delta_name(&delta));
+
+    // 合并快照写坏了（半截 JSON：写崩、被截断、或者手工改坏）。
+    fake.put(
+        &index_main_path(&fake.settings(0)),
+        "{\"format\":1,\"updated\":\"2026-",
+    );
+
+    // 读：**不许报错**。那份坏快照当没有，增量仍然是能读到的（索引里还有东西）。
+    let read = fake.runner(0).read_index().await.unwrap().unwrap();
+    assert!(has(&read, "c1"), "坏的是快照，不是数据");
+
+    // 再写一次就把合并快照修回来了 —— 这正是「深度扫描云端」要做的事。
+    let merged = fake
+        .runner(0)
+        .update_index(
+            "machine-a",
+            vec![entry("c2", "two", "二", "machine-a", "v1:20:bb")],
+        )
+        .await
+        .unwrap();
+    assert_eq!(merged.len(), 2);
+    let main = main_on_disk(&fake).expect("该重写出一份好的合并快照");
+    assert_eq!(main.len(), 2);
+    assert!(main.merged.iter().any(|name| name == &delta));
+}
