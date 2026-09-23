@@ -13,15 +13,17 @@ impl App {
     /// 切到「云端存档」时该做什么：**第一次进来**读一次索引（一次读，便宜）。
     ///
     /// 只读一次：之后的刷新由用户自己按 —— 读云端这件事不该跟着切页面反复发生。
+    /// 读的是**本机缓存**（`refresh = false`）：平时这一步根本不碰网络，只有缓存过了一小时
+    /// 或者本地还没有缓存时才会真的去云端（daemon 那边判，见 `cloud_index_view`）。
     pub(super) fn cloud_entered(&mut self) -> Task<Message> {
         if self.cloud.loaded_once {
             return Task::none();
         }
         self.cloud.loading = true;
-        self.cloud.msg = Some("正在读云端索引…".to_string());
+        self.cloud.msg = Some("正在读本机那份云端清单…".to_string());
         let socket = self.daemon_socket.clone();
         Task::perform(
-            async move { cloud_list(&socket).await },
+            async move { cloud_list(&socket, false).await },
             Message::CloudLoaded,
         )
     }
@@ -29,13 +31,15 @@ impl App {
     /// update_cloud 负责的那一批消息（路由见 `update/mod.rs`）。
     pub(super) fn update_cloud(&mut self, message: Message) -> Task<Message> {
         match message {
+            // 这一颗是**唯一**会强制联网的读（用户 2026-09-23："除了云端存档标签页的刷新
+            // 以外其他地方都不会触发刷新缓存"）。
             Message::CloudRefresh => {
                 self.cloud.loading = true;
-                self.cloud.msg = Some("正在读云端索引…".to_string());
+                self.cloud.msg = Some("正在从云端读索引…".to_string());
                 self.cloud.ok = true;
                 let socket = self.daemon_socket.clone();
                 Task::perform(
-                    async move { cloud_list(&socket).await },
+                    async move { cloud_list(&socket, true).await },
                     Message::CloudLoaded,
                 )
             }
@@ -43,14 +47,14 @@ impl App {
                 self.cloud.loading = false;
                 self.cloud.scanning = false;
                 match result {
-                    Ok((indexed, rows)) => {
-                        self.cloud.msg = Some(cloud_summary(indexed, rows.len()));
+                    Ok(reply) => {
+                        self.cloud.msg = Some(cloud_summary(&reply));
                         self.cloud.ok = true;
-                        self.cloud.loaded(indexed, rows);
+                        self.cloud.loaded(reply);
                     }
                     Err(e) => {
                         self.cloud.ok = false;
-                        self.cloud.msg = Some(format!("读云端索引失败: {e}"));
+                        self.cloud.msg = Some(format!("读云端清单失败: {e}"));
                     }
                 }
                 Task::none()
@@ -69,18 +73,25 @@ impl App {
             Message::CloudScanned(result) => {
                 self.cloud.scanning = false;
                 match result {
-                    Ok((indexed, rows)) => {
-                        let count = rows.len();
+                    Ok(reply) => {
+                        let count = reply.rows.len();
+                        let source = reply.source_label();
+                        let trouble = reply.trouble_label();
                         self.cloud.ok = true;
-                        self.cloud.loaded(indexed, rows);
+                        self.cloud.loaded(reply);
                         // 深度扫描还会顺手把指纹唯一命中的绑上（`sync.pairing` 干的），
                         // 所以这句话里要提一句"配对了没有"。
-                        self.cloud.msg = Some(match self.cloud.matched() {
+                        let mut message = match self.cloud.matched() {
                             0 => format!("扫描完成：云端 {count} 款，没有新配上的。"),
                             bound => {
                                 format!("扫描完成：云端 {count} 款，其中 {bound} 款已配上本机。")
                             }
-                        });
+                        };
+                        message.push_str(&format!("\n{source}"));
+                        if let Some(trouble) = trouble {
+                            message.push_str(&format!("\n{trouble}"));
+                        }
+                        self.cloud.msg = Some(message);
                     }
                     Err(e) => {
                         self.cloud.ok = false;
@@ -126,11 +137,23 @@ impl App {
     }
 }
 
-/// 清单读完那句话说清"索引建过没有" —— 那两件事在界面上完全不同。
-fn cloud_summary(indexed: bool, count: usize) -> String {
-    match (indexed, count) {
+/// 清单读完那句话说三件事：索引建过没有、有几款、**这份清单是什么时候拿到的**。
+///
+/// 最后那件是用户 2026-09-23 要的：索引平时读的是本机缓存，不写清时间用户会以为"云端就
+/// 长这样"，而它可能已经旧了一小时。后台刷新失败的原因也在同一句里说（免得用户只看到一份
+/// 旧清单而不知道原因）。
+fn cloud_summary(reply: &CloudListReply) -> String {
+    let mut message = match (reply.indexed, reply.rows.len()) {
         (false, _) => "桶里还没有这份索引。点「深度扫描云端」扫一次，之后刷新就快了。".to_string(),
         (true, 0) => "云端还没有游戏。".to_string(),
         (true, count) => format!("云端 {count} 款游戏。点一款看它每一版。"),
+    };
+    let source = reply.source_label();
+    if !source.is_empty() {
+        message.push_str(&format!("\n{source}"));
     }
+    if let Some(trouble) = reply.trouble_label() {
+        message.push_str(&format!("\n{trouble}"));
+    }
+    message
 }

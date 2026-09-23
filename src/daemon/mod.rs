@@ -13,6 +13,7 @@ use crate::scale::{LaunchSpec, PlatformEngine, ScaleEngine, ScaleSession, Sessio
 
 mod dispatch;
 mod game_rpc;
+mod index_refresh;
 mod ipc;
 mod protocol;
 mod scale_rpc;
@@ -52,6 +53,12 @@ pub struct Daemon {
     /// 是因为游戏退出到用户重开可能快过一个轮询周期,而"没观察到空档"不该让这一款
     /// 从此不再被追踪。
     ignored_watch: Arc<RwLock<std::collections::HashMap<String, Vec<i32>>>>,
+    /// 最近一次**自动刷新云端索引**失败的原因（`None` = 上一次是好的）。
+    ///
+    /// 用户 2026-09-23 要的："后台失败要让界面知道" —— 「云端存档」页那句"本机缓存 ·
+    /// 09-23 10:15"旁边会带上它，否则用户只能看见一份旧清单而不知道原因。一次成功刷新
+    /// 之后清掉。
+    index_refresh_error: Arc<RwLock<Option<String>>>,
 }
 
 impl Daemon {
@@ -93,6 +100,7 @@ impl Daemon {
             shutdown: Arc::new(Notify::new()),
             sync: Arc::new(sync),
             ignored_watch: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            index_refresh_error: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -143,6 +151,8 @@ impl Daemon {
         self.spawn_sync_events();
         // 自动追踪:不是 kotori 启动的游戏也要有一局记录(见 `watch`)。
         self.spawn_process_watch();
+        // 云端索引每小时自动刷新一次(启动时先刷一次,见 `index_refresh`)。
+        self.spawn_index_refresh();
 
         // A logout or a shutdown stops this daemon with SIGTERM, and that is the
         // one exit where the games have to go with it. They live in the same
@@ -236,6 +246,7 @@ impl Daemon {
             shutdown: self.shutdown.clone(),
             sync: self.sync.clone(),
             ignored_watch: self.ignored_watch.clone(),
+            index_refresh_error: self.index_refresh_error.clone(),
         })
     }
 

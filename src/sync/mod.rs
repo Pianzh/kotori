@@ -52,6 +52,7 @@ pub mod engine;
 pub mod executables;
 pub mod fingerprint;
 pub mod index;
+pub mod index_cache;
 pub mod pairing;
 pub mod runner;
 pub mod selfcheck;

@@ -6,7 +6,7 @@
 //! 照「挑一个进程」那套做（`model::picker`）：候选是**打开时取的那一份快照**，过滤在
 //! 内存里做。每敲一个字都去读一次云端索引太吵，而桶里那些游戏本来就不在这几秒里变。
 
-use super::cloud::CloudGameRow;
+use super::cloud::{self, CloudGameRow, CloudListReply};
 
 /// 浮层的状态。
 #[derive(Debug, Default)]
@@ -15,6 +15,10 @@ pub(in crate::ui) struct CloudPick {
     loading: bool,
     /// 桶里建过索引没有。`false` 时候选必然是空的 —— 那句话要说清"去深扫一次"。
     indexed: bool,
+    /// 这份清单是从本机缓存来的、什么时候拿到的、上次刷新成不成（给用户看的那句话）。
+    from_cache: bool,
+    cached_at: String,
+    refresh_error: Option<String>,
     /// 打开时取的全量候选。
     all: Vec<CloudGameRow>,
     /// 过滤后的那一份（推给窗口的就是它）。
@@ -40,9 +44,15 @@ impl CloudPick {
     }
 
     /// 候选到了。搜索词此刻可能已经打了一半，所以照它重算一遍。
-    pub(in crate::ui) fn loaded(&mut self, indexed: bool, rows: Vec<CloudGameRow>) {
-        self.indexed = indexed;
-        self.all = rows;
+    ///
+    /// "这份清单从哪儿来、什么时候拿到的"也一起收下 —— 用户 2026-09-23 要在界面上看到
+    /// 那个时间（索引平时读的是本机缓存，可能是旧的）。
+    pub(in crate::ui) fn loaded(&mut self, reply: CloudListReply) {
+        self.indexed = reply.indexed;
+        self.from_cache = reply.from_cache;
+        self.cached_at = reply.cached_at;
+        self.refresh_error = reply.refresh_error;
+        self.all = reply.rows;
         self.loading = false;
         self.error = None;
         self.refilter();
@@ -105,33 +115,56 @@ impl CloudPick {
     }
 
     /// 浮层里那行小字：出错优先，其次"读取中"、没索引、云端是空的，最后才是"滤掉了多少"。
+    ///
+    /// 不管哪一种情况，后面都缀上"这份清单是什么时候拿到的" —— 索引读的是本机缓存，
+    /// 用户得知道它可能旧了一小时（用户 2026-09-23 要显示时间）。
     pub(in crate::ui) fn message(&self) -> String {
-        if let Some(error) = &self.error {
-            return format!(
-                "读云端清单失败: {error}\n这一款照旧可以添加 —— 只是没法绑到云端那一条上。"
-            );
+        let line = if let Some(error) = &self.error {
+            format!("读云端清单失败: {error}\n这一款照旧可以添加 —— 只是没法绑到云端那一条上。")
+        } else if self.loading {
+            "正在读云端清单…".to_string()
+        } else if !self.indexed {
+            "桶里还没有这份索引：到「云端存档」页点一次「深度扫描云端」，之后再回来挑。".to_string()
+        } else if self.all.is_empty() {
+            "云端还没有游戏。这一款添加之后第一次上传会新建一条身份。".to_string()
+        } else {
+            let hidden = self.all.len() - self.filtered.len();
+            if !self.query.trim().is_empty() && hidden > 0 {
+                format!("云端 {} 款，其中 {hidden} 款被搜索词滤掉了", self.all.len())
+            } else {
+                String::new()
+            }
+        };
+
+        let mut lines: Vec<String> = Vec::new();
+        if !line.is_empty() {
+            lines.push(line);
         }
-        if self.loading {
-            return "正在读云端清单…".to_string();
+        let source = cloud::source_label(self.from_cache, &self.cached_at);
+        if !source.is_empty() {
+            lines.push(source);
         }
-        if !self.indexed {
-            return "桶里还没有这份索引：到「云端存档」页点一次「深度扫描云端」，之后再回来挑。"
-                .to_string();
+        if let Some(trouble) = cloud::trouble_label(self.refresh_error.as_deref()) {
+            lines.push(trouble);
         }
-        if self.all.is_empty() {
-            return "云端还没有游戏。这一款添加之后第一次上传会新建一条身份。".to_string();
-        }
-        let hidden = self.all.len() - self.filtered.len();
-        if !self.query.trim().is_empty() && hidden > 0 {
-            return format!("云端 {} 款，其中 {hidden} 款被搜索词滤掉了", self.all.len());
-        }
-        String::new()
+        lines.join("\n")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 一份"刚从云端读出来"的回包（这些测试关心的是候选，不是来源）。
+    fn reply(indexed: bool, rows: Vec<CloudGameRow>) -> CloudListReply {
+        CloudListReply {
+            indexed,
+            from_cache: false,
+            cached_at: "20260923T101500Z".to_string(),
+            refresh_error: None,
+            rows,
+        }
+    }
 
     fn row(cloud_id: &str, name: &str) -> CloudGameRow {
         CloudGameRow {
@@ -154,7 +187,7 @@ mod tests {
         assert!(pick.loading(), "刚打开时是在读");
         assert!(pick.rows().is_empty());
 
-        pick.loaded(
+        pick.loaded(reply(
             true,
             vec![
                 row("c1", "云端记下的名字"),
@@ -163,7 +196,7 @@ mod tests {
                     ..row("c2", "另一款")
                 },
             ],
-        );
+        ));
         assert!(!pick.loading());
         assert_eq!(pick.rows().len(), 2);
 
@@ -175,7 +208,14 @@ mod tests {
         assert!(pick.message().contains("滤掉"), "{}", pick.message());
 
         pick.set_query(String::new());
-        assert_eq!(pick.message(), "", "没被滤掉就别说话");
+        // 没被滤掉时不该有"滤掉了多少"那句；留下来的只有"这份清单什么时候拿到的"
+        //（用户 2026-09-23 要显示时间，所以它一直在）。
+        assert!(!pick.message().contains("滤掉"), "{}", pick.message());
+        assert!(
+            pick.message().starts_with("刚从云端读的 · "),
+            "{}",
+            pick.message()
+        );
     }
 
     /// 挑中的必须是**全量**里那一条，而且挑完就收起浮层 —— 行号会随搜索词变，`cloud_id`
@@ -184,7 +224,7 @@ mod tests {
     fn picking_goes_by_cloud_id_and_closes_the_sheet() {
         let mut pick = CloudPick::default();
         pick.open();
-        pick.loaded(true, vec![row("c1", "一号"), row("c2", "二号")]);
+        pick.loaded(reply(true, vec![row("c1", "一号"), row("c2", "二号")]));
         pick.set_query("二号".into());
         assert_eq!(pick.rows().len(), 1);
 
@@ -199,7 +239,7 @@ mod tests {
     fn opening_again_starts_from_a_clean_slate() {
         let mut pick = CloudPick::default();
         pick.open();
-        pick.loaded(true, vec![row("c1", "一号")]);
+        pick.loaded(reply(true, vec![row("c1", "一号")]));
         pick.set_query("一号".into());
         pick.close();
 
@@ -214,7 +254,7 @@ mod tests {
     fn an_empty_list_never_looks_like_an_empty_cloud() {
         let mut pick = CloudPick::default();
         pick.open();
-        pick.loaded(false, Vec::new());
+        pick.loaded(reply(false, Vec::new()));
         assert!(
             pick.message().contains("深度扫描云端"),
             "{}",
@@ -222,7 +262,7 @@ mod tests {
         );
 
         pick.open();
-        pick.loaded(true, Vec::new());
+        pick.loaded(reply(true, Vec::new()));
         assert!(
             pick.message().contains("云端还没有游戏"),
             "{}",

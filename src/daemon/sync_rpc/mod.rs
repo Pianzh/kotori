@@ -324,60 +324,70 @@ impl Daemon {
         &self,
         patch: SettingsPatch,
     ) -> Result<Value, String> {
-        self.mutate_config(|config| {
-            let mut candidate = config.sync.clone();
-            let previous_engine = candidate.engine;
+        let value = self
+            .mutate_config(|config| {
+                let mut candidate = config.sync.clone();
+                let previous_engine = candidate.engine;
 
-            if let Some(enabled) = patch.enabled {
-                candidate.enabled = enabled;
-            }
-            if let Some(engine) = patch.engine {
-                candidate.engine = engine;
-            }
-            if let Some(value) = &patch.endpoint {
-                candidate.endpoint = clean_endpoint(value)?;
-            }
-            if let Some(value) = &patch.bucket {
-                candidate.bucket = clean_bucket(value)?;
-            }
-            if let Some(value) = &patch.prefix {
-                candidate.prefix = clean_prefix(value)?;
-            }
-            if let Some(keep) = patch.keep_versions {
-                if keep > MAX_KEEP_VERSIONS {
-                    return Err(format!("保留版本数最多 {MAX_KEEP_VERSIONS}（当前 {keep}）"));
+                if let Some(enabled) = patch.enabled {
+                    candidate.enabled = enabled;
                 }
-                candidate.keep_versions = keep;
-            }
-            // 两个"程序位置"：界面填什么就是什么（目录或完整路径都行，怎么解释见
-            // `sync::executables`）。空串 = 清掉，回到自己找。
-            if let Some(value) = &patch.rclone_binary {
-                candidate.rclone_binary = value.trim().to_string();
-            }
-            if let Some(value) = &patch.kopia_binary {
-                candidate.kopia_binary = value.trim().to_string();
-            }
+                if let Some(engine) = patch.engine {
+                    candidate.engine = engine;
+                }
+                if let Some(value) = &patch.endpoint {
+                    candidate.endpoint = clean_endpoint(value)?;
+                }
+                if let Some(value) = &patch.bucket {
+                    candidate.bucket = clean_bucket(value)?;
+                }
+                if let Some(value) = &patch.prefix {
+                    candidate.prefix = clean_prefix(value)?;
+                }
+                if let Some(keep) = patch.keep_versions {
+                    if keep > MAX_KEEP_VERSIONS {
+                        return Err(format!("保留版本数最多 {MAX_KEEP_VERSIONS}（当前 {keep}）"));
+                    }
+                    candidate.keep_versions = keep;
+                }
+                // 两个"程序位置"：界面填什么就是什么（目录或完整路径都行，怎么解释见
+                // `sync::executables`）。空串 = 清掉，回到自己找。
+                if let Some(value) = &patch.rclone_binary {
+                    candidate.rclone_binary = value.trim().to_string();
+                }
+                if let Some(value) = &patch.kopia_binary {
+                    candidate.kopia_binary = value.trim().to_string();
+                }
 
-            if candidate.enabled {
-                sync::validate(&candidate).map_err(|e| e.to_string())?;
-            }
+                if candidate.enabled {
+                    sync::validate(&candidate).map_err(|e| e.to_string())?;
+                }
 
-            config.sync = candidate.clone();
-            tracing::info!(
-                "sync settings updated (enabled={}, engine={:?}, keep_versions={})",
-                candidate.enabled,
-                candidate.engine,
-                candidate.keep_versions
-            );
-            // 换引擎要专门告诉 UI：两个引擎在桶里各写各的区域，换了之后对面那些
-            // 版本**不会**被读出来（数据还在桶里，只是看不见），而这件事不会报错。
-            let engine_changed = candidate.engine != previous_engine;
-            Ok(json!({
-                "settings": candidate,
-                "engine_changed": engine_changed,
-            }))
-        })
-        .await
+                config.sync = candidate.clone();
+                tracing::info!(
+                    "sync settings updated (enabled={}, engine={:?}, keep_versions={})",
+                    candidate.enabled,
+                    candidate.engine,
+                    candidate.keep_versions
+                );
+                // 换引擎要专门告诉 UI：两个引擎在桶里各写各的区域，换了之后对面那些
+                // 版本**不会**被读出来（数据还在桶里，只是看不见），而这件事不会报错。
+                let engine_changed = candidate.engine != previous_engine;
+                Ok(json!({
+                    "settings": candidate,
+                    "engine_changed": engine_changed,
+                }))
+            })
+            .await?;
+        // 存下来了才算数：顺手把本机那份索引缓存刷一次（后台，见那个方法上的说明）。
+        // 只有碰到"云目标是哪一个"的那几个字段才值得刷 —— 改保留版本数不影响缓存。
+        let touches_target = patch.enabled.is_some()
+            || patch.engine.is_some()
+            || patch.endpoint.is_some()
+            || patch.bucket.is_some()
+            || patch.prefix.is_some();
+        self.refresh_index_after_settings(touches_target);
+        Ok(value)
     }
 
     /// 设置（或清除）kopia 仓库密码。

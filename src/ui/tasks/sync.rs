@@ -158,12 +158,17 @@ pub(in crate::ui) async fn sync_scan_cloud(socket: &Path) -> Result<Vec<PairingR
     parse_pairing(&value)
 }
 
-/// 云端现在有哪些游戏 —— 读**一个桶一份的索引**（一次读，不遍历身份卡）。
+/// 云端现在有哪些游戏 —— 读**本机缓存里那份索引**（一个桶一份），不遍历身份卡。
 ///
-/// 回的是 `(桶里建过索引没有, 清单)`：没建过时界面要提示去点一次深度扫描，而不是说
-/// "云端没有游戏"。
-pub(in crate::ui) async fn cloud_list(socket: &Path) -> Result<(bool, Vec<CloudGameRow>), String> {
-    let value = crate::rpc::call(socket, "sync.cloud_list", None).await?;
+/// `refresh = false`（默认）几乎不打网络：只有缓存过了一小时、或者本地还没有缓存时才会
+/// 去云端（daemon 自己会顺手把缓存刷上）。`refresh = true` 是「云端存档」页那颗刷新按钮。
+/// 回包里还带着"这份清单什么时候拿到的"（用户 2026-09-23 要显示它）。
+pub(in crate::ui) async fn cloud_list(
+    socket: &Path,
+    refresh: bool,
+) -> Result<CloudListReply, String> {
+    let params = crate::rpc::params([("refresh", Value::Bool(refresh))]);
+    let value = crate::rpc::call(socket, "sync.cloud_list", Some(params)).await?;
     parse_cloud_list(&value)
 }
 
@@ -172,9 +177,10 @@ pub(in crate::ui) async fn cloud_list(socket: &Path) -> Result<(bool, Vec<CloudG
 ///
 /// 这条路很慢（kopia 那边读一张卡就是一次 `restore`），所以只挂在用户主动按的那颗
 /// 按钮上；平时刷新走 [`cloud_list`]。
-pub(in crate::ui) async fn cloud_scan(socket: &Path) -> Result<(bool, Vec<CloudGameRow>), String> {
+pub(in crate::ui) async fn cloud_scan(socket: &Path) -> Result<CloudListReply, String> {
     crate::rpc::call(socket, "sync.pairing", None).await?;
-    cloud_list(socket).await
+    // 深扫刚把云端索引整份重写过，daemon 也顺手换了本机缓存 —— 所以这一读是本地读。
+    cloud_list(socket, false).await
 }
 
 /// 云端某一款有哪几版（名字 + 大小 + 时间）。参数是**云端落点**，不是本机 id。

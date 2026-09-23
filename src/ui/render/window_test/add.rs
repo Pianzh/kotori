@@ -167,6 +167,17 @@ pub(super) fn add_match_states(ui: &mut Ui) {
 
 /// 「自己选…」那个浮层：读取中 → 有清单（含长名字）→ 搜索滤掉 → 挑一条 → 没索引 /
 /// 读不成。跑完把浮层收起来（别影响后面那几页）。
+/// 一份"刚从云端读出来"的回包（这些断言关心的是列表，不是来源）。
+fn reply(indexed: bool, rows: Vec<CloudGameRow>) -> CloudListReply {
+    CloudListReply {
+        indexed,
+        from_cache: false,
+        cached_at: "20260923T101500Z".to_string(),
+        refresh_error: None,
+        rows,
+    }
+}
+
 pub(super) fn cloud_pick_states(ui: &mut Ui) {
     show_tab(ui, Tab::Add);
     ui.window
@@ -200,7 +211,7 @@ pub(super) fn cloud_pick_states(ui: &mut Ui) {
     fits(ui, &["CloudPickerDialog"]);
 
     // 清单到了（名字很长的那种也要画得下）。
-    ui.app.cloud_pick.loaded(
+    ui.app.cloud_pick.loaded(reply(
         true,
         vec![
             row("c1", "云端记下的游戏名（很长很长的那种）"),
@@ -210,12 +221,22 @@ pub(super) fn cloud_pick_states(ui: &mut Ui) {
                 ..row("c2", "另一款")
             },
         ],
-    );
+    ));
     render(ui);
     let board = ui.window.global::<CloudPickerState>();
     assert_eq!(board.get_rows().row_count(), 2);
     assert!(!board.get_loading());
-    assert_eq!(board.get_message(), "", "有货就别说话");
+    // 有货时不该说"滤掉了多少"；留下的是那句"这份清单什么时候拿到的"（用户要显示时间）。
+    assert!(
+        !board.get_message().contains("滤掉"),
+        "{}",
+        board.get_message()
+    );
+    assert!(
+        board.get_message().starts_with("刚从云端读的 · "),
+        "{}",
+        board.get_message()
+    );
     fits(ui, &["CloudPickerDialog"]);
 
     // 搜索是**本地**过滤（不打网络），滤掉了多少要说出来。
@@ -247,7 +268,7 @@ pub(super) fn cloud_pick_states(ui: &mut Ui) {
 
     // 桶里还没建索引 / 读不成：两句不同的话，都不许画成"云端没有游戏"。
     ui.app.cloud_pick.open();
-    ui.app.cloud_pick.loaded(false, Vec::new());
+    ui.app.cloud_pick.loaded(reply(false, Vec::new()));
     render(ui);
     let board = ui.window.global::<CloudPickerState>();
     assert!(

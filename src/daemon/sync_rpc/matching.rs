@@ -7,15 +7,19 @@
 //! 为什么按**指纹**认而不是按名字：两台机器给同一款游戏起的名字可以不一样，指纹是唯一
 //! 能认出"这一款就是这一款"的判据（见 `crate::sync::fingerprint`）。
 //!
-//! ⚠ **绝不卡住添加**：读不到索引（没配云同步、桶里还没索引、网络不通）一律如实回话，
-//! 界面照旧能把本机这一条建起来，等第一次上传时再认领。
+//! ⚠ 读的是**本机缓存**（见 [`Daemon::cloud_index_view`]）：填完 exe 就该当场有答案，不该
+//! 等一趟网络。只有缓存过了一小时、或者本地还没有缓存时才会真的去云端 —— 那时它自己会
+//! 顺手把缓存刷上。
+//!
+//! ⚠ **绝不卡住添加**：读不到（没配云同步、网络不通）一律如实回话，界面照旧能把本机这一条
+//! 建起来，等第一次上传时再认领。
 
 use std::path::Path;
 
 use serde_json::{Value, json};
 
+use super::Daemon;
 use super::rows;
-use super::{CHECK_TIMEOUT, Daemon};
 
 impl Daemon {
     /// 0 条 = 云端没有它，1 条 = 就是它，≥2 条 = 列出来**问**（与配对同一条规矩）。
@@ -30,24 +34,16 @@ impl Daemon {
             )
         })?;
 
-        let settings = self.config.read().await.sync.clone();
-        let runner = self.sync_runner(&settings)?;
-        let index = tokio::time::timeout(CHECK_TIMEOUT, runner.read_index())
-            .await
-            .map_err(|_| {
-                format!(
-                    "读云端索引超过 {} 秒没有回应 —— 网络通不通?",
-                    CHECK_TIMEOUT.as_secs()
-                )
-            })?
-            .map_err(|e| e.to_string())?;
+        // 只读本机缓存（过期/没有时才联网，理由是那条路自己会解释）。
+        let view = self.cloud_index_view(false).await?;
 
         let (paired, rejected) = {
             let config = self.config.read().await;
             rows::locals(&config)
         };
-        let indexed = index.is_some();
-        let games: Vec<Value> = index
+        let indexed = view.index.is_some();
+        let games: Vec<Value> = view
+            .index
             .unwrap_or_default()
             .by_fingerprint(&fingerprint)
             .into_iter()
@@ -57,6 +53,12 @@ impl Daemon {
             })
             .collect();
 
-        Ok(json!({ "indexed": indexed, "fingerprint": fingerprint, "games": games }))
+        Ok(json!({
+            "indexed": indexed,
+            "from_cache": view.from_cache,
+            "cached_at": view.cached_at,
+            "fingerprint": fingerprint,
+            "games": games,
+        }))
     }
 }

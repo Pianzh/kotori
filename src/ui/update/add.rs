@@ -59,18 +59,19 @@ impl App {
                 self.add_match.undo_decline();
                 Task::none()
             }
-            // 「自己选…」:打开浮层,顺带读一次云端清单(读索引,一次读)。
+            // 「自己选…」:打开浮层,读一次云端清单 —— 读的是**本机缓存**(不打网络;
+            // 缓存过了一小时或者本地还没有时 daemon 自己会去云端,见 `cloud_index_view`)。
             Message::CloudPickOpen => {
                 self.cloud_pick.open();
                 let socket = self.daemon_socket.clone();
                 Task::perform(
-                    async move { cloud_list(&socket).await },
+                    async move { cloud_list(&socket, false).await },
                     Message::CloudPickLoaded,
                 )
             }
             Message::CloudPickLoaded(result) => {
                 match result {
-                    Ok((indexed, rows)) => self.cloud_pick.loaded(indexed, rows),
+                    Ok(reply) => self.cloud_pick.loaded(reply),
                     // 读不成不是错误状态:浮层里说一句话,**这一款照旧能添加**。
                     Err(e) => self.cloud_pick.failed(e),
                 }

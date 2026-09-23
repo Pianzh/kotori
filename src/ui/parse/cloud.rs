@@ -12,9 +12,30 @@ use crate::ui::*;
 ///
 /// `indexed` 与"云端没有游戏"是两件事：前者 = 桶里还没建过索引（要去点一次深度扫描），
 /// 后者 = 建过了、但云端确实没东西。界面上那两句话完全不同。
-pub(in crate::ui) fn parse_cloud_list(value: &Value) -> Result<(bool, Vec<CloudGameRow>), String> {
+///
+/// `from_cache` / `cached_at` / `refresh_error` 是"这份清单从哪儿来、什么时候拿到的"
+/// —— 用户 2026-09-23 要显示它（索引在本机查，所以可能是旧的）。
+/// ⚠ 这三个字段**缺了也收**（老回包/别的客户端）：缺 `cached_at` 时界面就不说时间，
+/// 而那比"整个页面报错"强。
+pub(in crate::ui) fn parse_cloud_list(value: &Value) -> Result<CloudListReply, String> {
     let (indexed, games) = indexed_and_games(value)?;
-    Ok((indexed, games.iter().map(parse_cloud_row).collect()))
+    Ok(CloudListReply {
+        indexed,
+        from_cache: value
+            .get("from_cache")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        cached_at: value
+            .get("cached_at")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string(),
+        refresh_error: value
+            .get("refresh_error")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        rows: games.iter().map(parse_cloud_row).collect(),
+    })
 }
 
 /// `sync.match` 的回包：这个 exe 在云端是哪一款（0 条 = 云端没有它）。
@@ -136,8 +157,9 @@ mod tests {
                 },
             ],
         });
-        let (indexed, rows) = parse_cloud_list(&payload).unwrap();
-        assert!(indexed);
+        let reply = parse_cloud_list(&payload).unwrap();
+        assert!(reply.indexed);
+        let rows = reply.rows;
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].name, "云端记下的名字", "显示的是名字，不是落点");
         assert_eq!(rows[0].local_label(), "本机《本机这一款》");
@@ -147,6 +169,12 @@ mod tests {
         // `indexed` 缺了就是坏回包 —— "还没建索引"与"云端没有游戏"绝不能混。
         assert!(parse_cloud_list(&serde_json::json!({ "games": [] })).is_err());
         assert!(parse_cloud_list(&serde_json::json!({ "indexed": false })).is_err());
+
+        // 来源那三栏缺了也收（老回包）：少了时间就不说时间，而不是整页报错。
+        let bare = parse_cloud_list(&serde_json::json!({ "indexed": true, "games": [] })).unwrap();
+        assert!(!bare.from_cache);
+        assert_eq!(bare.source_label(), "");
+        assert!(bare.trouble_label().is_none());
     }
 
     #[test]

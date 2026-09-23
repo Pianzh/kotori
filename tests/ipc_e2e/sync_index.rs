@@ -210,3 +210,72 @@ fn adding_a_game_asks_the_index_whether_the_cloud_already_has_it() {
     );
     assert!(remote.join("index").exists(), "索引该落在桶里");
 }
+
+/// 索引读到本机之后，**平时读它不再打网络**。
+///
+/// 用户 2026-09-23 的原话："为什么你每次读云端都要这么久，理论上来说不是应该把云端索引
+/// 下载到本地再在本地查吗，自己选的页面默认不刷新直接读本地缓存。" 所以：
+///   * 本地还没有缓存时 → 去云端读一次并把它存下来（`from_cache: false`）；
+///   * 之后默认读 → 同一个结果，**一次 rclone 调用都不多**（`from_cache: true`）；
+///   * `refresh: true`（「云端存档」页那颗刷新按钮）→ 真的再去云端。
+#[test]
+fn the_cloud_list_is_read_from_a_local_cache_after_the_first_fetch() {
+    let mut machine = Fixture::new("cache");
+    machine.enable_fake_sync(true);
+    machine.start();
+    machine.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+
+    // 桶里还没有索引，本机也还没有缓存 ⇒ 这一读必须去云端（并顺手把"没有索引"也记下来）。
+    let first = machine.rpc("sync.cloud_list", json!({}));
+    assert_eq!(first["result"]["indexed"], false, "{first}");
+    assert_eq!(
+        first["result"]["from_cache"], false,
+        "第一次只能去云端: {first}"
+    );
+    let cached_at = first["result"]["cached_at"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(!cached_at.is_empty(), "回包里要带'什么时候拿到的': {first}");
+
+    // 第二次（默认）：还是那个结果，但**没有新的 rclone 调用** —— 读的是本机那份。
+    let before = rclone_calls(&machine).len();
+    let second = machine.rpc("sync.cloud_list", json!({}));
+    assert_eq!(second["result"]["indexed"], false, "{second}");
+    assert_eq!(second["result"]["from_cache"], true, "该读缓存了: {second}");
+    assert_eq!(
+        second["result"]["cached_at"], cached_at,
+        "还是那一份（时间没变）: {second}"
+    );
+    assert_eq!(
+        rclone_calls(&machine).len(),
+        before,
+        "第二次读不该打网络: {:?}",
+        rclone_calls(&machine)
+    );
+
+    // 再读一次（「自己选…」浮层与添加页匹配走的也都是这条路）：仍然不打网络。
+    let third = machine.rpc("sync.cloud_list", json!({}));
+    assert_eq!(third["result"]["from_cache"], true, "{third}");
+    assert_eq!(
+        rclone_calls(&machine).len(),
+        before,
+        "读几次都该是本地: {:?}",
+        rclone_calls(&machine)
+    );
+
+    // `refresh: true` 是那颗刷新按钮：真的再去云端，并且把缓存刷新（时间会变新）。
+    let refreshed = machine.rpc("sync.cloud_list", json!({ "refresh": true }));
+    assert_eq!(refreshed["result"]["from_cache"], false, "{refreshed}");
+    assert!(
+        rclone_calls(&machine).len() > before,
+        "刷新按钮必须真的去云端: {:?}",
+        rclone_calls(&machine)
+    );
+    // 上传成功之后缓存也跟着更新（这里没有游戏，用刷新这条路代表"我们刚知道最新内容"）。
+    let after = machine.rpc("sync.cloud_list", json!({}));
+    assert_eq!(after["result"]["from_cache"], true, "{after}");
+}

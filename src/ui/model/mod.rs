@@ -25,7 +25,7 @@ pub use session::SessionInfo;
 pub use sync::{PairingRow, PairingState, SyncGameRow, SyncStatus};
 
 pub(super) use add::{AddMatch, MATCH_DEBOUNCE, MatchPhase};
-pub(super) use cloud::{CloudGameRow, CloudState, CloudVersionRow};
+pub(super) use cloud::{CloudGameRow, CloudListReply, CloudState, CloudVersionRow};
 pub(super) use cloud_pick::CloudPick;
 pub(super) use environment::{EnvCheck, Environment};
 pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, SAVE_PATH_KINDS, SaveAttempt};

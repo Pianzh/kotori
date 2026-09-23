@@ -134,7 +134,7 @@ pub enum Message {
     /// 「自己选…」那个浮层:打开(顺带读一次云端清单)、回包、搜索、挑一条、收起、
     /// 以及「改回自动」(见 `model::cloud_pick`)。
     CloudPickOpen,
-    CloudPickLoaded(Result<(bool, Vec<CloudGameRow>), String>),
+    CloudPickLoaded(Result<CloudListReply, String>),
     CloudPickSearch(String),
     CloudPickChoose(String),
     CloudPickDismiss,
@@ -210,10 +210,10 @@ pub enum Message {
     SyncPairingRejected(Result<Vec<PairingRow>, String>),
     /// 「云端存档」页：读**索引**列云端有哪些游戏（用户按刷新才走，一次读）。
     CloudRefresh,
-    CloudLoaded(Result<(bool, Vec<CloudGameRow>), String>),
+    CloudLoaded(Result<CloudListReply, String>),
     /// 深度扫描：读**所有身份卡**、重建索引、顺手把能自动绑的绑上（慢，用户主动按）。
     CloudScan,
-    CloudScanned(Result<(bool, Vec<CloudGameRow>), String>),
+    CloudScanned(Result<CloudListReply, String>),
     /// 搜索框变了（本地过滤，不打网络）。
     CloudSearch(String),
     /// 点开 / 收起某一款：参数是**云端落点**。
