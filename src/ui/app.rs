@@ -52,6 +52,8 @@ pub struct App {
     /// 添加页那一块云端匹配:填完 exe 问一次"云端有没有这一款"(见 `model::add`)。
     /// **它只决定"要不要顺手绑上"**,一个字都不影响这一条能不能建起来。
     pub(super) add_match: AddMatch,
+    /// 那块匹配旁边的「自己选…」浮层:从云端清单里挑一条绑上(见 `model::cloud_pick`)。
+    pub(super) cloud_pick: CloudPick,
     /// Settings tab: wine prefix.
     pub(super) wine_prefix_input: String,
     /// Set when the user edits the prefix by hand, so a `wine.status` reply that
@@ -142,6 +144,7 @@ impl App {
                 creating: false,
                 create_msg: None,
                 add_match: AddMatch::default(),
+                cloud_pick: CloudPick::default(),
                 wine_prefix_input: String::new(),
                 wine_prefix_dirty: false,
                 wine_status: None,

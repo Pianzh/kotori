@@ -1,0 +1,145 @@
+// 「自己选…」:从**云端清单**里挑一条身份绑上。居中的浮层(搜索框 + 可滚动列表)。
+//
+// 它只服务一个入口 —— 添加游戏页那块云端匹配 —— 所以挂在**窗口根上**(app.slint),
+// 而不是页面自己画。形状照 `process-picker.slint`(同一个套路:居中、遮罩点空白收起、
+// 列表可能上百行所以必须带搜索框且可滚动)。
+//
+// 为什么需要它(用户 2026-09-23 点的):指纹没命中时"不是这一款"按下去什么也没改变,
+// 而用户**自己知道**云端那一条叫什么 —— 那种时候该给的是一颗能挑的按钮。
+//
+// 过滤在 Rust 侧做(候选是打开时取的那一份快照,每敲一个字都去读一次索引太吵)。
+
+import { ScrollView } from "std-widgets.slint";
+import { Tokens } from "../theme.slint";
+import { Divider } from "base.slint";
+import { TextField } from "controls.slint";
+import { StdButton } from "buttons.slint";
+import { CloudPickRow } from "../types.slint";
+
+// 状态与回调放在一个**全局**里(照 `ProcessPickerState`):添加页那颗按钮直接喊全局,
+// 不必经窗口根转发一串属性。
+export global CloudPickerState {
+    in-out property <[CloudPickRow]> rows: [];
+    // 输入框自己持有它,所以是 in-out(见 game-settings.slint 文件头那条规矩)。
+    in-out property <string> query: "";
+    in-out property <bool> open: false;
+    /// 一句话状态:读取中 / 读不成 / 还没建索引 / 云端是空的 / 被搜索词滤掉多少。
+    in-out property <string> message: "";
+    in-out property <bool> loading: false;
+
+    callback query-changed(string);
+    callback chosen(string);
+    callback closed();
+    /// 添加页那颗「自己选…」直接喊这里。
+    callback open-for-add();
+}
+
+export component CloudPickerDialog inherits Rectangle {
+    width: 100%;
+    height: 100%;
+
+    // 遮罩:点空白处收起。
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000073;
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { CloudPickerState.closed(); }
+        }
+    }
+
+    card := Rectangle {
+        width: 620px;
+        height: min(480px, root.height - 40px);
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: Tokens.radius-card;
+        background: Tokens.flyout;
+        border-width: 1px;
+        border-color: Tokens.flyout-stroke;
+
+        VerticalLayout {
+            padding: 16px;
+            spacing: 10px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                Text {
+                    text: "挑一条云端存档绑上";
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Tokens.text;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                StdButton {
+                    label: "关闭";
+                    button-width: 68px;
+                    clicked => { CloudPickerState.closed(); }
+                }
+            }
+
+            TextField {
+                width: 100%;
+                text <=> CloudPickerState.query;
+                edited(text) => { CloudPickerState.query-changed(text); }
+                placeholder: "按名字、落点或用过的 exe 路径搜…";
+            }
+
+            if CloudPickerState.loading || CloudPickerState.message != "" : Text {
+                text: CloudPickerState.message;
+                font-size: 12px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+
+            ScrollView {
+                vertical-stretch: 1;
+                VerticalLayout {
+                    spacing: 2px;
+                    for row[index] in CloudPickerState.rows : Rectangle {
+                        height: 46px;
+                        border-radius: 4px;
+                        background: row-ta.has-hover ? #ffffff0f : #00000000;
+                        animate background { duration: 90ms; }
+
+                        VerticalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 5px;
+                            padding-bottom: 5px;
+                            spacing: 1px;
+                            Text {
+                                text: row.name;
+                                font-size: 13px;
+                                color: Tokens.text;
+                                overflow: elide;
+                            }
+                            Text {
+                                // 几版 / 最近一版 + 本机这一侧认没认过它。
+                                text: row.meta + "  ·  " + row.local-label;
+                                font-size: 11px;
+                                color: Tokens.text-3;
+                                overflow: elide;
+                            }
+                        }
+
+                        row-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { CloudPickerState.chosen(row.cloud-id); }
+                        }
+                    }
+                }
+            }
+
+            Divider { }
+            Text {
+                text: "挑中的那条会成为这一款的云端身份：以后两边的版本存在同一处。不确定就别挑 —— 添加之后第一次上传会自己认领。";
+                font-size: 11px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+        }
+    }
+}

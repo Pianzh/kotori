@@ -241,6 +241,13 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     add_match.on_choose(|cloud_id| dispatch(Message::MatchChoose(cloud_id.to_string())));
     add_match.on_decline(|| dispatch(Message::MatchDecline));
     add_match.on_restore(|| dispatch(Message::MatchUndoDecline));
+    add_match.on_clear_pick(|| dispatch(Message::MatchClearPick));
+    // 它旁边那颗「自己选…」：从云端清单里挑一条绑上（状态在一个全局里，回调也从那儿接）。
+    let cloud_pick = window.global::<CloudPickerState>();
+    cloud_pick.on_open_for_add(|| dispatch(Message::CloudPickOpen));
+    cloud_pick.on_query_changed(|text| dispatch(Message::CloudPickSearch(one_line(&text))));
+    cloud_pick.on_chosen(|cloud_id| dispatch(Message::CloudPickChoose(cloud_id.to_string())));
+    cloud_pick.on_closed(|| dispatch(Message::CloudPickDismiss));
     window.on_sync_now(|id| {
         let id = id.to_string();
         dispatch(Message::SyncNow((!id.is_empty()).then_some(id)));

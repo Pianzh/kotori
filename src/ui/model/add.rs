@@ -44,6 +44,12 @@ pub(in crate::ui) struct AddMatch {
     pub indexed: bool,
     /// 用户挑中的那一条（按 `cloud_id`）；`None` = 还没挑（或多条还没选）。
     pub chosen: Option<String>,
+    /// 用户**自己选**的那一条（从云端清单浮层里点出来的）。
+    ///
+    /// 它比指纹命中的结果更硬：指纹只是提议（"像"），而这是用户亲口说的"就它"
+    /// —— 而且它把"云端没有这一款 / 指纹没命中"那几种情况也救回来了（那几种情况下
+    /// 本来一个候选都没有，用户仍可能知道云端那一条叫什么）。
+    pub picked: Option<CloudGameRow>,
     /// 用户点了「不是这一款」：添加照旧，只是不与云端绑定。
     pub declined: bool,
     /// 等防抖的那个 exe。
@@ -126,10 +132,41 @@ impl AddMatch {
         }
     }
 
+    /// 从云端清单浮层里**自己选**了一条（用户亲口说的"就它"）。
+    ///
+    /// 它连着"不是这一款"一起清掉：用户刚挑了一条，那就等于说"要绑"。
+    pub(in crate::ui) fn pick(&mut self, row: CloudGameRow) {
+        self.picked = Some(row);
+        self.declined = false;
+    }
+
+    /// 「改回自动」：把手工选的那条扔掉，回到指纹匹配的结果。
+    pub(in crate::ui) fn clear_picked(&mut self) {
+        self.picked = None;
+    }
+
+    pub(in crate::ui) fn has_picked(&self) -> bool {
+        self.picked.is_some()
+    }
+
+    /// 「不是这一款」该不该出现。
+    ///
+    /// ⚠ **一个候选都没有时它没有意义**（用户 2026-09-23 点的）：云端没有这一款、索引
+    /// 还没建、"没问成"，这三种情况下面"不是这一款"按下去什么也没改变 —— 那种时候
+    /// 该给的是「自己选…」。
+    pub(in crate::ui) fn can_decline(&self) -> bool {
+        !self.declined && !self.rows.is_empty()
+    }
+
     /// 这一款添加之后要与云端哪一条绑定；`None` = 不绑（照新档走）。
+    ///
+    /// 顺序：用户说了"不是这一款" ⇒ 不绑；用户自己选过 ⇒ 就它；否则看指纹命中的结果。
     pub(in crate::ui) fn binding(&self) -> Option<&CloudGameRow> {
         if self.declined {
             return None;
+        }
+        if let Some(picked) = &self.picked {
+            return Some(picked);
         }
         let chosen = self.chosen.as_deref()?;
         self.rows.iter().find(|row| row.cloud_id == chosen)
@@ -151,6 +188,9 @@ impl AddMatch {
             MatchPhase::Asking => "正在问云端有没有这一款…".to_string(),
             MatchPhase::Failed(_) => "没问成云端 —— 不影响添加".to_string(),
             MatchPhase::Ready if self.declined => "好，这一款不与云端绑定".to_string(),
+            MatchPhase::Ready if self.picked.is_some() => {
+                format!("就绑这一条：《{}》", self.picked.as_ref().unwrap().name)
+            }
             MatchPhase::Ready if !self.indexed => "云端还没建索引 —— 这一款先按新的加".to_string(),
             MatchPhase::Ready if self.rows.is_empty() => "云端没有这一款".to_string(),
             MatchPhase::Ready if self.rows.len() == 1 => {
@@ -169,13 +209,18 @@ impl AddMatch {
                 "添加之后第一次上传会在云端新建一条身份（以后想改可以到「云端存档」页配对）。"
                     .to_string()
             }
+            MatchPhase::Ready if self.picked.is_some() => {
+                self.one_detail(self.picked.as_ref().unwrap())
+            }
             MatchPhase::Ready if !self.indexed => {
                 "桶里还没有这份索引：到「云端存档」页点一次「深度扫描云端」就能建。\
                  添加之后第一次上传时，它会自己认领云端那一条。"
                     .to_string()
             }
             MatchPhase::Ready if self.rows.is_empty() => {
-                "添加之后第一次上传会在云端新建一条身份。".to_string()
+                "添加之后第一次上传会在云端新建一条身份 —— 或者点「自己选…」从云端清单里\
+                 挑一条绑上。"
+                    .to_string()
             }
             MatchPhase::Ready if self.rows.len() == 1 => self.one_detail(&self.rows[0]),
             MatchPhase::Ready => "点一条绑上；不挑就按新的加（第一次上传时再认）。".to_string(),
@@ -329,5 +374,67 @@ mod tests {
         assert!(!m.visible());
         assert!(m.rows.is_empty());
         assert!(m.binding().is_none());
+    }
+
+    /// 「不是这一款」在一个候选都没有时**不该出现**（用户 2026-09-23 点的：云端没有
+    /// 这一款时它按下去什么也没改变 —— 那种时候该给的是「自己选…」）。
+    #[test]
+    fn the_decline_button_only_makes_sense_when_there_is_a_candidate() {
+        let mut m = AddMatch::default();
+        m.typing("/games/a/game.exe");
+        m.asking("/games/a/game.exe");
+
+        // 还没建索引 / 云端确实没有：没有候选，那按钮没有意义。
+        m.loaded("/games/a/game.exe", false, Vec::new());
+        assert!(!m.can_decline(), "还没建索引时它没有意义");
+        m.asking("/games/a/game.exe");
+        m.loaded("/games/a/game.exe", true, Vec::new());
+        assert!(!m.can_decline(), "云端没有这一款时它没有意义");
+
+        // 有候选时在；用户否掉之后换成"改主意"。
+        m.asking("/games/a/game.exe");
+        m.loaded("/games/a/game.exe", true, vec![row("c1", "那一款")]);
+        assert!(m.can_decline());
+        m.decline();
+        assert!(!m.can_decline());
+        assert!(!m.has_picked());
+    }
+
+    /// 自己选的那一条能救回"指纹一个都没命中"的情形 —— 用户知道云端那一条叫什么。
+    #[test]
+    fn picking_by_hand_binds_even_when_the_fingerprint_matched_nothing() {
+        let mut m = AddMatch::default();
+        m.typing("/games/a/game.exe");
+        m.asking("/games/a/game.exe");
+        m.loaded("/games/a/game.exe", true, Vec::new());
+        assert!(m.binding().is_none(), "指纹没命中");
+
+        m.pick(row("c9", "用户自己认出来的那一条"));
+        assert_eq!(m.binding().map(|r| r.cloud_id.as_str()), Some("c9"));
+        assert!(m.title().contains("就绑这一条"), "{}", m.title());
+        assert!(m.detail().contains("3 版"), "{}", m.detail());
+
+        // 「改回自动」：把手上的选择扔掉，回到指纹匹配的结果（这里是没有命中）。
+        m.clear_picked();
+        assert!(!m.has_picked());
+        assert!(m.binding().is_none());
+        assert!(m.title().contains("云端没有这一款"), "{}", m.title());
+    }
+
+    /// 自己选的比指纹命中的更硬（那是用户亲口说的"就它"），而且它连着"不是这一款"一起清掉。
+    #[test]
+    fn a_hand_picked_row_wins_over_the_fingerprint_hit() {
+        let mut m = AddMatch::default();
+        m.typing("/games/a/game.exe");
+        m.asking("/games/a/game.exe");
+        m.loaded("/games/a/game.exe", true, vec![row("c1", "指纹说的那条")]);
+        m.decline();
+        assert!(m.binding().is_none());
+
+        m.pick(row("c2", "用户自己挑的"));
+        assert_eq!(m.binding().map(|r| r.cloud_id.as_str()), Some("c2"));
+        assert!(m.has_picked());
+        assert!(m.can_decline(), "有候选时那个按钮仍该在");
+        assert!(!m.title().contains("不与云端绑定"), "{}", m.title());
     }
 }

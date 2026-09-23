@@ -4,6 +4,43 @@
 
 use super::super::*;
 
+/// 这一族消息归 [`App::update_settings`] 接。
+///
+/// 分派表里那一长串变体清单搬到这里，是因为**它和 handler 是一家**：新增一条设置类的
+/// 消息时两个地方挨着改，不容易漏，而 `update/mod.rs` 那边只剩一行。
+///
+/// ⚠ 漏了的后果是掉到 `update/mod.rs` 末尾那句 `unreachable!` 上（界面一按就 panic，
+/// 整页渲染测试也会立刻炸）。
+pub(super) fn is_settings_message(message: &Message) -> bool {
+    matches!(
+        message,
+        Message::ServiceStart
+            | Message::ServiceStarted(..)
+            | Message::ServiceStop
+            | Message::ServiceStopped(..)
+            | Message::WineStatusLoaded(..)
+            | Message::WinePrefixChanged(..)
+            | Message::SaveWinePrefix
+            | Message::ClearWinePrefix
+            | Message::WinePrefixSaved(..)
+            | Message::GameDirChanged(..)
+            | Message::DirectLaunchToggled(..)
+            | Message::AutoWatchToggled(..)
+            | Message::ProcessNameChanged(..)
+            | Message::SavePathKindChanged(..)
+            | Message::SavePathChanged(..)
+            | Message::SavePathExcludeChanged(..)
+            | Message::AddSavePath
+            | Message::RemoveSavePath(..)
+            | Message::Tick
+            | Message::StatusLoaded(..)
+            | Message::ConfigSourcePicked(..)
+            | Message::ConfigSourceSwitched(..)
+            | Message::EnvironmentReload
+            | Message::EnvironmentLoaded(..)
+    )
+}
+
 impl App {
     /// update_settings 负责的那一批消息。
     ///

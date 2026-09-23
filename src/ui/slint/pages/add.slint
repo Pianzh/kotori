@@ -5,6 +5,8 @@
 // exe 一落定就去云端认这一款(用户 2026-09-23 定:exe 是唯一必填项,认出来就在本页直接
 // 确定)。那一块的状态放在 `AddMatchBoard` 全局里(照 `CloudBoard`/`PairingBoard` 的先例):
 // 页面只管画,窗口不必替它转发一串属性与回调。⚠ 那一块**永远不挡添加**。
+//
+// 指纹认不出时还有一条路:「自己选…」——从云端清单里挑一条绑上(`CloudPickerState`)。
 
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
@@ -13,6 +15,7 @@ import { PathField } from "../widgets/path-field.slint";
 import { TextField } from "../widgets/controls.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { ProcessPickerState } from "../widgets/process-picker.slint";
+import { CloudPickerState } from "../widgets/cloud-picker.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { AddMatchItem } from "../types.slint";
 
@@ -31,10 +34,16 @@ export global AddMatchBoard {
     in-out property <[AddMatchItem]> rows: [];
     /// 用户已经点了「不是这一款」。
     in-out property <bool> declined: false;
+    /// 一个候选都没有时(云端没有这一款 / 还没建索引 / 没问成)「不是这一款」没有意义
+    /// —— 那按钮该藏起来,留给「自己选…」。
+    in-out property <bool> can-decline: false;
+    /// 用户已经从云端清单里自己选了一条(这时才给「改回自动」)。
+    in-out property <bool> picked: false;
 
     callback choose(string);
     callback decline();
     callback restore();
+    callback clear-pick();
 }
 
 export component AddPage inherits ScrollView {
@@ -154,15 +163,30 @@ export component AddPage inherits ScrollView {
                     }
                     HorizontalLayout {
                         spacing: 8px;
+                        // 「自己选…」**一直在**:指纹没命中、命中多条、甚至根本没问成时,
+                        // 用户自己知道云端那一条叫什么(用户 2026-09-23 要的)。
+                        StdButton {
+                            label: "自己选…";
+                            button-width: 92px;
+                            clicked => { CloudPickerState.open-for-add(); }
+                        }
+                        // 「不是这一款」只在一个候选都没有时**不该出现** —— 那时它按下去
+                        // 什么也没改变(可以否决的才有"不是这一款"这回事)。
+                        if AddMatchBoard.can-decline : StdButton {
+                            label: "不是这一款";
+                            button-width: 110px;
+                            clicked => { AddMatchBoard.decline(); }
+                        }
                         if AddMatchBoard.declined : StdButton {
                             label: "改主意，绑上";
                             button-width: 110px;
                             clicked => { AddMatchBoard.restore(); }
                         }
-                        if !AddMatchBoard.declined : StdButton {
-                            label: "不是这一款";
-                            button-width: 110px;
-                            clicked => { AddMatchBoard.decline(); }
+                        // 自己选过之后给一条退路:回到指纹匹配的结果。
+                        if AddMatchBoard.picked : StdButton {
+                            label: "改回自动";
+                            button-width: 92px;
+                            clicked => { AddMatchBoard.clear-pick(); }
                         }
                         Rectangle { horizontal-stretch: 1; background: #00000000; }
                     }

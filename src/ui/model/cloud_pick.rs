@@ -1,0 +1,242 @@
+//! 「自己选…」那个浮层：从**云端索引**里挑一条身份绑上。
+//!
+//! 从 `model/add.rs` 拆出来（那边是本页那块匹配的状态机，这一块是它旁边那个选择器）。
+//! 用途唯一：指纹没命中、命中多条、或者用户就是知道云端那一条叫什么 —— 让他自己挑。
+//!
+//! 照「挑一个进程」那套做（`model::picker`）：候选是**打开时取的那一份快照**，过滤在
+//! 内存里做。每敲一个字都去读一次云端索引太吵，而桶里那些游戏本来就不在这几秒里变。
+
+use super::cloud::CloudGameRow;
+
+/// 浮层的状态。
+#[derive(Debug, Default)]
+pub(in crate::ui) struct CloudPick {
+    open: bool,
+    loading: bool,
+    /// 桶里建过索引没有。`false` 时候选必然是空的 —— 那句话要说清"去深扫一次"。
+    indexed: bool,
+    /// 打开时取的全量候选。
+    all: Vec<CloudGameRow>,
+    /// 过滤后的那一份（推给窗口的就是它）。
+    filtered: Vec<CloudGameRow>,
+    query: String,
+    error: Option<String>,
+}
+
+impl CloudPick {
+    /// 打开浮层并挂上"取候选"的那一次请求（调用方负责发它）。
+    pub(in crate::ui) fn open(&mut self) {
+        self.open = true;
+        self.loading = true;
+        self.error = None;
+        self.all.clear();
+        self.filtered.clear();
+        self.query.clear();
+    }
+
+    pub(in crate::ui) fn close(&mut self) {
+        self.open = false;
+        self.loading = false;
+    }
+
+    /// 候选到了。搜索词此刻可能已经打了一半，所以照它重算一遍。
+    pub(in crate::ui) fn loaded(&mut self, indexed: bool, rows: Vec<CloudGameRow>) {
+        self.indexed = indexed;
+        self.all = rows;
+        self.loading = false;
+        self.error = None;
+        self.refilter();
+    }
+
+    /// 取候选失败：说清楚，别让浮层空着像"云端没有游戏"。
+    pub(in crate::ui) fn failed(&mut self, error: String) {
+        self.all.clear();
+        self.filtered.clear();
+        self.loading = false;
+        self.error = Some(error);
+    }
+
+    pub(in crate::ui) fn set_query(&mut self, query: String) {
+        self.query = query;
+        self.refilter();
+    }
+
+    fn refilter(&mut self) {
+        let query = self.query.clone();
+        self.filtered = self
+            .all
+            .iter()
+            .filter(|row| row.matches(&query))
+            .cloned()
+            .collect();
+    }
+
+    pub(in crate::ui) fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub(in crate::ui) fn loading(&self) -> bool {
+        self.loading
+    }
+
+    pub(in crate::ui) fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// 推给窗口的那一份（已经过滤过）。
+    pub(in crate::ui) fn rows(&self) -> &[CloudGameRow] {
+        &self.filtered
+    }
+
+    /// 用户点了某一行：把那条**从全量里**取出来并收起浮层。
+    ///
+    /// 按 `cloud_id` 找而不是按行号：行号是过滤后那一份的，而 `cloud_id` 在索引里唯一
+    /// （合并就是按它），所以搜索词怎么变都不会认错人。
+    pub(in crate::ui) fn pick(&mut self, cloud_id: &str) -> Option<CloudGameRow> {
+        let row = self
+            .all
+            .iter()
+            .find(|row| row.cloud_id == cloud_id)
+            .cloned();
+        if row.is_some() {
+            self.close();
+        }
+        row
+    }
+
+    /// 浮层里那行小字：出错优先，其次"读取中"、没索引、云端是空的，最后才是"滤掉了多少"。
+    pub(in crate::ui) fn message(&self) -> String {
+        if let Some(error) = &self.error {
+            return format!(
+                "读云端清单失败: {error}\n这一款照旧可以添加 —— 只是没法绑到云端那一条上。"
+            );
+        }
+        if self.loading {
+            return "正在读云端清单…".to_string();
+        }
+        if !self.indexed {
+            return "桶里还没有这份索引：到「云端存档」页点一次「深度扫描云端」，之后再回来挑。"
+                .to_string();
+        }
+        if self.all.is_empty() {
+            return "云端还没有游戏。这一款添加之后第一次上传会新建一条身份。".to_string();
+        }
+        let hidden = self.all.len() - self.filtered.len();
+        if !self.query.trim().is_empty() && hidden > 0 {
+            return format!("云端 {} 款，其中 {hidden} 款被搜索词滤掉了", self.all.len());
+        }
+        String::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row(cloud_id: &str, name: &str) -> CloudGameRow {
+        CloudGameRow {
+            cloud_key: format!("key-{cloud_id}"),
+            cloud_id: cloud_id.to_string(),
+            name: name.to_string(),
+            machines: 1,
+            versions: 3,
+            latest: Some("20260911T101500Z".to_string()),
+            size: 4096,
+            ..CloudGameRow::default()
+        }
+    }
+
+    /// 搜索词命中名字、落点、用过的 exe 路径（`CloudGameRow::matches`），并说清滤掉了多少。
+    #[test]
+    fn the_query_filters_the_snapshot_and_says_what_it_hid() {
+        let mut pick = CloudPick::default();
+        pick.open();
+        assert!(pick.loading(), "刚打开时是在读");
+        assert!(pick.rows().is_empty());
+
+        pick.loaded(
+            true,
+            vec![
+                row("c1", "云端记下的名字"),
+                CloudGameRow {
+                    exe_paths: vec![r"D:\Games\Hoshi\game.exe".to_string()],
+                    ..row("c2", "另一款")
+                },
+            ],
+        );
+        assert!(!pick.loading());
+        assert_eq!(pick.rows().len(), 2);
+
+        pick.set_query("hoshi".into());
+        assert_eq!(pick.rows().len(), 1, "用过的 exe 路径也是搜索参数");
+        assert_eq!(pick.rows()[0].cloud_id, "c2");
+        pick.set_query("zzz".into());
+        assert!(pick.rows().is_empty());
+        assert!(pick.message().contains("滤掉"), "{}", pick.message());
+
+        pick.set_query(String::new());
+        assert_eq!(pick.message(), "", "没被滤掉就别说话");
+    }
+
+    /// 挑中的必须是**全量**里那一条，而且挑完就收起浮层 —— 行号会随搜索词变，`cloud_id`
+    /// 不会（索引里它唯一）。
+    #[test]
+    fn picking_goes_by_cloud_id_and_closes_the_sheet() {
+        let mut pick = CloudPick::default();
+        pick.open();
+        pick.loaded(true, vec![row("c1", "一号"), row("c2", "二号")]);
+        pick.set_query("二号".into());
+        assert_eq!(pick.rows().len(), 1);
+
+        let picked = pick.pick("c2").expect("这条在候选里");
+        assert_eq!(picked.name, "二号");
+        assert!(!pick.is_open(), "挑完就收起来");
+        assert!(pick.pick("c9").is_none(), "不在候选里的 id 挑不动");
+    }
+
+    /// 重开一次：上一次的候选与搜索词都不许留着。
+    #[test]
+    fn opening_again_starts_from_a_clean_slate() {
+        let mut pick = CloudPick::default();
+        pick.open();
+        pick.loaded(true, vec![row("c1", "一号")]);
+        pick.set_query("一号".into());
+        pick.close();
+
+        pick.open();
+        assert!(pick.rows().is_empty());
+        assert_eq!(pick.query(), "");
+        assert!(pick.loading());
+    }
+
+    /// 四种"列表是空的"要说四句不同的话：还没建索引 / 云端确实没有 / 读不成 /（读取中）。
+    #[test]
+    fn an_empty_list_never_looks_like_an_empty_cloud() {
+        let mut pick = CloudPick::default();
+        pick.open();
+        pick.loaded(false, Vec::new());
+        assert!(
+            pick.message().contains("深度扫描云端"),
+            "{}",
+            pick.message()
+        );
+
+        pick.open();
+        pick.loaded(true, Vec::new());
+        assert!(
+            pick.message().contains("云端还没有游戏"),
+            "{}",
+            pick.message()
+        );
+
+        pick.open();
+        pick.failed("连不上桶".to_string());
+        assert!(pick.message().contains("连不上桶"), "{}", pick.message());
+        assert!(
+            pick.message().contains("照旧可以添加"),
+            "{}",
+            pick.message()
+        );
+        assert!(pick.rows().is_empty());
+    }
+}

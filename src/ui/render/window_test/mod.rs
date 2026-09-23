@@ -56,6 +56,7 @@ fn ui() -> Ui {
         cloud_rows: Rc::new(VecModel::default()),
         cloud_versions: Rc::new(VecModel::default()),
         add_match_rows,
+        cloud_pick_rows: Rc::new(VecModel::default()),
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,
@@ -255,8 +256,10 @@ fn library_and_sync_pages_render_without_a_display() {
     ui.app.create_msg = Some("已添加（ID: demo）".into());
     render(&mut ui);
 
-    // 添加页那块云端匹配的每一个状态（在 `window_test::add` 里：它自己就够长了）。
+    // 添加页那块云端匹配的每一个状态（在 `window_test::add` 里：它自己就够长了）：
+    // 匹配那一块，以及它旁边「自己选…」那个浮层。
     add::add_match_states(&mut ui);
+    add::cloud_pick_states(&mut ui);
     ui.app.create_msg = None;
     render(&mut ui);
 

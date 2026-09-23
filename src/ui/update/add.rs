@@ -59,6 +59,42 @@ impl App {
                 self.add_match.undo_decline();
                 Task::none()
             }
+            // 「自己选…」:打开浮层,顺带读一次云端清单(读索引,一次读)。
+            Message::CloudPickOpen => {
+                self.cloud_pick.open();
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { cloud_list(&socket).await },
+                    Message::CloudPickLoaded,
+                )
+            }
+            Message::CloudPickLoaded(result) => {
+                match result {
+                    Ok((indexed, rows)) => self.cloud_pick.loaded(indexed, rows),
+                    // 读不成不是错误状态:浮层里说一句话,**这一款照旧能添加**。
+                    Err(e) => self.cloud_pick.failed(e),
+                }
+                Task::none()
+            }
+            Message::CloudPickSearch(query) => {
+                self.cloud_pick.set_query(query);
+                Task::none()
+            }
+            Message::CloudPickChoose(cloud_id) => {
+                // 按 `cloud_id` 从**全量**里取(见 `CloudPick::pick`):搜索词怎么变都不会认错人。
+                if let Some(row) = self.cloud_pick.pick(&cloud_id) {
+                    self.add_match.pick(row);
+                }
+                Task::none()
+            }
+            Message::CloudPickDismiss => {
+                self.cloud_pick.close();
+                Task::none()
+            }
+            Message::MatchClearPick => {
+                self.add_match.clear_picked();
+                Task::none()
+            }
             Message::GamePaired(result) => {
                 // 添加已经成功了 —— 这一句只是补一句"云端那边怎么样了"(失败不算添加失败)。
                 let outcome = match result {

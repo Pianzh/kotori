@@ -26,6 +26,7 @@ pub(super) fn push_add(ui: &mut Ui) {
     });
 
     push_add_match(ui);
+    push_cloud_pick(ui);
 }
 
 /// 「云端匹配」那一块（exe 落定之后才有内容；**它从不挡住添加**）。
@@ -41,6 +42,10 @@ fn push_add_match(ui: &mut Ui) {
     push_bool(board.get_ok(), ok, |v| board.set_ok(v));
     push_bool(board.get_busy(), m.busy(), |v| board.set_busy(v));
     push_bool(board.get_declined(), m.declined, |v| board.set_declined(v));
+    push_bool(board.get_can_decline(), m.can_decline(), |v| {
+        board.set_can_decline(v)
+    });
+    push_bool(board.get_picked(), m.has_picked(), |v| board.set_picked(v));
 
     // 只有指纹命中多条时才列出来让人挑；唯一命中直接写在标题里（不让人多点一下）。
     let rows: Vec<AddMatchItem> = if m.rows.len() > 1 {
@@ -57,4 +62,39 @@ fn push_add_match(ui: &mut Ui) {
         Vec::new()
     };
     push_model(&ui.add_match_rows, rows);
+}
+
+/// 「自己选…」那个浮层：开没开、搜索词、以及**过滤后**的云端清单。
+///
+/// 与「云端存档」页共用同一个 `sync.cloud_list` 回包，但**模型是分开的**：两处可能同时在
+/// 窗口里，共用一个 `VecModel` 会互相覆盖（见 `driver::Ui` 里那两个字段）。
+fn push_cloud_pick(ui: &mut Ui) {
+    let board = ui.window.global::<CloudPickerState>();
+    let pick = &ui.app.cloud_pick;
+
+    push_bool(board.get_open(), pick.is_open(), |v| board.set_open(v));
+    push_bool(board.get_loading(), pick.loading(), |v| {
+        board.set_loading(v)
+    });
+    push_str(board.get_query(), pick.query(), |v| board.set_query(v));
+    push_str(board.get_message(), &pick.message(), |v| {
+        board.set_message(v)
+    });
+
+    let rows: Vec<CloudPickRow> = pick
+        .rows()
+        .iter()
+        .map(|row| CloudPickRow {
+            cloud_id: row.cloud_id.clone().into(),
+            name: row.name.clone().into(),
+            // 几版 + 最近一版（`latest_label` 一版都没有时是空串）。
+            meta: match row.latest_label() {
+                label if label.is_empty() => row.versions_label(),
+                label => format!("{} · {}", row.versions_label(), label),
+            }
+            .into(),
+            local_label: row.local_label().into(),
+        })
+        .collect();
+    push_model(&ui.cloud_pick_rows, rows);
 }

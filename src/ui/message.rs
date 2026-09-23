@@ -131,6 +131,14 @@ pub enum Message {
     MatchChoose(String),
     MatchDecline,
     MatchUndoDecline,
+    /// 「自己选…」那个浮层:打开(顺带读一次云端清单)、回包、搜索、挑一条、收起、
+    /// 以及「改回自动」(见 `model::cloud_pick`)。
+    CloudPickOpen,
+    CloudPickLoaded(Result<(bool, Vec<CloudGameRow>), String>),
+    CloudPickSearch(String),
+    CloudPickChoose(String),
+    CloudPickDismiss,
+    MatchClearPick,
     /// 添加之后顺手认领云端那一条的结果(`sync.pair`)。失败**不算添加失败**。
     GamePaired(Result<(), String>),
     WinePrefixChanged(String),

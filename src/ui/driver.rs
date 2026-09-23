@@ -38,6 +38,9 @@ pub(super) struct Ui {
     pub(super) cloud_versions: Rc<VecModel<CloudVersionItem>>,
     /// 添加页那块云端匹配的候选（指纹命中多条时才有内容）。
     pub(super) add_match_rows: Rc<VecModel<AddMatchItem>>,
+    /// 「自己选…」那个浮层里的云端清单（与上面那张表分开：两处同时在树里，共用一个
+    /// 模型会互相覆盖）。
+    pub(super) cloud_pick_rows: Rc<VecModel<CloudPickRow>>,
     /// 「从正在运行的进程里挑」浮层里那些行。整表只在内容变了时重建(见
     /// `render::push_process_picker`)。
     pub(super) process_rows: Rc<VecModel<ProcessPickRow>>,
@@ -123,6 +126,7 @@ pub(super) fn run() -> anyhow::Result<()> {
     let cloud_rows = Rc::new(VecModel::<CloudGameItem>::default());
     let cloud_versions = Rc::new(VecModel::<CloudVersionItem>::default());
     let add_match_rows = Rc::new(VecModel::<AddMatchItem>::default());
+    let cloud_pick_rows = Rc::new(VecModel::<CloudPickRow>::default());
     let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
     window.set_games(games.clone().into());
     window.set_saves(saves.clone().into());
@@ -139,6 +143,9 @@ pub(super) fn run() -> anyhow::Result<()> {
         .global::<AddMatchBoard>()
         .set_rows(add_match_rows.clone().into());
     window
+        .global::<CloudPickerState>()
+        .set_rows(cloud_pick_rows.clone().into());
+    window
         .global::<ProcessPickerState>()
         .set_rows(process_rows.clone().into());
 
@@ -153,6 +160,7 @@ pub(super) fn run() -> anyhow::Result<()> {
         cloud_rows,
         cloud_versions,
         add_match_rows,
+        cloud_pick_rows,
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,

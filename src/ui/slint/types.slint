@@ -195,3 +195,18 @@ export struct AddMatchItem {
     /// 用户挑中的那一条。
     chosen: bool,
 }
+
+// 「自己选…」那个浮层里的一行：云端索引里的一款游戏。
+//
+// 与「云端存档」页那张表是同一份数据（`sync.cloud_list`），但只取显示要用的那几栏
+// —— 那一页的行要挑开看版本，这里只要认得出是哪一条。文案在 Rust 里拼好。
+export struct CloudPickRow {
+    /// 云端身份 id —— 点它时原样回给 Rust（`cloud_id` 在索引里唯一，按它认人最稳）。
+    cloud-id: string,
+    /// 云端记下的游戏名（不是落点）。
+    name: string,
+    /// 「3 版 · 2026-09-11 18:15 · 4.0 KiB」。
+    meta: string,
+    /// 「本机《某某》」/「本机没有它」/「你说过不是这一款」。
+    local-label: string,
+}

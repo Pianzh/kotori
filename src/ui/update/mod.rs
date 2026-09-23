@@ -15,6 +15,8 @@ pub(in crate::ui) mod run;
 mod settings;
 mod sync;
 
+use settings::is_settings_message;
+
 impl App {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
@@ -279,6 +281,12 @@ impl App {
             | Message::MatchChoose(..)
             | Message::MatchDecline
             | Message::MatchUndoDecline
+            | Message::MatchClearPick
+            | Message::CloudPickOpen
+            | Message::CloudPickLoaded(..)
+            | Message::CloudPickSearch(..)
+            | Message::CloudPickChoose(..)
+            | Message::CloudPickDismiss
             | Message::GamePaired(..)) => self.update_add(m),
             // ── 云同步（处理在 `update::update_sync`） ──
             m @ (Message::SyncStatusLoaded(..)
@@ -332,30 +340,9 @@ impl App {
             | Message::CloudVersionsLoaded(..)) => self.update_cloud(m),
 
             // ── 服务、wine 与单游戏设置（处理在 `update::update_settings`） ──
-            m @ (Message::ServiceStart
-            | Message::ServiceStarted(..)
-            | Message::ServiceStop
-            | Message::ServiceStopped(..)
-            | Message::WineStatusLoaded(..)
-            | Message::WinePrefixChanged(..)
-            | Message::SaveWinePrefix
-            | Message::ClearWinePrefix
-            | Message::WinePrefixSaved(..)
-            | Message::GameDirChanged(..)
-            | Message::DirectLaunchToggled(..)
-            | Message::AutoWatchToggled(..)
-            | Message::ProcessNameChanged(..)
-            | Message::SavePathKindChanged(..)
-            | Message::SavePathChanged(..)
-            | Message::SavePathExcludeChanged(..)
-            | Message::AddSavePath
-            | Message::RemoveSavePath(..)
-            | Message::Tick
-            | Message::StatusLoaded(..)
-            | Message::ConfigSourcePicked(..)
-            | Message::ConfigSourceSwitched(..)
-            | Message::EnvironmentReload
-            | Message::EnvironmentLoaded(..)) => self.update_settings(m),
+            // 这一族有哪些变体由 `is_settings_message` 说了算（它就在 handler 旁边，
+            // 两处挨着改，不会漏）。
+            m if is_settings_message(&m) => self.update_settings(m),
             Message::StopDone(result) => {
                 if let Err(e) = result {
                     self.error = Some(e);
@@ -494,6 +481,9 @@ impl App {
                     Ok(Some(path)) => self.apply_picked_path(target, &path),
                 }
             }
+            // 每一族都按变体精确列了，所以走到这里只可能是"新加了一条消息而忘了挂到
+            // 某一族"。与其静默丢掉它，不如立刻炸出来 —— 整页渲染测试会先撞上。
+            other => unreachable!("没有 handler 认领这条消息: {other:?}"),
         }
     }
 }

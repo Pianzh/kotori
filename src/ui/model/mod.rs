@@ -11,6 +11,7 @@
 
 mod add;
 mod cloud;
+mod cloud_pick;
 mod environment;
 mod game;
 mod picker;
@@ -25,6 +26,7 @@ pub use sync::{PairingRow, PairingState, SyncGameRow, SyncStatus};
 
 pub(super) use add::{AddMatch, MATCH_DEBOUNCE, MatchPhase};
 pub(super) use cloud::{CloudGameRow, CloudState, CloudVersionRow};
+pub(super) use cloud_pick::CloudPick;
 pub(super) use environment::{EnvCheck, Environment};
 pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, SAVE_PATH_KINDS, SaveAttempt};
 pub(super) use picker::ProcessPicker;

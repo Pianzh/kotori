@@ -17,11 +17,12 @@ import { AddPage, AddMatchBoard } from "pages/add.slint";
 import { SyncPage } from "pages/sync.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { ProcessPicker, ProcessPickerState } from "widgets/process-picker.slint";
+import { CloudPickerDialog, CloudPickerState } from "widgets/cloud-picker.slint";
 import { PairingBoard } from "widgets/pairing.slint";
 import { SyncAskDialog, SyncAskState } from "widgets/sync-ask.slint";
 import { CloudPage, CloudBoard } from "pages/cloud.slint";
 // 再导出一次是**给 Rust 看的**:只有主文件导出过的全局才生成 `window.global::<…>()`。
-export { ProcessPickerState, PairingBoard, SyncAskState, CloudBoard, AddMatchBoard }
+export { ProcessPickerState, PairingBoard, SyncAskState, CloudBoard, AddMatchBoard, CloudPickerState }
 
 export component AppWindow inherits Window {
     title: "Kotori";
@@ -487,6 +488,8 @@ export component AppWindow inherits Window {
                         // (两个入口共用,不属于任何一页)。画在内容区最后一层 —— 页面
                         // 在它下面点不到,左侧导航还看得见。
                         if ProcessPickerState.open : ProcessPicker { }
+                        // 「自己选…」:从云端清单里挑一条绑上(添加页那块匹配旁边的按钮)。
+                        if CloudPickerState.open : CloudPickerDialog { }
                         // 启动前那一问(见 `widgets/sync-ask.slint`)。
                         if SyncAskState.open : SyncAskDialog { }
                     }
