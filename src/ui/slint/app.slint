@@ -18,8 +18,9 @@ import { SyncPage } from "pages/sync.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { ProcessPicker, ProcessPickerState } from "widgets/process-picker.slint";
 import { PairingBoard } from "widgets/pairing.slint";
+import { SyncAskDialog, SyncAskState } from "widgets/sync-ask.slint";
 // 再导出一次是**给 Rust 看的**:只有主文件导出过的全局才生成 `window.global::<…>()`。
-export { ProcessPickerState, PairingBoard }
+export { ProcessPickerState, PairingBoard, SyncAskState }
 
 export component AppWindow inherits Window {
     title: "Kotori";
@@ -488,6 +489,8 @@ export component AppWindow inherits Window {
                         // (两个入口共用,不属于任何一页)。画在内容区最后一层 —— 页面
                         // 在它下面点不到,左侧导航还看得见。
                         if ProcessPickerState.open : ProcessPicker { }
+                        // 启动前那一问(见 `widgets/sync-ask.slint`)。
+                        if SyncAskState.open : SyncAskDialog { }
                     }
                 }
             }

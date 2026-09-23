@@ -200,6 +200,29 @@ pub(super) fn push_pairing(ui: &mut Ui) {
 /// `sync.status` reports the credential store by name; the page wants a number
 /// (it decides which of the three blocks to draw). The mapping itself lives on
 /// [`CredentialStore`] — the wording and the index must not drift apart.
+/// 启动前那一问：开不开、问的是哪一款、以及那三行说明。
+///
+/// 状态在一个 Slint 全局里（见 `widgets/sync-ask.slint`）：它不属于任何一页，哪个
+/// 页面点的「启动」都可能触发它。
+pub(super) fn push_sync_ask(ui: &mut Ui) {
+    let ask = ui.window.global::<SyncAskState>();
+    let game = ui
+        .app
+        .sync_ask
+        .as_ref()
+        .and_then(|id| ui.app.games.iter().find(|game| &game.id == id));
+    push_bool(ask.get_open(), game.is_some(), |v| ask.set_open(v));
+    let name = game.map(|game| game.name.clone()).unwrap_or_default();
+    push_str(ask.get_game_name(), &name, |v| ask.set_game_name(v));
+    let message = if game.is_some() {
+        "云端有这一款游戏，但认不出本机这一份是哪一条（exe 与云端记下的指纹不一致）。\
+         选「没问题」就按当前配对继续；选「新建」会给这一份建一条新身份，云端已有的那一条\n稍后能在配对表里挑；也可以干脆关掉这一款的同步。"
+    } else {
+        ""
+    };
+    push_str(ask.get_message(), message, |v| ask.set_message(v));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

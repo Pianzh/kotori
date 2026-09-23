@@ -57,6 +57,11 @@ pub enum Message {
     /// 「停止」的二次确认里用户按了取消(那颗按钮会真的把游戏结束掉,所以问一次)。
     StopCancelled,
     LaunchDone(Result<Value, String>),
+    /// 启动前那一问的回答：`ok`（没问题）/ `fresh`（新建一条身份）/ `off`（关掉
+    /// 这一款的同步）。见 `widgets/sync-ask.slint`。
+    SyncAskAnswered(String),
+    /// 那一问被取消了：这一次不启动（用户可能想去配对表看一眼）。
+    SyncAskDismissed,
     GameSelected(String),
     BackToList,
     SearchChanged(String),

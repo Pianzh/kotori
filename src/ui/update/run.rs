@@ -70,6 +70,35 @@ impl App {
             async move {
                 let mut params = serde_json::Map::new();
                 params.insert("id".into(), Value::String(id));
+                // `selfcheck` = 这个客户端答得上"启动前那一问"（见 `rpc_game_launch`）：
+                // 认不出云端那一条时先别起游戏，把问题交回来（`SyncAskAnswered`）。
+                params.insert("selfcheck".into(), Value::Bool(true));
+                crate::rpc::call(&socket, "game.launch", Some(params)).await
+            },
+            Message::LaunchDone,
+        )
+    }
+
+    /// 启动前那一问的回答：先把回答交给 daemon（`sync.resolve`），**再起一次**。
+    ///
+    /// 起两次是刻意的：这一次自检已经能定下来（回答刚写进配置），于是这一次才真的
+    /// 拉存档、起游戏。
+    pub(super) fn sync_ask_answered(&mut self, choice: String) -> Task<Message> {
+        let Some(game_id) = self.sync_ask.take() else {
+            return Task::none();
+        };
+        self.launching = Some(game_id.clone());
+        let socket = self.daemon_socket.clone();
+        Task::perform(
+            async move {
+                let mut params = serde_json::Map::new();
+                params.insert("id".into(), Value::String(game_id.clone()));
+                params.insert("choice".into(), Value::String(choice));
+                crate::rpc::call(&socket, "sync.resolve", Some(params)).await?;
+
+                let mut params = serde_json::Map::new();
+                params.insert("id".into(), Value::String(game_id));
+                params.insert("selfcheck".into(), Value::Bool(true));
                 crate::rpc::call(&socket, "game.launch", Some(params)).await
             },
             Message::LaunchDone,

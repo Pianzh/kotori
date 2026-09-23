@@ -96,6 +96,16 @@ impl App {
             // 份会话表来,所以两者不可能再说两套话)。
             Message::ToggleRun(game_id) => self.toggle_run(game_id),
             Message::LaunchDone(result) => {
+                // 自检认不出云端那一条：daemon 先没起游戏，把问题交回来了。这一问由
+                // 浮层接（`SyncAskState`），回答走 `SyncAskAnswered`。
+                if result
+                    .as_ref()
+                    .is_ok_and(|value| value["needs_sync_decision"] == serde_json::json!(true))
+                {
+                    self.sync_ask = self.launching.take();
+                    self.error = None;
+                    return Task::none();
+                }
                 self.launching = None;
                 match result {
                     Ok(value) => {
@@ -335,6 +345,13 @@ impl App {
                 )
             }
             // 二次确认那一步里用户按了「取消」:什么都不做。
+            Message::SyncAskAnswered(choice) => self.sync_ask_answered(choice),
+            Message::SyncAskDismissed => {
+                // 取消 = 这一次不启动（用户可能想去配对表看一眼再回来）。
+                self.sync_ask = None;
+                self.launching = None;
+                Task::none()
+            }
             Message::StopCancelled => {
                 self.confirm_stop = false;
                 Task::none()

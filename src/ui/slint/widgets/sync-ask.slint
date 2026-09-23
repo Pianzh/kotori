@@ -1,0 +1,99 @@
+// 启动前那一问:云同步自检认不出"云端哪一条是本机这一款"时,起游戏之前问一次。
+//
+// 用户 2026-09-22:"云同步(打开游戏)前**必须自检**",而自检里**只有这一种情况**会打断
+// 他。所以这个浮层只有一个职责:把问题说清楚,给三条出路。状态放在一个 **Slint 全局**里
+// (照 `ProcessPickerState` 的先例),窗口不必替它转发一串属性。
+//
+// ⚠ 三条出路里的"新建一条身份"就是"改配对…"浮层的第一项;完整的"挑云端已有的一条"
+// 归配对表那一块的浮层(见 `PLAN-cloud-identity.md` §12 提交 C)。
+
+import { Tokens } from "../theme.slint";
+import { AccentButton, StdButton } from "buttons.slint";
+
+export global SyncAskState {
+    in-out property <bool> open: false;
+    /// 这一款叫什么(问题里要有名字,否则用户不知道说的是哪一款)。
+    in-out property <string> game-name: "";
+    /// 一句话解释:为什么问、云端有哪几条候选。空串 = 什么都别说。
+    in-out property <string> message: "";
+
+    /// 用户的回答:`ok`(没问题) / `fresh`(新建一条身份) / `off`(关掉这一款的同步)。
+    callback answered(string);
+    /// 取消:这一次不启动(用户可能想去配对表看一眼)。
+    callback dismissed();
+}
+
+export component SyncAskDialog inherits Rectangle {
+    width: 100%;
+    height: 100%;
+
+    // 遮罩:点空白处等于取消。
+    Rectangle {
+        width: 100%;
+        height: 100%;
+        background: #00000073;
+        TouchArea {
+            mouse-cursor: pointer;
+            clicked => { SyncAskState.dismissed(); }
+        }
+    }
+
+    card := Rectangle {
+        width: 460px;
+        height: 330px;
+        x: (root.width - self.width) / 2;
+        y: (root.height - self.height) / 2;
+        border-radius: Tokens.radius-card;
+        background: Tokens.flyout;
+        border-width: 1px;
+        border-color: Tokens.flyout-stroke;
+
+        body := VerticalLayout {
+            x: 24px;
+            y: 24px;
+            width: parent.width - 48px;
+            spacing: 12px;
+
+            Text {
+                text: "这一款在云端对不上号";
+                font-size: 16px;
+                font-weight: 600;
+                color: Tokens.text;
+            }
+            Text {
+                text: SyncAskState.game-name;
+                font-size: 13px;
+                color: Tokens.text-2;
+            }
+            Text {
+                text: SyncAskState.message;
+                font-size: 12px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+
+            // 三条出路,从"最省事"排到"最保守";每一行都写清后果 —— 猜错的代价是
+            // 铺错存档,所以这里不能只有按钮名。
+            AccentButton {
+                label: "没问题，就同步这一款";
+                button-width: parent.width;
+                clicked => { SyncAskState.answered("ok"); }
+            }
+            StdButton {
+                label: "新建一条身份（云端已有的话，稍后在配对表里挑）";
+                button-width: parent.width;
+                clicked => { SyncAskState.answered("fresh"); }
+            }
+            StdButton {
+                label: "关掉这一款的同步";
+                button-width: parent.width;
+                clicked => { SyncAskState.answered("off"); }
+            }
+            StdButton {
+                label: "取消";
+                button-width: parent.width;
+                clicked => { SyncAskState.dismissed(); }
+            }
+        }
+    }
+}

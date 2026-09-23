@@ -224,6 +224,10 @@ pub(super) fn install_callbacks(window: &AppWindow) {
             cloud_id.to_string(),
         ));
     });
+    // 启动前那一问：回答与取消都从一个 Slint 全局来（照 `PairingBoard`）。
+    let ask = window.global::<SyncAskState>();
+    ask.on_answered(|choice| dispatch(Message::SyncAskAnswered(choice.to_string())));
+    ask.on_dismissed(|| dispatch(Message::SyncAskDismissed));
     window.on_sync_now(|id| {
         let id = id.to_string();
         dispatch(Message::SyncNow((!id.is_empty()).then_some(id)));

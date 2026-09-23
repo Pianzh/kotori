@@ -17,6 +17,8 @@ pub struct App {
     pub(super) loading: bool,
     pub(super) error: Option<String>,
     pub(super) launching: Option<String>,
+    /// 启动前那一问正等着回答的那一款（`None` = 没在问）。
+    pub(super) sync_ask: Option<String>,
     pub(super) selected: Option<String>,
     pub(super) draft: Option<Draft>,
     pub(super) saving: bool,
@@ -110,6 +112,7 @@ impl App {
                 pairing_scanned: false,
                 scanning: false,
                 pairing_msg: None,
+                sync_ask: None,
                 pairing_ok: true,
                 daemon_socket: socket,
                 daemon_connected: None,
