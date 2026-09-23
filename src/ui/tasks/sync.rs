@@ -217,6 +217,39 @@ pub(in crate::ui) async fn sync_reject_pairing(
     sync_scan_cloud(socket).await
 }
 
+/// **添加页**那一问（`sync.match`）：这个 exe 在云端是哪一款。
+///
+/// 指纹由 daemon 现算（不让客户端递 —— 它是自动绑定的唯一依据），读的是**索引**
+/// （一次读，不遍历身份卡）。`indexed == false` 表示桶里还没建过索引，那与"云端没有
+/// 这一款"是两句话，所以两者一起回给界面。
+pub(in crate::ui) async fn match_exe(
+    socket: &Path,
+    exe: String,
+) -> Result<(bool, Vec<CloudGameRow>), String> {
+    let params = crate::rpc::params([("exe", Value::String(exe))]);
+    let value = crate::rpc::call(socket, "sync.match", Some(params)).await?;
+    parse_cloud_match(&value)
+}
+
+/// 添加成功之后**顺手认领**云端那一条（`sync.pair`）。
+///
+/// 与 [`sync_pair`] 的差别只有一个：那个是配对页用的（绑完还要重扫一遍云端），这里
+/// 刚拿到索引里那一行，没有任何东西需要重扫 —— 一次落盘就够。
+pub(in crate::ui) async fn pair_game(
+    socket: &Path,
+    game_id: String,
+    cloud_key: String,
+    cloud_id: String,
+) -> Result<(), String> {
+    let params = crate::rpc::params([
+        ("id", Value::String(game_id)),
+        ("cloud_key", Value::String(cloud_key)),
+        ("cloud_id", Value::String(cloud_id)),
+    ]);
+    crate::rpc::call(socket, "sync.pair", Some(params)).await?;
+    Ok(())
+}
+
 /// Upload now, and turn the daemon's per-location report into one line.
 pub(in crate::ui) async fn sync_now(
     socket: &Path,

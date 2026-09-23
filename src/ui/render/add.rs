@@ -1,4 +1,8 @@
-//! 「添加游戏」页:三个输入框的回灌。
+//! 「添加游戏」页:三个输入框的回灌,以及那块**云端匹配**。
+//!
+//! 匹配那一块的状态在一个 Slint 全局里（见 `pages/add.slint`）：页面只管画，窗口不必
+//! 替它转发一串属性与回调。措辞（"还没建索引 / 云端没有 / 问不成"）都在 Rust 这边算好
+//! —— 页面不做任何判断，所以这些分支有单测（见 `model::add`），窗口本身反而不用测。
 
 use super::*;
 
@@ -20,4 +24,37 @@ pub(super) fn push_add(ui: &mut Ui) {
     push_bool(w.get_create_message_ok(), ok, |v| {
         w.set_create_message_ok(v)
     });
+
+    push_add_match(ui);
+}
+
+/// 「云端匹配」那一块（exe 落定之后才有内容；**它从不挡住添加**）。
+fn push_add_match(ui: &mut Ui) {
+    let board = ui.window.global::<AddMatchBoard>();
+    let m = &ui.app.add_match;
+
+    push_bool(board.get_visible(), m.visible(), |v| board.set_visible(v));
+    push_str(board.get_title(), &m.title(), |v| board.set_title(v));
+    push_str(board.get_detail(), &m.detail(), |v| board.set_detail(v));
+    // "没问成"灰着说 —— 那不是错误，也不影响添加（见 `model::add`）。
+    let ok = !matches!(m.phase, MatchPhase::Failed(_));
+    push_bool(board.get_ok(), ok, |v| board.set_ok(v));
+    push_bool(board.get_busy(), m.busy(), |v| board.set_busy(v));
+    push_bool(board.get_declined(), m.declined, |v| board.set_declined(v));
+
+    // 只有指纹命中多条时才列出来让人挑；唯一命中直接写在标题里（不让人多点一下）。
+    let rows: Vec<AddMatchItem> = if m.rows.len() > 1 {
+        m.rows
+            .iter()
+            .map(|row| AddMatchItem {
+                cloud_id: row.cloud_id.clone().into(),
+                label: format!("《{}》 · {}", row.name, row.versions_label()).into(),
+                detail: row.latest_label().into(),
+                chosen: m.chosen.as_deref() == Some(row.cloud_id.as_str()),
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    push_model(&ui.add_match_rows, rows);
 }

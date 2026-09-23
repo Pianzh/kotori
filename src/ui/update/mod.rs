@@ -273,7 +273,13 @@ impl App {
             | Message::NewGameDirChanged(..)
             | Message::NewExeChanged(..)
             | Message::CreateRequested
-            | Message::CreateFinished(..)) => self.update_add(m),
+            | Message::CreateFinished(..)
+            | Message::MatchExeReady(..)
+            | Message::MatchLoaded(..)
+            | Message::MatchChoose(..)
+            | Message::MatchDecline
+            | Message::MatchUndoDecline
+            | Message::GamePaired(..)) => self.update_add(m),
             // ── 云同步（处理在 `update::update_sync`） ──
             m @ (Message::SyncStatusLoaded(..)
             | Message::SyncToggleEnabled(..)

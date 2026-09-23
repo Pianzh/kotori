@@ -36,6 +36,8 @@ pub(super) struct Ui {
     /// 「云端存档」那一块的两张表：云端有哪几款、点开那一款有哪几版。
     pub(super) cloud_rows: Rc<VecModel<CloudGameItem>>,
     pub(super) cloud_versions: Rc<VecModel<CloudVersionItem>>,
+    /// 添加页那块云端匹配的候选（指纹命中多条时才有内容）。
+    pub(super) add_match_rows: Rc<VecModel<AddMatchItem>>,
     /// 「从正在运行的进程里挑」浮层里那些行。整表只在内容变了时重建(见
     /// `render::push_process_picker`)。
     pub(super) process_rows: Rc<VecModel<ProcessPickRow>>,
@@ -120,6 +122,7 @@ pub(super) fn run() -> anyhow::Result<()> {
     let pairing = Rc::new(VecModel::<PairingItem>::default());
     let cloud_rows = Rc::new(VecModel::<CloudGameItem>::default());
     let cloud_versions = Rc::new(VecModel::<CloudVersionItem>::default());
+    let add_match_rows = Rc::new(VecModel::<AddMatchItem>::default());
     let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
     window.set_games(games.clone().into());
     window.set_saves(saves.clone().into());
@@ -132,6 +135,9 @@ pub(super) fn run() -> anyhow::Result<()> {
     window
         .global::<CloudBoard>()
         .set_versions(cloud_versions.clone().into());
+    window
+        .global::<AddMatchBoard>()
+        .set_rows(add_match_rows.clone().into());
     window
         .global::<ProcessPickerState>()
         .set_rows(process_rows.clone().into());
@@ -146,6 +152,7 @@ pub(super) fn run() -> anyhow::Result<()> {
         pairing,
         cloud_rows,
         cloud_versions,
+        add_match_rows,
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,

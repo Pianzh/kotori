@@ -15,6 +15,7 @@ use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
+use super::rows;
 use super::{CHECK_TIMEOUT, Daemon, Runner};
 use crate::sync::cloud::{CloudGame, GameIdentity};
 use crate::sync::index::{CloudIndex, IndexGame};
@@ -153,46 +154,18 @@ impl Daemon {
         // 本机这一侧：哪个身份被哪一条档案认了（本地查表，不碰网络）。
         let (paired, rejected) = {
             let config = self.config.read().await;
-            let mut paired: HashMap<String, (String, String)> = HashMap::new();
-            let mut rejected: Vec<String> = Vec::new();
-            for (id, game) in &config.games {
-                if let Some(cloud_id) = &game.cloud_id {
-                    paired.insert(cloud_id.clone(), (id.clone(), game.name.clone()));
-                }
-                rejected.extend(game.cloud_rejected.iter().cloned());
-            }
-            (paired, rejected)
+            rows::locals(&config)
         };
 
         let indexed = index.is_some();
         let games: Vec<Value> = index
             .unwrap_or_else(CloudIndex::new)
             .games
-            .into_iter()
+            .iter()
             .map(|game| {
                 let cloud_id = game.identity.cloud_id.clone();
-                let local = paired.get(&cloud_id);
                 // 本机明确否过这一条（配对表那笔账）：界面上要能说"你之前说了不是它"。
-                let rejected_before = rejected.contains(&cloud_id);
-                json!({
-                    "cloud_key": game.cloud_key,
-                    "cloud_id": cloud_id,
-                    "name": game.identity.name,
-                    "machines": game.identity.machines.len(),
-                    "versions": game.versions,
-                    "latest": game.latest,
-                    "size": game.size,
-                    // 用过的 exe 路径：只给人看、只给搜索用（不参与任何判断）。
-                    "exe_paths": game
-                        .identity
-                        .machines
-                        .iter()
-                        .flat_map(|machine| machine.exe_paths.clone())
-                        .collect::<Vec<String>>(),
-                    "local_id": local.map(|(id, _)| id.clone()).unwrap_or_default(),
-                    "local_name": local.map(|(_, name)| name.clone()).unwrap_or_default(),
-                    "rejected": rejected_before,
-                })
+                rows::game_json(game, paired.get(&cloud_id), rejected.contains(&cloud_id))
             })
             .collect();
 

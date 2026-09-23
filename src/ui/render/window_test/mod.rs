@@ -14,6 +14,7 @@ use std::rc::Rc;
 use super::*;
 use crate::ui::test_support::{sync_payload, sync_status_fixture, ui_game};
 
+mod add;
 mod cloud;
 mod settings;
 
@@ -33,8 +34,14 @@ fn ui() -> Ui {
     let games = Rc::new(VecModel::<GameItem>::default());
     let saves = Rc::new(VecModel::<SaveItem>::default());
     let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
+    // 添加页那块云端匹配的候选也在一个 Slint 全局里：把它的模型指到 `Ui` 持有的这一份
+    // 上，否则 `push_model` 写的那份窗口看不见（照 `cloud.rs` 的说明）。
+    let add_match_rows = Rc::new(VecModel::<AddMatchItem>::default());
     window.set_games(games.clone().into());
     window.set_saves(saves.clone().into());
+    window
+        .global::<AddMatchBoard>()
+        .set_rows(add_match_rows.clone().into());
     window
         .global::<ProcessPickerState>()
         .set_rows(process_rows.clone().into());
@@ -48,6 +55,7 @@ fn ui() -> Ui {
         pairing: Rc::new(VecModel::default()),
         cloud_rows: Rc::new(VecModel::default()),
         cloud_versions: Rc::new(VecModel::default()),
+        add_match_rows,
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,
@@ -245,6 +253,11 @@ fn library_and_sync_pages_render_without_a_display() {
     ui.app.new_exe = "/games/demo/game.exe".into();
     render(&mut ui);
     ui.app.create_msg = Some("已添加（ID: demo）".into());
+    render(&mut ui);
+
+    // 添加页那块云端匹配的每一个状态（在 `window_test::add` 里：它自己就够长了）。
+    add::add_match_states(&mut ui);
+    ui.app.create_msg = None;
     render(&mut ui);
 
     // 云同步:还没读到 → 一切就绪 → 待确认恢复 → 凭据文件锁着 →

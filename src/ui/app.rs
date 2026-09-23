@@ -49,6 +49,9 @@ pub struct App {
     pub(super) auto_filled_name: String,
     pub(super) creating: bool,
     pub(super) create_msg: Option<String>,
+    /// 添加页那一块云端匹配:填完 exe 问一次"云端有没有这一款"(见 `model::add`)。
+    /// **它只决定"要不要顺手绑上"**,一个字都不影响这一条能不能建起来。
+    pub(super) add_match: AddMatch,
     /// Settings tab: wine prefix.
     pub(super) wine_prefix_input: String,
     /// Set when the user edits the prefix by hand, so a `wine.status` reply that
@@ -138,6 +141,7 @@ impl App {
                 auto_filled_name: String::new(),
                 creating: false,
                 create_msg: None,
+                add_match: AddMatch::default(),
                 wine_prefix_input: String::new(),
                 wine_prefix_dirty: false,
                 wine_status: None,
@@ -382,8 +386,12 @@ impl App {
 
         match target {
             PathTarget::NewGameDir => self.new_game_dir = text,
-            // 浏览 exe 也必须触发联动 —— 走 `set_new_exe`,别直接赋值(见那里的说明)。
-            PathTarget::NewExe => self.set_new_exe(text),
+            // 浏览 exe 也必须触发联动 —— 走 `set_new_exe`,别直接赋值(见那里的说明);
+            // 顺带排一次云端匹配(手打那条路走的是 `NewExeChanged`)。
+            PathTarget::NewExe => {
+                self.set_new_exe(text);
+                return self.schedule_match();
+            }
             PathTarget::WinePrefix => {
                 self.wine_prefix_input = text;
                 // 用户亲手选的路径不许被随后回来的 `wine.status` 盖掉。

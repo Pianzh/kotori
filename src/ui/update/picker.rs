@@ -66,6 +66,7 @@ impl App {
             "已按进程 {} 填好（PID {}），确认后点「添加游戏」",
             row.name, row.pid
         ));
-        Task::none()
+        // 填好 exe 之后照手打那条路走一遍:问一次云端有没有这一款(见 `model::add`)。
+        self.schedule_match()
     }
 }

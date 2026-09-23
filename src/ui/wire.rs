@@ -236,6 +236,11 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     cloud.on_search_changed(|text| dispatch(Message::CloudSearch(one_line(&text))));
     cloud.on_toggle(|key| dispatch(Message::CloudToggle(key.to_string())));
     cloud.on_back(|| dispatch(Message::CloudBack));
+    // 添加页那块云端匹配：挑一条 / 「不是这一款」/ 改主意（照 `CloudBoard`）。
+    let add_match = window.global::<AddMatchBoard>();
+    add_match.on_choose(|cloud_id| dispatch(Message::MatchChoose(cloud_id.to_string())));
+    add_match.on_decline(|| dispatch(Message::MatchDecline));
+    add_match.on_restore(|| dispatch(Message::MatchUndoDecline));
     window.on_sync_now(|id| {
         let id = id.to_string();
         dispatch(Message::SyncNow((!id.is_empty()).then_some(id)));

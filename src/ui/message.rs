@@ -124,6 +124,15 @@ pub enum Message {
     NewExeChanged(String),
     CreateRequested,
     CreateFinished(Result<(String, Option<String>), String>),
+    /// 添加页的云端匹配:防抖到点(`MatchExeReady` 带回当时那个 exe,已经不是当前值就丢掉)、
+    /// 回包、挑一条、「不是这一款」、改主意(见 `model::add`)。
+    MatchExeReady(String),
+    MatchLoaded(String, Result<(bool, Vec<CloudGameRow>), String>),
+    MatchChoose(String),
+    MatchDecline,
+    MatchUndoDecline,
+    /// 添加之后顺手认领云端那一条的结果(`sync.pair`)。失败**不算添加失败**。
+    GamePaired(Result<(), String>),
     WinePrefixChanged(String),
     SaveWinePrefix,
     ClearWinePrefix,

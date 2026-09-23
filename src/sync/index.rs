@@ -176,6 +176,18 @@ impl CloudIndex {
         self.games.len()
     }
 
+    /// 云端现在有哪些款对得上这个指纹：0 个 = 云端没有它，1 个 = 就是它，≥2 个 = **要问**。
+    ///
+    /// 判据与配对**同一条**（[`GameIdentity::has_fingerprint`]，见 `sync::pairing` 的
+    /// 唯一命中才自动绑）：这里只是把它挪到索引上 —— 添加游戏时读一次索引就够，不必为了
+    /// 认一款去遍历每一张身份卡。
+    pub fn by_fingerprint<'a>(&'a self, fingerprint: &str) -> Vec<&'a IndexGame> {
+        self.games
+            .iter()
+            .filter(|game| game.identity.has_fingerprint(fingerprint))
+            .collect()
+    }
+
     /// 排序稳定一点，界面与 JSON 都好读（落点在前）。
     pub fn sort(&mut self) {
         self.games.sort_by(|a, b| a.cloud_key.cmp(&b.cloud_key));
@@ -315,6 +327,21 @@ mod tests {
         // 另一款就是另一条。
         union.merge(game("c2", "two", "另一款", machine("a", &["f9"], &[])));
         assert_eq!(union.len(), 2);
+    }
+
+    #[test]
+    fn a_fingerprint_finds_its_entry_and_says_how_many_it_found() {
+        let mut index = CloudIndex::new();
+        index.merge(game("c1", "one", "一", machine("a", &["f1"], &[])));
+        index.merge(game("c2", "two", "二", machine("b", &["f2"], &[])));
+        // 指纹相同却分属两个身份：两台机器没能认出彼此（各建了身份）。要问，不许猜。
+        index.merge(game("c3", "three", "三", machine("c", &["f2"], &[])));
+
+        let hits = index.by_fingerprint("f1");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].cloud_key, "one");
+        assert_eq!(index.by_fingerprint("f2").len(), 2, "多个命中要全都说出来");
+        assert!(index.by_fingerprint("f9").is_empty(), "对不上就是没有");
     }
 
     #[test]

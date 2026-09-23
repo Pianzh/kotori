@@ -13,7 +13,7 @@ import { GameItem, GameDetail, SaveItem, ConfigInfo, EnvCheckRow, PathPick, Proc
 import { AppNav } from "app-nav.slint";
 import { GamesPage } from "pages/games.slint";
 import { GameSettingsPage } from "pages/game-settings.slint";
-import { AddPage } from "pages/add.slint";
+import { AddPage, AddMatchBoard } from "pages/add.slint";
 import { SyncPage } from "pages/sync.slint";
 import { SettingsPage } from "pages/settings.slint";
 import { ProcessPicker, ProcessPickerState } from "widgets/process-picker.slint";
@@ -21,7 +21,7 @@ import { PairingBoard } from "widgets/pairing.slint";
 import { SyncAskDialog, SyncAskState } from "widgets/sync-ask.slint";
 import { CloudPage, CloudBoard } from "pages/cloud.slint";
 // 再导出一次是**给 Rust 看的**:只有主文件导出过的全局才生成 `window.global::<…>()`。
-export { ProcessPickerState, PairingBoard, SyncAskState, CloudBoard }
+export { ProcessPickerState, PairingBoard, SyncAskState, CloudBoard, AddMatchBoard }
 
 export component AppWindow inherits Window {
     title: "Kotori";

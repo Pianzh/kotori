@@ -1,7 +1,12 @@
-//! 「添加游戏」页的消息:三个输入框、exe 联动的自动填充,以及提交与回包。
+//! 「添加游戏」页的消息:三个输入框、exe 联动的自动填充、**填完 exe 之后的云端匹配**,
+//! 以及提交与回包。
 //!
 //! 从 `update/mod.rs` 拆出来(那边曾越过 500 行硬线)。这里改的仍然是同一个
 //! `App`,只是这批消息住在这一个文件里。
+//!
+//! 匹配那一块的口径(用户 2026-09-23 定的):exe 是唯一必填项;写完 exe 就去云端认这一款,
+//! 认出来就在**本页**直接确定。认领走的是已有的 `sync.pair`(身份/落点唯一的写入口),
+//! 而这一块**绝不许挡住添加** —— 问不成只是页面上的一句话。
 
 use super::super::*;
 
@@ -19,6 +24,51 @@ impl App {
             }
             Message::NewExeChanged(value) => {
                 self.set_new_exe(value);
+                self.schedule_match()
+            }
+            // 防抖到点:这期间用户又改了的话,这一个定时器就作废(他还会再排一个)。
+            Message::MatchExeReady(exe) => {
+                if !self.add_match.still_pending(&exe) {
+                    return Task::none();
+                }
+                self.add_match.asking(&exe);
+                let socket = self.daemon_socket.clone();
+                let asked = exe.clone();
+                Task::perform(
+                    async move { match_exe(&socket, asked).await },
+                    move |result| Message::MatchLoaded(exe, result),
+                )
+            }
+            Message::MatchLoaded(exe, result) => {
+                match result {
+                    Ok((indexed, rows)) => self.add_match.loaded(&exe, indexed, rows),
+                    // 问不成不是错误状态:页面上照旧能点「添加游戏」(见 `model::add`)。
+                    Err(e) => self.add_match.failed(&exe, e),
+                }
+                Task::none()
+            }
+            Message::MatchChoose(cloud_id) => {
+                self.add_match.choose(&cloud_id);
+                Task::none()
+            }
+            Message::MatchDecline => {
+                self.add_match.decline();
+                Task::none()
+            }
+            Message::MatchUndoDecline => {
+                self.add_match.undo_decline();
+                Task::none()
+            }
+            Message::GamePaired(result) => {
+                // 添加已经成功了 —— 这一句只是补一句"云端那边怎么样了"(失败不算添加失败)。
+                let outcome = match result {
+                    Ok(()) => "已与云端绑定。".to_string(),
+                    Err(e) => {
+                        format!("云端绑定没做成:{e}(以后可以在「云端存档」页配对)")
+                    }
+                };
+                let message = self.create_msg.take().unwrap_or_default();
+                self.create_msg = Some(format!("{message}\n{outcome}"));
                 Task::none()
             }
             Message::CreateRequested => {
@@ -65,14 +115,38 @@ impl App {
                             message.push_str(&text);
                         }
                         self.create_msg = Some(message);
+                        // 绑定要在清场之前取(清场会把匹配状态一起收掉)。
+                        let binding = self.add_match.binding().map(|row| {
+                            (
+                                row.cloud_key.clone(),
+                                row.cloud_id.clone(),
+                                row.name.clone(),
+                            )
+                        });
                         self.new_name.clear();
                         self.new_game_dir.clear();
                         self.new_exe.clear();
                         self.auto_filled_dir.clear();
                         self.auto_filled_name.clear();
-                        return Task::perform(async { connect_and_load().await }, |r| {
-                            Message::GamesLoaded(r)
-                        });
+                        self.add_match.reset();
+
+                        let mut tasks =
+                            vec![Task::perform(async { connect_and_load().await }, |r| {
+                                Message::GamesLoaded(r)
+                            })];
+                        if let Some((cloud_key, cloud_id, cloud_name)) = binding {
+                            // 用户在本页看到的那一条:添加之后顺手认领(见 `sync.pair`)。
+                            // 认领失败**不影响**上面那句"已添加"。
+                            let message = self.create_msg.take().unwrap_or_default();
+                            self.create_msg =
+                                Some(format!("{message}\n正在与云端《{cloud_name}》绑定…"));
+                            let socket = self.daemon_socket.clone();
+                            tasks.push(Task::perform(
+                                async move { pair_game(&socket, id, cloud_key, cloud_id).await },
+                                Message::GamePaired,
+                            ));
+                        }
+                        return Task::batch(tasks);
                     }
                     Err(e) => self.error = Some(e),
                 }
@@ -80,6 +154,26 @@ impl App {
             }
             _ => unreachable!("update_add 只接添加游戏那批消息"),
         }
+    }
+
+    /// exe 落到一个真实文件上了:排一次"问云端有没有这一款"(防抖见 `model::add`)。
+    ///
+    /// 三个入口都会走到这里(手打、浏览、从进程挑),想漏也漏不掉。
+    ///
+    /// ⚠ 只有**手动添加这一条路**会问云端:扫目录批量加不联网(那一条路一次几十款,
+    /// 一款读一次索引是荒唐的)。问不成也**绝不许**挡住添加。
+    pub(in crate::ui) fn schedule_match(&mut self) -> Task<Message> {
+        let exe = self.new_exe.trim().to_string();
+        if exe.is_empty() || !std::path::Path::new(&exe).is_file() {
+            // 路径还没落到一个真实文件上 —— 问也白问,顺手把上一款的结果收掉。
+            self.add_match.reset();
+            return Task::none();
+        }
+        self.add_match.typing(&exe);
+        Task::perform(
+            async move { tokio::time::sleep(MATCH_DEBOUNCE).await },
+            move |_| Message::MatchExeReady(exe),
+        )
     }
 
     /// exe 那一栏被写入了新值 —— **手打和「浏览…」挑回来都走这里**。

@@ -207,6 +207,12 @@ impl Daemon {
                 Ok(cloud_key) => respond(id, self.rpc_sync_cloud_versions(cloud_key).await),
                 Err(e) => rpc_err(id, -32602, e),
             },
+            // 添加游戏时那一问：这个 exe 在云端是哪一款（读索引，只读不写）。
+            // 参数是**本机路径**，指纹由 daemon 自己算（不让客户端递）。
+            "sync.match" => match param_str(&req.params, "exe") {
+                Ok(exe) => respond(id, self.rpc_sync_match(std::path::Path::new(exe)).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
             // 启动前自检的对话框：用户选了哪一项（`ok` / `off` / `pair`）。
             "sync.resolve" => match param_str(&req.params, "id") {
                 Ok(game_id) => {

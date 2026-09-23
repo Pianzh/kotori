@@ -478,7 +478,9 @@ mod actions;
 mod credentials;
 mod identity;
 mod index;
+mod matching;
 mod pairing;
+mod rows;
 mod selfcheck;
 #[cfg(test)]
 mod tests;

@@ -67,6 +67,7 @@ fn a_click_lands_on_the_control_under_the_pointer() {
         pairing: Rc::new(VecModel::default()),
         cloud_rows: Rc::new(VecModel::default()),
         cloud_versions: Rc::new(VecModel::default()),
+        add_match_rows: Rc::new(VecModel::default()),
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,

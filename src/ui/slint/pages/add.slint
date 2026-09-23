@@ -1,6 +1,10 @@
 // 「添加游戏」:只有手动填写 —— kotori 不做目录扫描(那个只存在于 CLI 的 `kotori scan`,
 // 管理器里没有这个功能,也不打算加)。字段顺序照填写流程排:先是可执行文件,然后
 // 游戏根目录,游戏名放最后(调整前是:游戏名 / 游戏根目录 / 可执行文件)。
+//
+// exe 一落定就去云端认这一款(用户 2026-09-23 定:exe 是唯一必填项,认出来就在本页直接
+// 确定)。那一块的状态放在 `AddMatchBoard` 全局里(照 `CloudBoard`/`PairingBoard` 的先例):
+// 页面只管画,窗口不必替它转发一串属性与回调。⚠ 那一块**永远不挡添加**。
 
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
@@ -10,6 +14,28 @@ import { TextField } from "../widgets/controls.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { ProcessPickerState } from "../widgets/process-picker.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
+import { AddMatchItem } from "../types.slint";
+
+export global AddMatchBoard {
+    /// 要不要说点什么(exe 还没落到一个真实文件上时什么都不说,免得一进页面就闪)。
+    in-out property <bool> visible: false;
+    /// 一句话标题(Rust 那边按"还没建索引 / 云端确实没有 / 问不成"分别措辞)。
+    in-out property <string> title: "";
+    /// 标题下面那行小字(可以多行)。
+    in-out property <string> detail: "";
+    /// 这句话是正常信息还是"没问成"(没问成时灰着说,不吓人 —— 它不影响添加)。
+    in-out property <bool> ok: true;
+    /// 正在问云端。
+    in-out property <bool> busy: false;
+    /// 指纹命中的候选:**只有多条时才列出来**让用户挑(唯一命中直接写在标题里)。
+    in-out property <[AddMatchItem]> rows: [];
+    /// 用户已经点了「不是这一款」。
+    in-out property <bool> declined: false;
+
+    callback choose(string);
+    callback decline();
+    callback restore();
+}
 
 export component AddPage inherits ScrollView {
     // 见 `games.slint` 里的长注释:fluent 默认关掉拖拽滚动,没有滚轮的机器要靠这一行。
@@ -92,6 +118,58 @@ export component AddPage inherits ScrollView {
                     }
                 }
                 Divider { }
+                // ── 云端匹配 ────────────────────────────────────────────────
+                // exe 落到一个真实文件上之后才出现。**它只影响"要不要顺手绑上"**:
+                // 问不成 / 云端没有 / 用户说"不是这一款",添加照旧。
+                if AddMatchBoard.visible : VerticalLayout {
+                    padding: 12px;
+                    spacing: 6px;
+                    Text {
+                        text: AddMatchBoard.title;
+                        font-size: 13px;
+                        font-weight: 600;
+                        color: AddMatchBoard.ok ? Tokens.accent : Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                    if AddMatchBoard.detail != "" : Text {
+                        text: AddMatchBoard.detail;
+                        font-size: 12px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                    // 指纹命中多条时才列(唯一命中直接写在标题里,不让人多点一下)。
+                    for row[index] in AddMatchBoard.rows : VerticalLayout {
+                        spacing: 2px;
+                        StdButton {
+                            label: row.chosen ? "✓ " + row.label : row.label;
+                            button-width: 360px;
+                            clicked => { AddMatchBoard.choose(row.cloud-id); }
+                        }
+                        if row.detail != "" : Text {
+                            text: row.detail;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        if AddMatchBoard.declined : StdButton {
+                            label: "改主意，绑上";
+                            button-width: 110px;
+                            clicked => { AddMatchBoard.restore(); }
+                        }
+                        if !AddMatchBoard.declined : StdButton {
+                            label: "不是这一款";
+                            button-width: 110px;
+                            clicked => { AddMatchBoard.decline(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: #00000000; }
+                    }
+                    // 这一块自带收尾的分隔线:否则"没有匹配"时上下两个 Divider 会挨在
+                    // 一起,画出一条双线(那看起来像卡片被切了一刀)。
+                    Divider { }
+                }
                 CardRow {
                     title: "游戏根目录";
                     description: "启动时的工作目录,也是 relative 存档路径的基准。留空 = 取 exe 所在目录。";

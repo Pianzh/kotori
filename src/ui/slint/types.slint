@@ -180,3 +180,18 @@ export struct CloudVersionItem {
     /// 原始版本名 —— 与 CLI/桶里看到的逐字一致，删与下载也是按它认人。
     name: string,
 }
+
+// 「添加游戏」页那一块云端匹配里的一条候选（指纹命中，可能不止一条）。
+//
+// 只有一条时页面不列这个表，直接把结论写在标题里；**多条时绝不替用户猜**（配对错了
+// 不可逆），所以列出来让他点。文案在 Rust 里拼好（见 `model::add`）。
+export struct AddMatchItem {
+    /// 云端身份 id —— 点它时原样回给 Rust（挑中的就是这一条）。
+    cloud-id: string,
+    /// 「《名字》 · 3 版」。
+    label: string,
+    /// 「2026-09-11 18:15 · 4.0 KiB」/「本机《某某》已经认了它」；没有就是空串。
+    detail: string,
+    /// 用户挑中的那一条。
+    chosen: bool,
+}
