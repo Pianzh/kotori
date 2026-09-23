@@ -15,6 +15,7 @@ import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { SyncCredentialsGroup } from "sync-credentials.slint";
 import { SyncKopiaGroup } from "sync-kopia.slint";
 import { SyncPairingSection } from "../widgets/pairing.slint";
+import { SyncCloudSavesSection } from "../widgets/cloud-saves.slint";
 
 export component SyncPage inherits ScrollView {
     // 见 `games.slint` 里的长注释:fluent 默认关掉拖拽滚动,没有滚轮的机器要靠这一行。
@@ -203,6 +204,11 @@ export component SyncPage inherits ScrollView {
         // 状态在 `PairingBoard` 全局里（见 widgets/pairing.slint）：这一页只把它摆进来，
         // 不必替它转发属性与回调。
         SyncPairingSection { revealed: root.revealed; title-step: 7; group-step: 8; }
+
+        // ── 云端存档 ──────────────────────────────────────────────────────
+        // 同样是一个全局（见 widgets/cloud-saves.slint）：这一块只读云端，
+        // 与"配对"是两件事（那个读身份卡，这个不读）。
+        SyncCloudSavesSection { revealed: root.revealed; title-step: 9; group-step: 10; }
 
         // ── 连接与保留 ────────────────────────────────────────────────────
         RevealItem {

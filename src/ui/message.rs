@@ -186,6 +186,13 @@ pub enum Message {
     /// 「不是同一款」：`(本机 id, 云端身份)` —— 撤掉绑定，并记住别再自动绑。
     SyncRejectPairing(String, String),
     SyncPairingRejected(Result<Vec<PairingRow>, String>),
+    /// 「云端存档」那一块：列云端有哪些游戏（用户按刷新才走）。
+    SyncCloudRefresh,
+    SyncCloudLoaded(Result<Vec<CloudSaveRow>, String>),
+    /// 点开 / 收起某一款：参数是**云端落点**（`sync.cloud_games` 给的 key）。
+    SyncCloudToggle(String),
+    /// `(云端落点, 这一款的版本列表)`。
+    SyncCloudVersionsLoaded(String, Result<Vec<String>, String>),
     SyncMasterPasswordChanged(String),
     SyncUnlock,
     SyncUnlocked(Result<(), String>),

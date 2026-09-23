@@ -1,12 +1,14 @@
 //! `App::update`: the message loop.
 //!
-//! 这个 `match` 曾经有 900 多行，所以按**消息属于哪一块**拆成了三个文件：
+//! 这个 `match` 曾经有 900 多行，所以按**消息属于哪一块**拆成了几个文件：
 //! 本文件管跳转、游戏库与库里的增删改，`settings` 管服务/wine/单游戏设置/环境，
-//! `sync` 管云同步。三处改的仍然是同一个 `App`，只是每个文件不再长到读不完。
+//! `sync` 管云同步，「云端存档」的浏览在 `cloud`。几处改的仍然是同一个 `App`，
+//! 只是每个文件不再长到读不完。
 
 use super::*;
 
 mod add;
+mod cloud;
 mod picker;
 // 「启动 / 停止」那一族住在 `run.rs`;`pub(in crate::ui)` 只为单元测试叫得到它。
 pub(in crate::ui) mod run;
@@ -308,6 +310,13 @@ impl App {
             | Message::SyncRestoreRequested(..)
             | Message::SyncRestoreCancelled
             | Message::SyncRestoreConfirmed) => self.update_sync(m),
+
+            // ── 「云端存档」的浏览（处理在 `update::update_cloud`） ──
+            // 它只读云端、一个字都不改本机配置，所以与上面那一族分开列。
+            m @ (Message::SyncCloudRefresh
+            | Message::SyncCloudLoaded(..)
+            | Message::SyncCloudToggle(..)
+            | Message::SyncCloudVersionsLoaded(..)) => self.update_cloud(m),
 
             // ── 服务、wine 与单游戏设置（处理在 `update::update_settings`） ──
             m @ (Message::ServiceStart

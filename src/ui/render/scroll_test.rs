@@ -70,6 +70,8 @@ fn dragging_the_pointer_scrolls_the_list() {
         games,
         saves,
         pairing: Rc::new(VecModel::default()),
+        cloud_rows: Rc::new(VecModel::default()),
+        cloud_versions: Rc::new(VecModel::default()),
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,

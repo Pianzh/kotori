@@ -1,0 +1,157 @@
+// 「云端存档」:云上有哪些游戏、各存了几版,点开一款看它每一版。
+//
+// 状态放在一个 **Slint 全局**里(照 `PairingBoard` 的先例),而不是页面属性:这样窗口
+// 不必替它转发一大串属性与回调(那正好把 `app.slint` 顶过了行数硬线),页面只负责画。
+//
+// 这一块**只读云端**:一个字都不改本机配置,也不读身份卡(kopia 那边读一次 = 一次
+// `restore`)。所以它可以由用户随时按「刷新云端清单」触发,与「扫描云端」是两件事。
+
+import { Tokens } from "../theme.slint";
+import { CloudSaveItem, CloudVersionItem } from "../types.slint";
+import { RevealItem } from "base.slint";
+import { Group, SectionTitle } from "card.slint";
+import { StdButton } from "buttons.slint";
+
+export global CloudSavesBoard {
+    /// 云端有哪几款。空数组且 `scanned` 为真 = 云端还没有游戏。
+    in-out property <[CloudSaveItem]> rows: [];
+    /// 用户**按过**刷新、并且拿到了回答。
+    in-out property <bool> scanned: false;
+    in-out property <bool> loading: false;
+    /// 一句话状态(列完 / 出错)。空串 = 什么都别说。
+    in-out property <string> message: "";
+    in-out property <bool> ok: true;
+    /// 点开的那一款(云端落点);空串 = 都收着。
+    in-out property <string> open: "";
+    /// 点开那一款的版本(最旧在前)。
+    in-out property <[CloudVersionItem]> versions: [];
+    in-out property <bool> versions-loading: false;
+
+    callback refresh();
+    /// 点开 / 收起某一款:`(云端落点)`。
+    callback toggle(string);
+}
+
+export component SyncCloudSavesSection inherits VerticalLayout {
+    in property <bool> revealed: false;
+    in property <int> title-step: 0;
+    in property <int> group-step: 1;
+    spacing: 0px;
+
+    RevealItem {
+        revealed: root.revealed;
+        step: root.title-step;
+        bottom: 8px;
+        SectionTitle { text: "云端存档"; }
+    }
+    RevealItem {
+        revealed: root.revealed;
+        step: root.group-step;
+        bottom: 24px;
+        Group {
+            VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+                HorizontalLayout {
+                    spacing: 12px;
+                    Text {
+                        text: "云上有哪些游戏、各存了几版 —— 包括本机没装的那些。这里只看,不动任何东西;时间是本机时区的。";
+                        font-size: 12px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+                    StdButton {
+                        label: CloudSavesBoard.loading ? "读取中…" : "刷新云端清单";
+                        button-width: 112px;
+                        button-enabled: !CloudSavesBoard.loading;
+                        clicked => { CloudSavesBoard.refresh(); }
+                    }
+                }
+                if CloudSavesBoard.message != "" : Text {
+                    text: CloudSavesBoard.message;
+                    font-size: 12px;
+                    color: CloudSavesBoard.ok ? Tokens.text-3 : Tokens.danger;
+                    wrap: word-wrap;
+                }
+                if !CloudSavesBoard.scanned && !CloudSavesBoard.loading && CloudSavesBoard.message == "" : Text {
+                    text: "点「刷新云端清单」看看云上有什么。";
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                    wrap: word-wrap;
+                }
+                if CloudSavesBoard.scanned && CloudSavesBoard.rows.length == 0 : Text {
+                    text: "云端还没有游戏。先「立即同步全部」把本机这一版传上去,再回来刷新。";
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                    wrap: word-wrap;
+                }
+                for row[index] in CloudSavesBoard.rows : Rectangle {
+                    background: Tokens.card;
+                    border-color: Tokens.stroke;
+                    border-width: 1px;
+                    border-radius: Tokens.radius-card;
+                    VerticalLayout {
+                        padding: 12px;
+                        spacing: 6px;
+                        HorizontalLayout {
+                            spacing: 10px;
+                            Text {
+                                text: row.key;
+                                font-size: 13px;
+                                color: Tokens.text;
+                                horizontal-stretch: 1;
+                                overflow: elide;
+                                vertical-alignment: center;
+                            }
+                            Text {
+                                text: row.versions-label;
+                                font-size: 11px;
+                                color: Tokens.text-3;
+                                vertical-alignment: center;
+                            }
+                            StdButton {
+                                label: CloudSavesBoard.open == row.key ? "收起" : "看版本";
+                                button-width: 84px;
+                                // 一版都没有的没什么可展开的 —— 别让用户点出一趟空跑。
+                                button-enabled: row.versions > 0;
+                                clicked => { CloudSavesBoard.toggle(row.key); }
+                            }
+                        }
+                        if CloudSavesBoard.open == row.key : VerticalLayout {
+                            spacing: 4px;
+                            if CloudSavesBoard.versions-loading : Text {
+                                text: "正在列这一款的版本…";
+                                font-size: 11px;
+                                color: Tokens.text-3;
+                            }
+                            if !CloudSavesBoard.versions-loading && CloudSavesBoard.versions.length == 0 : Text {
+                                text: "这一款在云端还没有存档。";
+                                font-size: 11px;
+                                color: Tokens.text-3;
+                            }
+                            for version[slot] in CloudSavesBoard.versions : HorizontalLayout {
+                                spacing: 8px;
+                                Text {
+                                    text: version.label;
+                                    font-size: 12px;
+                                    color: Tokens.text-2;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: version.name;
+                                    font-size: 11px;
+                                    color: Tokens.text-3;
+                                    overflow: elide;
+                                    horizontal-stretch: 1;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

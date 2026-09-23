@@ -138,6 +138,9 @@ impl Daemon {
     }
 
     /// The version packages the cloud holds for a game.
+    ///
+    /// ⚠ 收的是**本机游戏 id**，于是只有"这一款在云端正好落在同名目录里"时才碰对
+    /// 地方。界面一律走 [`Self::rpc_sync_cloud_versions`]；这一条留给 CLI 与既有 e2e。
     pub(in crate::daemon) async fn rpc_sync_versions(
         &self,
         game_id: &str,
@@ -145,6 +148,31 @@ impl Daemon {
         let settings = self.config.read().await.sync.clone();
         let runner = self.sync_runner(&settings)?;
         let versions = runner.packages(game_id).await.map_err(|e| e.to_string())?;
+        Ok(json!({ "versions": versions }))
+    }
+
+    /// 云端某一款有哪几版 —— 按**云端落点**（`cloud_dir`，也就是
+    /// [`Self::rpc_sync_cloud_games`] 给的 `id`）列，不按本机 id。
+    ///
+    /// 这两件事在多数机器上恰好同名，于是[上面那条](Self::rpc_sync_versions)的错位
+    /// 一直没显形；但"跟着对方目录走"的那台机器上它们不同名，而**云端有、本机没有**
+    /// 的游戏根本不会出现在本机 id 里 —— 「云端存档」这一块要列的正是这些。
+    pub(in crate::daemon) async fn rpc_sync_cloud_versions(
+        &self,
+        cloud_key: &str,
+    ) -> Result<Value, String> {
+        let settings = self.config.read().await.sync.clone();
+        let runner = self.sync_runner(&settings)?;
+        // 与「刷新云端清单」同样的理由给一个上限：点开一款是一次网络往返，用户盯着等。
+        let versions = tokio::time::timeout(CHECK_TIMEOUT, runner.packages(cloud_key))
+            .await
+            .map_err(|_| {
+                format!(
+                    "列《{cloud_key}》的版本超过 {} 秒没有回应 —— 网络通不通?",
+                    CHECK_TIMEOUT.as_secs()
+                )
+            })?
+            .map_err(|e| e.to_string())?;
         Ok(json!({ "versions": versions }))
     }
 

@@ -82,5 +82,5 @@ pub use rclone_args::{copyto_args, deletefile_args, list_dirs_args, list_files_a
 pub use rclone_env::rclone_env;
 pub use remote_paths::{game_remote, package_remote, remote_root, save_key};
 pub use save_targets::{SaveTarget, targets};
-pub use snapshots::{is_snapshot, parse_packages, prune_plan, version_stamp};
+pub use snapshots::{describe_stamp, is_snapshot, parse_packages, prune_plan, version_stamp};
 pub use validate::{validate, validate_endpoint, validate_secrets};

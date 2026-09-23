@@ -33,6 +33,9 @@ pub(super) struct Ui {
     /// 配对表（`sync.pairing` 的结果）。同 `games`/`saves`：Slint 的数组属性不可变，
     /// 所以表由这边持有、整份推过去。
     pub(super) pairing: Rc<VecModel<PairingItem>>,
+    /// 「云端存档」那一块的两张表：云端有哪几款、点开那一款有哪几版。
+    pub(super) cloud_rows: Rc<VecModel<CloudSaveItem>>,
+    pub(super) cloud_versions: Rc<VecModel<CloudVersionItem>>,
     /// 「从正在运行的进程里挑」浮层里那些行。整表只在内容变了时重建(见
     /// `render::push_process_picker`)。
     pub(super) process_rows: Rc<VecModel<ProcessPickRow>>,
@@ -115,12 +118,20 @@ pub(super) fn run() -> anyhow::Result<()> {
     let games = Rc::new(VecModel::<GameItem>::default());
     let saves = Rc::new(VecModel::<SaveItem>::default());
     let pairing = Rc::new(VecModel::<PairingItem>::default());
+    let cloud_rows = Rc::new(VecModel::<CloudSaveItem>::default());
+    let cloud_versions = Rc::new(VecModel::<CloudVersionItem>::default());
     let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
     window.set_games(games.clone().into());
     window.set_saves(saves.clone().into());
     window
         .global::<PairingBoard>()
         .set_rows(pairing.clone().into());
+    window
+        .global::<CloudSavesBoard>()
+        .set_rows(cloud_rows.clone().into());
+    window
+        .global::<CloudSavesBoard>()
+        .set_versions(cloud_versions.clone().into());
     window
         .global::<ProcessPickerState>()
         .set_rows(process_rows.clone().into());
@@ -133,6 +144,8 @@ pub(super) fn run() -> anyhow::Result<()> {
         games,
         saves,
         pairing,
+        cloud_rows,
+        cloud_versions,
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,

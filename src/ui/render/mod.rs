@@ -18,7 +18,7 @@ use add::push_add;
 use detail::push_detail;
 use games::push_games;
 use settings::push_settings;
-use sync::{push_pairing, push_sync, push_sync_ask};
+use sync::{push_cloud_saves, push_pairing, push_sync, push_sync_ask};
 
 mod add;
 mod detail;
@@ -42,6 +42,7 @@ pub(super) fn render(ui: &mut Ui) {
     push_add(ui);
     push_sync(ui);
     push_pairing(ui);
+    push_cloud_saves(ui);
     push_sync_ask(ui);
     push_settings(ui);
 }

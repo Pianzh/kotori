@@ -228,6 +228,10 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     let ask = window.global::<SyncAskState>();
     ask.on_answered(|choice| dispatch(Message::SyncAskAnswered(choice.to_string())));
     ask.on_dismissed(|| dispatch(Message::SyncAskDismissed));
+    // 「云端存档」那一块：刷新要用户按（它读云端），点开一款再问一次版本。
+    let cloud = window.global::<CloudSavesBoard>();
+    cloud.on_refresh(|| dispatch(Message::SyncCloudRefresh));
+    cloud.on_toggle(|key| dispatch(Message::SyncCloudToggle(key.to_string())));
     window.on_sync_now(|id| {
         let id = id.to_string();
         dispatch(Message::SyncNow((!id.is_empty()).then_some(id)));

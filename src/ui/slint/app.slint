@@ -19,8 +19,9 @@ import { SettingsPage } from "pages/settings.slint";
 import { ProcessPicker, ProcessPickerState } from "widgets/process-picker.slint";
 import { PairingBoard } from "widgets/pairing.slint";
 import { SyncAskDialog, SyncAskState } from "widgets/sync-ask.slint";
+import { CloudSavesBoard } from "widgets/cloud-saves.slint";
 // 再导出一次是**给 Rust 看的**:只有主文件导出过的全局才生成 `window.global::<…>()`。
-export { ProcessPickerState, PairingBoard, SyncAskState }
+export { ProcessPickerState, PairingBoard, SyncAskState, CloudSavesBoard }
 
 export component AppWindow inherits Window {
     title: "Kotori";

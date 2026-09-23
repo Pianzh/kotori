@@ -199,6 +199,12 @@ impl Daemon {
                 Err(e) => rpc_err(id, -32602, e),
             },
             "sync.cloud_games" => respond(id, self.rpc_sync_cloud_games().await),
+            // 云端某一款的版本：参数是**云端落点**（`sync.cloud_games` 给的 id），不是
+            // 本机 id —— 云端有而本机没有的游戏也要能列出它的版本。
+            "sync.cloud_versions" => match param_str(&req.params, "key") {
+                Ok(cloud_key) => respond(id, self.rpc_sync_cloud_versions(cloud_key).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
             // 启动前自检的对话框：用户选了哪一项（`ok` / `off` / `pair`）。
             "sync.resolve" => match param_str(&req.params, "id") {
                 Ok(game_id) => {

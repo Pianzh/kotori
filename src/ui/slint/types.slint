@@ -153,3 +153,23 @@ export struct PairingItem {
     detail: string,
     choices: [PairingChoice],
 }
+
+// 「云端存档」里的一款：云端落点 + 有几版。
+//
+// ⚠ 这里**没有名字**：名字在身份卡里，而读一次身份卡（kopia 那边）就是一次
+// `restore`，这一块刻意不读它。所以列表上写的就是云端落点。
+export struct CloudSaveItem {
+    key: string,
+    // 有几版。既用来决定「看版本」能不能按,也是下面那行文案的来源。
+    versions: int,
+    // 「3 版」/「还没有存档」—— 措辞在 Rust 里定（见 `CloudSaveRow::versions_label`）。
+    versions-label: string,
+}
+
+// 「云端存档」里的一个版本。
+export struct CloudVersionItem {
+    /// 给人看的一行（本机时区，见 `describe_stamp`）。
+    label: string,
+    /// 原始版本名 —— 与 CLI/桶里看到的逐字一致，删与下载也是按它认人。
+    name: string,
+}

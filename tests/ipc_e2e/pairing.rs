@@ -113,6 +113,26 @@ fn a_second_machine_pairs_by_fingerprint_and_follows_the_same_directory() {
         "B 的版本要与 A 的放在一起"
     );
     assert!(!remote.join("games/renamed").exists(), "不该另立一个目录");
+
+    // 版本列表要按**云端落点**问（`sync.cloud_versions`）：这一款在本机的 id 是
+    // `renamed`，而两个包都在 `original-name` 里 —— 这也正是"云端有、本机没有"的
+    // 那类游戏唯一能列出版本的路（它们连本机 id 都没有）。
+    let versions = machine_b.rpc("sync.cloud_versions", json!({ "key": "original-name" }));
+    assert_eq!(
+        versions["result"]["versions"].as_array().unwrap().len(),
+        2,
+        "{versions}"
+    );
+
+    // ⚠ 老的 `sync.versions` 收的是**本机 id**，在这台机器上会列到空目录里去。这不是
+    // 意外，正是新 RPC 存在的理由（界面一律走上面那一条）；留着这条断言，是为了下次
+    // 有人"顺手把两个统一一下"时立刻看见差异。
+    let by_id = machine_b.rpc("sync.versions", json!({ "id": "renamed" }));
+    assert_eq!(
+        by_id["result"]["versions"].as_array().unwrap().len(),
+        0,
+        "{by_id}"
+    );
 }
 
 /// exe 换了（就地打了补丁、换了版本）：指纹跟着换，**云端身份一个字不动**；换过之后

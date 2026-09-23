@@ -45,6 +45,8 @@ fn ui() -> Ui {
         games,
         saves,
         pairing: Rc::new(VecModel::default()),
+        cloud_rows: Rc::new(VecModel::default()),
+        cloud_versions: Rc::new(VecModel::default()),
         process_rows,
         saves_built: Vec::new(),
         saves_seed: 0,
@@ -291,19 +293,75 @@ fn library_and_sync_pages_render_without_a_display() {
     ui.app.pairing_msg = Some("云端 2 条身份，其中 1 条按 exe 指纹自动绑上了。".into());
     render(&mut ui);
 
-    // 每一段都不能比窗口宽:输入框的 min-width 一旦等于 preferred-width,整页会被撑出去
-    // (卡片被切、说明文字挤成一列竖字,见 UI_GUIDE §7.14)。凭据组是这一页最宽的一行
-    // (说明 + 输入框 + 最多三个按钮),所以每个状态都量一次它。
-    // ⚠ 这条只能在整页测试里做:测试后端才拿得到元素几何。
-    let sync_states = ["SyncCredentialsGroup", "SyncPairingSection", "CardRow"];
+    // 「云端存档」那一块:还没刷 → 列出来了(一款展开着看每一版)→ 空云 → 报错。
+    // ⚠ 这一块的状态也在一个 Slint 全局里(照配对表),所以要把它那两份模型指到 `Ui`
+    // 持有的这两份上 —— 否则 `push_model` 写的那一份窗口根本看不见,量出来是空树。
+    ui.window
+        .global::<CloudSavesBoard>()
+        .set_rows(ui.cloud_rows.clone().into());
+    ui.window
+        .global::<CloudSavesBoard>()
+        .set_versions(ui.cloud_versions.clone().into());
 
     // ⚠ `ElementHandle` 只看得见**没被裁掉**的部分(`ItemRc::is_visible` 判的是裁剪矩形):
-    // 740 高的窗口里凭据组刚好在折线以下,所以量之前先把窗口撑高 —— 否则查询会静默返回空,
-    // 断言等于没写(这一点踩过一次)。
+    // 740 高的窗口里凭据组刚好在折线以下,而「云端存档」还在它下面 —— 所以量之前先把窗口
+    // 撑高,否则查询会静默返回空,断言等于没写(这一点踩过一次)。
     ui.window
         .window()
         .set_size(slint::LogicalSize::new(1120.0, 2600.0));
     render(&mut ui);
+    fits(&ui, &["SyncCloudSavesSection"]);
+
+    ui.app.cloud = CloudBoard {
+        rows: vec![
+            CloudSaveRow {
+                key: "demo".into(),
+                versions: 2,
+            },
+            // 云端有、本机没有的那种:名字就是云端落点,而且会长得很难看 —— 正是
+            // 要看它会不会把页面撑出去。
+            CloudSaveRow {
+                key: "only-on-the-other-machine-with-a-very-long-name".into(),
+                versions: 0,
+            },
+        ],
+        scanned: true,
+        msg: Some("云端 2 款游戏，共 2 版存档。点一款看它每一版。".into()),
+        open: Some("demo".into()),
+        versions: vec![
+            "20260910T090000Z".into(),
+            "20260911T101500123Z-1a2b3c4d".into(),
+        ],
+        ..CloudBoard::default()
+    };
+    render(&mut ui);
+    // 最宽的形态:一行长名字 + 展开着两个版本(人话时间 + 原始版本名)。
+    fits(&ui, &["SyncCloudSavesSection"]);
+
+    // 展开着但版本还在路上 / 云端一款都没有 / 列失败:三种都不许画成半截。
+    ui.app.cloud.versions_loading = true;
+    render(&mut ui);
+    ui.app.cloud.versions_loading = false;
+    ui.app.cloud = CloudBoard {
+        scanned: true,
+        msg: Some("云端还没有游戏。".into()),
+        ..CloudBoard::default()
+    };
+    render(&mut ui);
+    ui.app.cloud.ok = false;
+    ui.app.cloud.msg = Some("列云端失败: 连不上桶".into());
+    render(&mut ui);
+
+    // 每一段都不能比窗口宽:输入框的 min-width 一旦等于 preferred-width,整页会被撑出去
+    // (卡片被切、说明文字挤成一列竖字,见 UI_GUIDE §7.14)。凭据组是这一页最宽的一行
+    // (说明 + 输入框 + 最多三个按钮),所以每个状态都量一次它。
+    // ⚠ 这条只能在整页测试里做:测试后端才拿得到元素几何。
+    let sync_states = [
+        "SyncCredentialsGroup",
+        "SyncPairingSection",
+        "SyncCloudSavesSection",
+        "CardRow",
+    ];
 
     ui.app.sync_status = Some(SyncStatus {
         store_kind: "encrypted-file".into(),

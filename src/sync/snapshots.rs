@@ -103,6 +103,36 @@ pub fn is_snapshot(name: &str) -> bool {
             && rest[1..].chars().all(|c| c.is_ascii_alphanumeric()))
 }
 
+/// 版本名是**哪一刻**（UTC）。不认得的名字返回 `None`。
+///
+/// 名字本身是机器认得的那一份（见 [`version_stamp`]），这个函数是给人看的那一份的第一
+/// 步：解析。时区换算与措辞留给 [`describe_stamp`] 和界面 —— 解析必须与机器无关，
+/// 它才测得住。
+///
+/// 秒精度与毫秒精度都取秒（毫秒是"同一秒里的两次上传别撞车"，不是给人看的）。
+pub fn stamp_time(name: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if !is_snapshot(name) {
+        return None;
+    }
+    // 随机后缀前面就是时间戳；`%Y%m%dT%H%M%S` 正好 15 个字符，两种精度都够。
+    let seconds = name.split('-').next()?.get(..15)?;
+    chrono::NaiveDateTime::parse_from_str(seconds, "%Y%m%dT%H%M%S")
+        .ok()
+        .map(|naive| naive.and_utc())
+}
+
+/// 版本名 → 给人看的一行，按**本机时区**（用户对着自己的存档时间比，UTC 会平白差
+/// 八小时）。认不出的名字原样返回 —— 显示这一层不许悄悄吞掉东西。
+pub fn describe_stamp(name: &str) -> String {
+    match stamp_time(name) {
+        Some(time) => time
+            .with_timezone(&chrono::Local)
+            .format("%Y-%m-%d %H:%M")
+            .to_string(),
+        None => name.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,5 +253,36 @@ mod tests {
                 .with_timezone(&chrono::Utc),
         );
         assert!(first < later && second < later, "{later}");
+    }
+
+    #[test]
+    fn a_stamp_turns_into_the_moment_it_names() {
+        let at = |name: &str| stamp_time(name).map(|time| time.to_rfc3339());
+
+        // 统一到 UTC 再说，所以断言与跑测试的机器的时区无关。
+        assert_eq!(at("20260911T101500Z").unwrap(), "2026-09-11T10:15:00+00:00");
+        // 毫秒精度取到秒（毫秒只是"同一秒里别撞车"）。
+        assert_eq!(
+            at("20260911T101500123Z").unwrap(),
+            "2026-09-11T10:15:00+00:00"
+        );
+        // 随机后缀不参与时间。
+        assert_eq!(
+            at("20260911T101500Z-1a2b3c4d").unwrap(),
+            "2026-09-11T10:15:00+00:00"
+        );
+        // 不认得的名字一个字都不编：`None`，不是"现在"。
+        for bad in ["", "not-a-stamp", "20260911T101500"] {
+            assert!(at(bad).is_none(), "{bad}");
+        }
+        // 这一条与 `is_snapshot` 用的是同一个判据，所以"名字里有 25 点"这种
+        // 形状对但时间不存在的，也得老实返回 None 而不是编一刻出来。
+        assert!(at("20260911T256199Z").is_none(), "小时/分钟越界");
+
+        // 显示层：认得的给本机时区的 "YYYY-MM-DD HH:MM"，认不出的原样回。
+        let shown = describe_stamp("20260911T101500Z");
+        assert_eq!(shown.len(), 16, "{shown}");
+        assert!(shown.starts_with("2026-09-1"), "{shown}");
+        assert_eq!(describe_stamp("not-a-stamp"), "not-a-stamp");
     }
 }

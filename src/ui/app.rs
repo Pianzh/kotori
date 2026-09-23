@@ -6,6 +6,8 @@ use super::*;
 pub struct App {
     pub(super) tab: Tab,
     pub(super) games: Vec<UiGame>,
+    /// 「云端存档」那一块（云端有哪几款、每款几版、点开的那一款有哪几版）。
+    pub(super) cloud: CloudBoard,
     /// 配对表（`sync.pairing` 扫出来的），以及这一块的几句话。
     pub(super) pairing: Vec<PairingRow>,
     pub(super) pairing_scanned: bool,
@@ -108,6 +110,7 @@ impl App {
             Self {
                 tab: Tab::Games,
                 games: Vec::new(),
+                cloud: CloudBoard::default(),
                 pairing: Vec::new(),
                 pairing_scanned: false,
                 scanning: false,
