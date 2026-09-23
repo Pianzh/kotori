@@ -38,6 +38,7 @@ use super::super::archive::{self, Manifest, PackReport};
 use super::super::cloud::{CloudGame, PackIdentity};
 use super::super::save_targets::SaveTarget;
 use super::kopia_args as args;
+use super::kopia_parse as parse;
 
 /// 默认仓库密码。**所有端一致**，这样双系统/多机互通，而且"自己下载 kopia
 /// 读"的人知道该试什么。用户可以在设置页自己设一个更强的。
@@ -305,7 +306,7 @@ impl Kopia {
         let listed = self
             .run(&args::snapshot_list_args("kotori-check"), COMMAND_TIMEOUT)
             .await?;
-        args::parse_snapshots(&listed).map_err(SyncError::Command)?;
+        parse::parse_snapshots(&listed).map_err(SyncError::Command)?;
         Ok(match self.local_repository() {
             Some(path) => format!("本地仓库 {}", path.display()),
             None => format!(
@@ -316,22 +317,37 @@ impl Kopia {
         })
     }
 
-    async fn snapshots(&self, game_id: &str) -> Result<Vec<args::Snapshot>, SyncError> {
+    async fn snapshots(&self, game_id: &str) -> Result<Vec<parse::Snapshot>, SyncError> {
         self.ensure_connected().await?;
         let listed = self
             .run(&args::snapshot_list_args(game_id), COMMAND_TIMEOUT)
             .await?;
-        args::parse_snapshots(&listed).map_err(SyncError::Command)
+        parse::parse_snapshots(&listed).map_err(SyncError::Command)
     }
 
     /// 我们自己的版本名，最旧在前。
     pub(super) async fn versions(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
         Ok(self
-            .snapshots(game_id)
+            .version_infos(game_id)
             .await?
             .into_iter()
-            .map(|snapshot| snapshot.description)
+            .map(|version| version.name)
             .collect())
+    }
+
+    /// 这一款在云端的每一版：名字 + 多大 + 什么时候（最旧在前）。
+    ///
+    /// 与"列名字"是同一次 `snapshot list`（`startTime` 与 `stats.totalSize` 本来就在
+    /// 那份 JSON 里），所以多带这两栏不多花一次调用。
+    pub(super) async fn version_infos(
+        &self,
+        game_id: &str,
+    ) -> Result<Vec<crate::sync::VersionInfo>, SyncError> {
+        self.ensure_connected().await?;
+        let listed = self
+            .run(&args::snapshot_list_args(game_id), COMMAND_TIMEOUT)
+            .await?;
+        parse::parse_version_infos(&listed).map_err(SyncError::Command)
     }
 
     /// 云端有哪几款游戏：把仓库里所有我们自己的快照按 `game:` 标签归堆。
@@ -344,7 +360,7 @@ impl Kopia {
         let listed = self
             .run(&args::snapshot_list_all_args(), COMMAND_TIMEOUT)
             .await?;
-        args::parse_cloud_games(&listed).map_err(SyncError::Command)
+        parse::parse_cloud_games(&listed).map_err(SyncError::Command)
     }
 
     pub(super) async fn send(

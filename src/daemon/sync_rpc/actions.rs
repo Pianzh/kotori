@@ -168,7 +168,7 @@ impl Daemon {
         let settings = self.config.read().await.sync.clone();
         let runner = self.sync_runner(&settings)?;
         // 与「刷新云端清单」同样的理由给一个上限：点开一款是一次网络往返，用户盯着等。
-        let versions = tokio::time::timeout(CHECK_TIMEOUT, runner.packages(cloud_key))
+        let versions = tokio::time::timeout(CHECK_TIMEOUT, runner.version_infos(cloud_key))
             .await
             .map_err(|_| {
                 format!(
@@ -177,6 +177,7 @@ impl Daemon {
                 )
             })?
             .map_err(|e| e.to_string())?;
+        // 一版三栏：名字（认人）、多大、什么时候 —— 界面直接用，不必再自己算。
         Ok(json!({ "versions": versions }))
     }
 

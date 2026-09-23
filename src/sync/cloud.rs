@@ -23,6 +23,12 @@ pub struct CloudGame {
     pub id: String,
     /// 有几版存档。kopia 那条**身份快照**不算版本，rclone 的身份卡也不是包。
     pub versions: usize,
+    /// 最近一版的版本名（一版都没有时是 `None`）。
+    #[serde(default)]
+    pub latest: Option<String>,
+    /// 最近一版多大（字节）。引擎拿不到就是 0 —— 界面上如实显示"不知道"，不编。
+    #[serde(default)]
+    pub size: u64,
 }
 
 /// 身份卡的文件名：rclone 那边就摆在 `games/<目录>/` 里，与包并排。

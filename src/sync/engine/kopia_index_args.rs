@@ -6,11 +6,11 @@
 
 use std::collections::BTreeMap;
 
-use super::kopia_args::Snapshot;
+use super::kopia_parse::Snapshot;
 use crate::sync::cloud::KIND_INDEX;
 
 /// 索引快照的 description：**一句固定的话**，绝不能长得像版本名（否则会被
-/// `kopia_args::parse_snapshots` 当成一版存档）。
+/// `kopia_parse::parse_snapshots` 当成一版存档）。
 pub(super) const INDEX_DESCRIPTION: &str = "kotori-index";
 
 /// 拍一条**索引快照**：源目录里只有那份 `kotori-index.json`。

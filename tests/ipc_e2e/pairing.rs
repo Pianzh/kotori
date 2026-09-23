@@ -127,10 +127,17 @@ fn a_second_machine_pairs_by_fingerprint_and_follows_the_same_directory() {
     // `renamed`，而两个包都在 `original-name` 里 —— 这也正是"云端有、本机没有"的
     // 那类游戏唯一能列出版本的路（它们连本机 id 都没有）。
     let versions = machine_b.rpc("sync.cloud_versions", json!({ "key": "original-name" }));
-    assert_eq!(
-        versions["result"]["versions"].as_array().unwrap().len(),
-        2,
-        "{versions}"
+    let list = versions["result"]["versions"].as_array().unwrap();
+    assert_eq!(list.len(), 2, "{versions}");
+    // 每一版都带着"多大、什么时候"（rclone 那边是 `lsjson` 一次给的，不多跑一趟）。
+    assert!(list[0]["name"].is_string(), "{versions}");
+    assert!(
+        list[0]["size"].as_u64().unwrap_or(0) > 0,
+        "该有大小: {versions}"
+    );
+    assert!(
+        list[0]["time"].as_str().unwrap_or_default().ends_with('Z'),
+        "该有时间: {versions}"
     );
 
     // ⚠ 老的 `sync.versions` 收的是**本机 id**，在这台机器上会列到空目录里去。这不是

@@ -41,6 +41,17 @@ pub fn list_files_args(remote: &str) -> Vec<String> {
 ///
 /// 与 `copyto` 对称：`copyto` 把本地文件推上去，`cat` 把它读成 stdout。两者都只用于
 /// 我们自己写的小 json —— 包（zip）走 `copyto`/`copyto` 那一对。
+/// 列一个目录里的文件，**带大小**（`lsjson` 给 JSON，`lsf` 只给名字）。
+///
+/// `--files-only` 与 `lsf` 那条路同一层意思：这个目录里只该有文件（一版一个包）。
+pub fn list_json_args(remote: &str) -> Vec<String> {
+    vec![
+        "lsjson".to_string(),
+        "--files-only".to_string(),
+        remote.to_string(),
+    ]
+}
+
 pub fn cat_args(remote: &str) -> Vec<String> {
     vec!["cat".to_string(), remote.to_string()]
 }

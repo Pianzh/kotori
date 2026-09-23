@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use super::{CHECK_TIMEOUT, Daemon, Runner};
-use crate::sync::cloud::GameIdentity;
+use crate::sync::cloud::{CloudGame, GameIdentity};
 use crate::sync::index::{CloudIndex, IndexGame};
 
 impl Daemon {
@@ -96,13 +96,13 @@ impl Daemon {
     /// 顺带把每款的版本数问出来（rclone 是每款列一次目录、kopia 一次列全部）——
     /// 这条路本来就是"慢路"，多这一下不改变什么。
     pub(super) async fn rebuild_index(&self, runner: &Runner, cards: &[(String, GameIdentity)]) {
-        let counts: HashMap<String, usize> = match runner.cloud_games().await {
+        let summaries: HashMap<String, CloudGame> = match runner.cloud_games().await {
             Ok(games) => games
                 .into_iter()
-                .map(|game| (game.id, game.versions))
+                .map(|game| (game.id.clone(), game))
                 .collect(),
             Err(error) => {
-                tracing::warn!("索引重建: 列版本数失败（先记 0）: {error}");
+                tracing::warn!("索引重建: 列版本摘要失败（先记 0）: {error}");
                 HashMap::new()
             }
         };
@@ -110,7 +110,9 @@ impl Daemon {
             .iter()
             .map(|(key, identity)| {
                 let mut game = IndexGame::from_identity(key, identity.clone());
-                game.versions = counts.get(key).copied().unwrap_or(0);
+                if let Some(summary) = summaries.get(key) {
+                    game.set_summary(summary.versions, summary.latest.clone(), summary.size);
+                }
                 game
             })
             .collect();

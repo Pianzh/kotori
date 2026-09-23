@@ -13,6 +13,7 @@ use super::super::SyncError;
 use super::super::cloud::{self, GameIdentity};
 use super::kopia::{COMMAND_TIMEOUT, Kopia};
 use super::kopia_args as args;
+use super::kopia_parse as parse;
 
 impl Kopia {
     // ── 身份卡 ──────────────────────────────────────────────────────────────
@@ -59,7 +60,7 @@ impl Kopia {
         let listed = self
             .run(&args::snapshot_list_args(cloud_id), COMMAND_TIMEOUT)
             .await?;
-        let snapshots = args::identity_snapshots(&listed).map_err(SyncError::Command)?;
+        let snapshots = parse::identity_snapshots(&listed).map_err(SyncError::Command)?;
         let Some((_, snapshot_id)) = snapshots.into_iter().find(|(id, _)| id == cloud_id) else {
             return Ok(None);
         };
@@ -78,7 +79,7 @@ impl Kopia {
         let listed = self
             .run(&args::snapshot_list_all_args(), COMMAND_TIMEOUT)
             .await?;
-        let wanted = args::identity_snapshots(&listed).map_err(SyncError::Command)?;
+        let wanted = parse::identity_snapshots(&listed).map_err(SyncError::Command)?;
 
         let mut identities = Vec::new();
         for (cloud_id, snapshot_id) in wanted {

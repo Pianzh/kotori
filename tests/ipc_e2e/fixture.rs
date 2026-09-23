@@ -160,6 +160,30 @@ case "$cmd" in
       fi
     fi
     ;;
+  # `lsjson --files-only <dir>`：与 lsf 同一件事，但每条带 Size（界面上"这一版多大"）。
+  lsjson)
+    target=''
+    for a in "$@"; do
+      case "$a" in
+        --files-only) ;;
+        *) target="$a" ;;
+      esac
+    done
+    p="$(remote_path "$target")"
+    printf '['
+    first=1
+    if [ -d "$p" ]; then
+      for f in "$p"/*; do
+        [ -f "$f" ] || continue
+        n=${{f##*/}}
+        s=$(wc -c < "$f")
+        [ $first -eq 1 ] || printf ','
+        first=0
+        printf '{{"Path":"%s","Name":"%s","Size":%s,"IsDir":false}}' "$n" "$n" "$s"
+      done
+    fi
+    printf ']'
+    ;;
   # `cat <remote>`：读回一个对象（身份卡就是这么读的）。
   cat) cat "$(remote_path "$1")" ;;
   deletefile) rm -f "$(remote_path "$1")" ;;

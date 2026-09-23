@@ -20,10 +20,11 @@ use super::super::archive::{self, Manifest, PackReport};
 use super::super::cloud::{self, CloudGame, GameIdentity, PackIdentity};
 use super::super::index::{CloudIndex, INDEX_FILE, IndexBundle};
 use super::super::save_targets::SaveTarget;
+use super::super::versions::{VersionInfo, parse_json_versions};
 use super::super::{
     SyncError, cat_args, copyto_args, deletefile_args, game_remote, index_delta_path,
-    index_log_path, index_main_path, list_dirs_args, list_files_args, package_remote,
-    parse_packages, rclone_env, remote_root,
+    index_log_path, index_main_path, list_dirs_args, list_files_args, list_json_args,
+    package_remote, rclone_env, remote_root,
 };
 use super::diagnostics::explain_failure;
 
@@ -136,10 +137,22 @@ impl RcloneZip {
 
     /// 这个游戏在云端有哪些版本，最旧在前。
     pub(super) async fn versions(&self, game_id: &str) -> Result<Vec<String>, SyncError> {
+        Ok(self
+            .version_infos(game_id)
+            .await?
+            .into_iter()
+            .map(|version| version.name)
+            .collect())
+    }
+
+    /// 这个游戏在云端的每一版：名字 + 多大 + 什么时候（最旧在前）。
+    ///
+    /// `lsjson` 比 `lsf` 多带一个 `Size` —— 界面上的"这一版多大"就靠它，而调用次数
+    /// 与列名字**一模一样**（都是一次目录列举）。
+    pub(super) async fn version_infos(&self, game_id: &str) -> Result<Vec<VersionInfo>, SyncError> {
         let remote = game_remote(&self.settings, game_id);
-        let output = self.run(&list_files_args(&remote), COMMAND_TIMEOUT).await?;
-        // 只报名字长得像我们自己的包的那些。
-        Ok(parse_packages(&output))
+        let output = self.run(&list_json_args(&remote), COMMAND_TIMEOUT).await?;
+        parse_json_versions(&output).map_err(SyncError::Command)
     }
 
     /// 云端有哪几款游戏（`games/` 那一层有哪些目录）。
@@ -157,8 +170,14 @@ impl RcloneZip {
 
         let mut games = Vec::new();
         for id in cloud::parse_dirs(&listed) {
-            let versions = self.versions(&id).await?.len();
-            games.push(CloudGame { id, versions });
+            // 一次列举就把"有几版 / 最近一版叫什么、多大"都拿全（`lsjson` 带 Size）。
+            let versions = self.version_infos(&id).await?;
+            games.push(CloudGame {
+                id,
+                versions: versions.len(),
+                latest: versions.last().map(|version| version.name.clone()),
+                size: versions.last().map(|version| version.size).unwrap_or(0),
+            });
         }
         Ok(games)
     }

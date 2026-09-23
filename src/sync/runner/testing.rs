@@ -61,6 +61,30 @@ case "$1" in
     target="$bucket/$(resolve "$3")"
     [ -d "$target" ] && ls -1 "$target"
     ;;
+  # `lsjson --files-only <dir>`：与 lsf 同一件事，但每条带 Size（界面上"这一版多大"）。
+  lsjson)
+    target=''
+    for a in "$@"; do
+      case "$a" in
+        --files-only) ;;
+        *) target="$a" ;;
+      esac
+    done
+    p="$bucket/$(resolve "$target")"
+    printf '['
+    first=1
+    if [ -d "$p" ]; then
+      for f in "$p"/*; do
+        [ -f "$f" ] || continue
+        n=${{f##*/}}
+        s=$(wc -c < "$f")
+        [ $first -eq 1 ] || printf ','
+        first=0
+        printf '{{"Path":"%s","Name":"%s","Size":%s,"IsDir":false}}' "$n" "$n" "$s"
+      done
+    fi
+    printf ']'
+    ;;
   # 读回一个对象:身份卡就是这么读的。
   cat) cat "$bucket/$(resolve "$2")" ;;
   deletefile)

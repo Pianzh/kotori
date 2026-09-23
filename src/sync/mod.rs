@@ -56,6 +56,7 @@ pub mod pairing;
 pub mod runner;
 pub mod selfcheck;
 pub mod signature;
+pub mod versions;
 
 /// Suffix of a version package in the bucket.
 pub const PACKAGE_SUFFIX: &str = ".zip";
@@ -79,6 +80,7 @@ mod validate;
 // 对外只做转发：这些名字原来就定义在 `sync` 下，`crate::sync::X` 这个路径
 // （daemon、UI、tests/ipc_e2e.rs 都在用）必须一字不变。
 pub use executables::{find_kopia, find_rclone, misconfigured};
+pub use rclone_args::list_json_args;
 pub use rclone_args::{cat_args, copyto_args, deletefile_args, list_dirs_args, list_files_args};
 pub use rclone_env::rclone_env;
 pub use remote_paths::{
@@ -86,5 +88,6 @@ pub use remote_paths::{
     save_key,
 };
 pub use save_targets::{SaveTarget, targets};
-pub use snapshots::{describe_stamp, is_snapshot, parse_packages, prune_plan, version_stamp};
+pub use snapshots::{describe_stamp, is_snapshot, prune_plan, version_stamp};
 pub use validate::{validate, validate_endpoint, validate_secrets};
+pub use versions::VersionInfo;

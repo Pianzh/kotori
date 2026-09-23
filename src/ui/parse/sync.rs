@@ -263,9 +263,18 @@ pub(in crate::ui) fn parse_cloud_versions(value: &Value) -> Result<Vec<String>, 
         .get("versions")
         .and_then(Value::as_array)
         .ok_or_else(|| "回包里没有 versions".to_string())?;
+    // 每一版是一个对象（名字 + 大小 + 时间）。老的"只有名字"的形状也收着认 —— 界面上
+    // 少显示一栏，总比整块报错强。
     Ok(versions
         .iter()
-        .map(|version| version.as_str().unwrap_or_default().to_string())
+        .map(|version| match version {
+            Value::String(name) => name.clone(),
+            other => other
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+        })
         .collect())
 }
 
@@ -325,11 +334,17 @@ mod tests {
         assert!(parse_cloud_games(&serde_json::json!({})).is_err());
 
         let versions = serde_json::json!({
-            "versions": ["20260910T090000Z", "20260911T101500123Z-1a2b3c4d"],
+            "versions": [
+                { "name": "20260910T090000Z", "size": 128, "time": "2026-09-10T09:00:00Z" },
+                { "name": "20260911T101500123Z-1a2b3c4d", "size": 4096, "time": "2026-09-11T10:15:00Z" },
+            ],
         });
         let versions = parse_cloud_versions(&versions).unwrap();
         assert_eq!(versions.len(), 2);
         assert!(versions[0] < versions[1], "最旧在前");
+        // 只有名字的老形状也认（少一栏，不是报错）。
+        let bare = serde_json::json!({ "versions": ["20260910T090000Z"] });
+        assert_eq!(parse_cloud_versions(&bare).unwrap().len(), 1);
         // 空的版本列表与"没问成"必须分得开：一个是 `[]`，一个是错。
         assert!(
             parse_cloud_versions(&serde_json::json!({ "versions": [] }))

@@ -36,6 +36,7 @@ mod kopia_args;
 mod kopia_identity;
 mod kopia_index;
 mod kopia_index_args;
+mod kopia_parse;
 mod rclone;
 #[cfg(test)]
 mod tests;
@@ -92,6 +93,17 @@ impl Backend {
         match &self.inner {
             Inner::Rclone(engine) => engine.versions(game_id).await,
             Inner::Kopia(engine) => engine.versions(game_id).await,
+        }
+    }
+
+    /// 一个游戏在云端的每一版：名字 + 多大 + 什么时候（界面上的"点开看每一版"）。
+    pub async fn version_infos(
+        &self,
+        game_id: &str,
+    ) -> Result<Vec<crate::sync::VersionInfo>, SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.version_infos(game_id).await,
+            Inner::Kopia(engine) => engine.version_infos(game_id).await,
         }
     }
 

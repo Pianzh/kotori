@@ -27,23 +27,6 @@ pub fn version_stamp(now: chrono::DateTime<chrono::Utc>) -> String {
     format!("{}-{unique}", now.format("%Y%m%dT%H%M%S%3fZ"))
 }
 
-/// Parse `rclone lsf --files-only` output into the stamps of our own packages.
-///
-/// Anything that is not one of our package names is dropped here, which is what
-/// makes the rest of the module safe: the list this produces is the *only* thing
-/// pruning is ever allowed to consider.
-pub fn parse_packages(output: &str) -> Vec<String> {
-    let mut stamps: Vec<String> = output
-        .lines()
-        .map(str::trim)
-        .filter_map(|line| line.strip_suffix(super::PACKAGE_SUFFIX))
-        .filter(|stamp| is_snapshot(stamp))
-        .map(str::to_string)
-        .collect();
-    stamps.sort();
-    stamps
-}
-
 /// Which version packages should be removed to honour the sliding window.
 ///
 /// `keep_versions == 0` means "keep everything" and always returns empty — the
@@ -136,22 +119,6 @@ pub fn describe_stamp(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parses_package_listings_and_ignores_everything_else() {
-        let output = "20260911T101500Z-1a2b3c4d.zip\n20260910T090000Z.zip\n\n\
-                      notes.txt\n20260909T000000Z.zip\n";
-        assert_eq!(
-            parse_packages(output),
-            vec![
-                "20260909T000000Z".to_string(),
-                "20260910T090000Z".to_string(),
-                "20260911T101500Z-1a2b3c4d".to_string()
-            ],
-            "names are sorted and stripped of .zip; foreign objects are dropped"
-        );
-        assert!(parse_packages("").is_empty());
-    }
 
     #[test]
     fn retention_keeps_everything_by_default() {

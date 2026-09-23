@@ -275,7 +275,9 @@ async fn a_real_kopia_repository_is_visible_from_another_machine() {
         b.cloud_games().await.unwrap(),
         vec![CloudGame {
             id: "demo".to_string(),
-            versions: 1
+            versions: 1,
+            latest: Some("20260916T120000000Z-abcd1234".to_string()),
+            size: 0,
         }],
         "也要说得清云端有哪几款、各有几版"
     );

@@ -152,6 +152,16 @@ impl Runner {
         self.backend.versions(cloud_key).await
     }
 
+    /// 一个游戏在云端的每一版（名字 / 大小 / 时间），最旧在前。
+    ///
+    /// ⚠ 参数是**云端落点**（`cloud_key`），不是本机 id —— 与 [`Self::packages`] 同一条规矩。
+    pub async fn version_infos(
+        &self,
+        cloud_key: &str,
+    ) -> Result<Vec<crate::sync::VersionInfo>, SyncError> {
+        self.backend.version_infos(cloud_key).await
+    }
+
     /// 云端索引现在的样子（合并快照 + 未合并增量的并集）；`None` = 桶里还没建过。
     ///
     /// ⚠ 这一条**不读身份卡**：一个桶一份索引就是为了把"列云端"从 N 次 restore 变成
