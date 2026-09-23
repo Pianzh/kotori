@@ -53,6 +53,8 @@ pub mod executables;
 pub mod fingerprint;
 pub mod pairing;
 pub mod runner;
+pub mod selfcheck;
+pub mod signature;
 
 /// Suffix of a version package in the bucket.
 pub const PACKAGE_SUFFIX: &str = ".zip";

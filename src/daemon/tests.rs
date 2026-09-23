@@ -164,6 +164,7 @@ async fn game_list_exposes_the_full_scale_profile() {
             cloud_dir: None,
             cloud_rejected: Vec::new(),
             sync_enabled: true,
+            cloud_conclusion: None,
             name: "demo".into(),
             game_dir: "/games/demo".into(),
             exe_path: "/games/demo/game.exe".into(),
@@ -203,6 +204,7 @@ async fn games_are_sorted_by_name() {
                 cloud_dir: None,
                 cloud_rejected: Vec::new(),
                 sync_enabled: true,
+                cloud_conclusion: None,
                 name: name.into(),
                 game_dir: "/g".into(),
                 exe_path: "/g/game.exe".into(),
@@ -249,6 +251,7 @@ async fn games_with_the_same_name_still_have_one_order() {
                 cloud_dir: None,
                 cloud_rejected: Vec::new(),
                 sync_enabled: true,
+                cloud_conclusion: None,
                 name: "同名".into(),
                 game_dir: "/g".into(),
                 exe_path: "/g/game.exe".into(),
@@ -328,13 +331,16 @@ async fn status_on_unknown_session_lists_nothing_new() {
 ///     客户端直接写它等于绕过那条路。
 #[test]
 fn every_game_config_key_is_either_patchable_or_a_known_exception() {
-    const EXCEPTIONS: [&str; 6] = [
+    const EXCEPTIONS: [&str; 7] = [
         "created_at",
         "scale_profile",
         "cloud_id",
         "cloud_dir",
         "cloud_rejected",
         "exe_fingerprint",
+        // 「配对结论」不是界面直接编辑的：它由启动前自检/`sync.resolve` 写
+        // （`ok:<目标签名>` / `off:<目标签名>`，见 `sync::signature`）。
+        "cloud_conclusion",
     ];
     /// config 与 patch 里名字不一样的那几个：`(config 里的, patch 里的)`。
     const RENAMED: [(&str, &str); 1] = [("scale_profile", "profile")];
@@ -345,6 +351,7 @@ fn every_game_config_key_is_either_patchable_or_a_known_exception() {
         cloud_dir: None,
         cloud_rejected: Vec::new(),
         sync_enabled: true,
+        cloud_conclusion: None,
         name: "x".into(),
         game_dir: "/g".into(),
         exe_path: "/g/x.exe".into(),

@@ -217,9 +217,18 @@ fn a_mismatched_identity_stops_both_pull_and_restore() {
     let cloud_id = field(&original, "cloud_id").unwrap();
 
     // 把本机的身份换成另一个（模拟"云端那一版其实是别的一款"）。
+    //
+    // ⚠ 指纹也要一起改：启动前的自检（`sync::selfcheck`）会按指纹把身份**认回来**，
+    // 所以"身份对不上"这条场景只有在**指纹也对不上**时才成立 —— 那正是换了一款游戏、
+    // 而云端那条其实是别人的样子。
     std::fs::write(
         fixture.config.clone(),
-        original.replace(&cloud_id, "11111111-2222-3333-4444-555555555555"),
+        original
+            .replace(&cloud_id, "11111111-2222-3333-4444-555555555555")
+            .replace(
+                &field(&original, "exe_fingerprint").unwrap(),
+                "v1:1:0000000000000000000000000000000000000000000000000000000000000000",
+            ),
     )
     .unwrap();
     assert_eq!(

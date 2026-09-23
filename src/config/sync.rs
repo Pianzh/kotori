@@ -35,6 +35,15 @@ impl SyncEngine {
             SyncEngine::Kopia => "kopia",
         }
     }
+
+    /// 稳定的机器名，进的是**目标签名**（[`crate::sync::signature`]）—— 所以它与
+    /// [`SyncEngine::label`] 分开：`label` 是给人看的，改它不该让所有人的配对结论失效。
+    pub fn slug(self) -> &'static str {
+        match self {
+            SyncEngine::Rclone => "rclone",
+            SyncEngine::Kopia => "kopia",
+        }
+    }
 }
 
 /// Cloud save sync settings.

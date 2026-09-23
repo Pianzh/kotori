@@ -123,6 +123,7 @@ impl Daemon {
                     cloud_dir: None,
                     cloud_rejected: Vec::new(),
                     sync_enabled: true,
+                    cloud_conclusion: None,
                     name: name.clone(),
                     game_dir: game_dir.clone(),
                     exe_path: new_game.exe_path.clone(),
@@ -247,7 +248,7 @@ impl Daemon {
         .await
     }
 
-    pub(super) async fn rpc_game_launch(&self, id: &str) -> Result<Value, String> {
+    pub(super) async fn rpc_game_launch(&self, id: &str, selfcheck: bool) -> Result<Value, String> {
         let (game, wine_prefix, prefix_source) = {
             let config = self.config.read().await;
             let Some(game) = config.games.get(id).cloned() else {
@@ -258,6 +259,26 @@ impl Daemon {
         };
 
         let game_dir = game.effective_game_dir();
+
+        // 云同步自检（用户 2026-09-22："云同步（打开游戏）前必须自检"）。整条路上
+        // **只有一种情况会打断用户**：未定、指纹又认不出来 —— 那时**先不起游戏**，
+        // 请界面问一次（`sync.resolve`），问完再调一次本方法。其余结论（跳过 /
+        // 已确认 / 静默认领 / 直接新建）都在这里落盘，然后照旧往下走。
+        // ⚠ "问一次"要客户端**先声明它答得上来**（`selfcheck: true`）：界面还没接那一
+        // 问之前，这条路上返回"要决定"就等于让用户点不动「启动」—— 一个真回归。其余
+        // 结论（静默认领 / 已确认 / 跳过）不需要界面配合，一律照做。
+        let decision = self.sync_selfcheck(id).await;
+        if decision == crate::sync::selfcheck::Decision::Ask {
+            if selfcheck {
+                tracing::info!("{id}: 启动前要问一次配对（指纹认不出云端那一条）");
+                return Ok(json!({ "needs_sync_decision": true }));
+            }
+            tracing::debug!("{id}: 认不出云端那一条，但客户端答不了这一问 —— 照旧启动");
+        }
+        if let Err(error) = self.apply_decision(id, &decision).await {
+            // 自检的结论写不下**绝不能**拦住启动：用户要的是玩游戏。
+            tracing::warn!("{id}: 自检结论没能落盘: {error}");
+        }
 
         // Fetch the newest saves *before* the game can read them. Best effort on
         // a deadline: a broken backup must never keep the user out of their game

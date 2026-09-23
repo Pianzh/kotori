@@ -86,7 +86,17 @@ impl Daemon {
                 }
             }
             "game.launch" => match param_str(&req.params, "id") {
-                Ok(game_id) => respond(id, self.rpc_game_launch(game_id).await),
+                Ok(game_id) => {
+                    // `selfcheck: true` = 这个客户端答得上"启动前那一问"
+                    // （见 `rpc_game_launch`）。
+                    let selfcheck = req
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("selfcheck"))
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    respond(id, self.rpc_game_launch(game_id, selfcheck).await)
+                }
                 Err(e) => rpc_err(id, -32602, e),
             },
             "game.wait" => match param_str(&req.params, "session_id") {
@@ -189,6 +199,46 @@ impl Daemon {
                 Err(e) => rpc_err(id, -32602, e),
             },
             "sync.cloud_games" => respond(id, self.rpc_sync_cloud_games().await),
+            // 启动前自检的对话框：用户选了哪一项（`ok` / `off` / `pair`）。
+            "sync.resolve" => match param_str(&req.params, "id") {
+                Ok(game_id) => {
+                    let choice = req
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("choice"))
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let cloud_id = req
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("cloud_id"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    let cloud_key = req
+                        .params
+                        .as_ref()
+                        .and_then(|p| p.get("cloud_key"))
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                    respond(
+                        id,
+                        self.rpc_sync_resolve(
+                            game_id,
+                            &choice,
+                            cloud_id.as_deref(),
+                            cloud_key.as_deref(),
+                        )
+                        .await,
+                    )
+                }
+                Err(e) => rpc_err(id, -32602, e),
+            },
+            // "改配对…"那个浮层要的那份清单。
+            "sync.identities" => match param_str(&req.params, "id") {
+                Ok(game_id) => respond(id, self.rpc_sync_identities(game_id).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
             "sync.pairing" => respond(id, self.rpc_sync_pairing().await),
             "sync.pair" => match (
                 param_str(&req.params, "id"),

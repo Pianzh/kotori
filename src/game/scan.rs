@@ -78,6 +78,7 @@ pub(super) fn game_entry(dir: &Path, exe: PathBuf) -> GameConfig {
         cloud_dir: None,
         cloud_rejected: Vec::new(),
         sync_enabled: true,
+        cloud_conclusion: None,
         name,
         game_dir,
         exe_path: exe,

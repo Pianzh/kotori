@@ -299,3 +299,94 @@ fn rejecting_a_pairing_sticks() {
     assert_eq!(field(&written, "cloud_dir").as_deref(), Some("probe"));
     assert_eq!(cloud_packages(&remote.join("games/probe")).len(), 1);
 }
+
+/// 打开游戏前的自检：**只有当客户端答得上那一问时才问**，答过"关掉这一款"就不再问。
+///
+/// 这条路是全流程唯一会打断用户的地方（用户 2026-09-22："云同步（打开游戏）前必须自检"），
+/// 所以两件事都要钉住：问得出来，以及**问过之后不再问**。
+#[test]
+fn the_pre_launch_check_asks_once_and_a_no_sticks() {
+    let mut machine_a = Fixture::new("selfcheck-a");
+    let remote = machine_a.enable_fake_sync(true);
+    machine_a.start();
+    let dir_a = machine_a.dir.join("Cloud Game");
+    let saves_a = dir_a.join("savedata");
+    std::fs::create_dir_all(&saves_a).unwrap();
+    let exe_a = dir_a.join("game.exe");
+    std::fs::write(&exe_a, b"the real deal").unwrap();
+    std::fs::write(saves_a.join("save.dat"), b"from-a").unwrap();
+    machine_a.rpc(
+        "game.create",
+        json!({ "name": "Cloud Game", "exe_path": exe_a, "game_dir": dir_a }),
+    );
+    machine_a.rpc(
+        "game.update",
+        json!({ "id": "cloud-game", "save_paths": ["savedata"] }),
+    );
+    machine_a.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+    assert_eq!(
+        machine_a.rpc("sync.now", json!({ "id": "cloud-game" }))["result"]["ok"],
+        true
+    );
+    assert_eq!(cloud_packages(&remote.join("games/cloud-game")).len(), 1);
+
+    // 第二台机器：**exe 内容不一样**（重装过、打过补丁、或者压根是另一款），
+    // 于是指纹认不出云端那一条 —— 这正是"要问一次"的那种情况。
+    let mut machine_b = Fixture::new("selfcheck-b");
+    machine_b.enable_fake_sync(true);
+    machine_b.share_bucket_with(&machine_a);
+    machine_b.start();
+    machine_b.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+    let dir_b = machine_b.dir.join("My Copy");
+    let saves_b = dir_b.join("savedata");
+    std::fs::create_dir_all(&saves_b).unwrap();
+    let exe_b = dir_b.join("game.exe");
+    std::fs::write(&exe_b, b"a different build").unwrap();
+    std::fs::write(saves_b.join("save.dat"), b"my own progress").unwrap();
+    machine_b.rpc(
+        "game.create",
+        json!({ "name": "My Copy", "exe_path": exe_b, "game_dir": dir_b }),
+    );
+    machine_b.rpc(
+        "game.update",
+        json!({ "id": "my-copy", "save_paths": ["savedata"] }),
+    );
+
+    // 老客户端（没声明 `selfcheck`）：照旧启动，绝不因为自检而点不动 ——
+    // 而"认不出"这件事在这里等于"不自动取回"，本机存档一个字没动。
+    let plain = machine_b.rpc("game.launch", json!({ "id": "my-copy" }));
+    assert!(
+        plain["result"].get("needs_sync_decision").is_none(),
+        "没声明答得上那一问的客户端不该被拦: {plain}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(saves_b.join("save.dat")).unwrap(),
+        "my own progress"
+    );
+
+    // 界面（答得上）：先不起游戏，把问题交出去。
+    let ask = machine_b.rpc("game.launch", json!({ "id": "my-copy", "selfcheck": true }));
+    assert_eq!(ask["result"]["needs_sync_decision"], true, "{ask}");
+    assert!(ask["result"]["session_id"].is_null(), "{ask}");
+
+    // 用户选了"关掉这一款的同步"。
+    let resolved = machine_b.rpc("sync.resolve", json!({ "id": "my-copy", "choice": "off" }));
+    assert_eq!(resolved["result"]["ok"], true, "{resolved}");
+    let written = std::fs::read_to_string(machine_b.config.clone()).unwrap();
+    assert!(written.contains("sync_enabled = false"), "{written}");
+    assert!(written.contains("off:"), "要记住问过了: {written}");
+
+    // 再点启动：**不再问**，直接起游戏（假 gamescope 立刻退出，所以是个错误回包，
+    // 但那是"启动"那条路的事，不是"要决定"）。
+    let again = machine_b.rpc("game.launch", json!({ "id": "my-copy", "selfcheck": true }));
+    assert!(
+        again["result"].get("needs_sync_decision").is_none(),
+        "问过一次就不许再问: {again}"
+    );
+}

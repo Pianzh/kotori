@@ -38,6 +38,7 @@ pub(super) fn game(game_dir: &str, exe: &str) -> GameConfig {
         cloud_dir: None,
         cloud_rejected: Vec::new(),
         sync_enabled: true,
+        cloud_conclusion: None,
         name: "demo".into(),
         game_dir: PathBuf::from(game_dir),
         exe_path: PathBuf::from(exe),

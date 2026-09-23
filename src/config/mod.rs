@@ -119,9 +119,20 @@ pub struct GameConfig {
     /// 「立即同步」/「取回存档」是明确的用户动作，不受它限制。
     ///
     /// 用户在启动前的自检里选"关掉这一款"就是关它；之后他自己再打开，这一款**直接
-    /// 新建身份、不再问**（那是提交 B 的下一半）。
+    /// 新建身份、不再问**（见 [`GameConfig::cloud_conclusion`]）。
     #[serde(default = "default_sync_enabled")]
     pub sync_enabled: bool,
+    /// 「配对结论」：这一款在**哪个云目标**上走到哪一步了。
+    ///
+    /// 形状是 `ok:<目标签名>`（已确认）或 `off:<目标签名>`（问过，用户选了"关掉这一款
+    /// 的同步"）；`None` = 未定。签名见 [`crate::sync::signature`] —— 换桶、换引擎、
+    /// 换 prefix 之后签名就变了，于是结论自动失效（未定），而**改保留版本数、换凭证
+    /// 不会**让结论失效，那才是对的：那些与"云端那一条是谁"无关。
+    ///
+    /// 用一个字段编码"签名 + 结论"是刻意的：摊成两个 bool 会出现"已确认但没记签名"
+    /// 这种说不清的状态。
+    #[serde(default)]
+    pub cloud_conclusion: Option<String>,
     /// Per-game wine prefix; overrides the global [`WineConfig::prefix`].
     #[serde(default)]
     pub wine_prefix: Option<PathBuf>,

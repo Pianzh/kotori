@@ -47,6 +47,7 @@ pub(super) fn daemon_at(keyring: Keyring) -> (Daemon, PathBuf) {
             cloud_dir: None,
             cloud_rejected: Vec::new(),
             sync_enabled: true,
+            cloud_conclusion: None,
             name: "demo".into(),
             game_dir: PathBuf::from("/games/demo"),
             exe_path: PathBuf::from("/games/demo/game.exe"),
@@ -236,4 +237,68 @@ async fn switching_one_game_off_stops_its_automatic_sync_only() {
     .await;
     assert_eq!(value["result"]["success"], true, "{value}");
     assert!(daemon.config.read().await.games["demo"].sync_enabled);
+}
+
+/// 启动前的自检与"用户答了什么"：三种回答各自的效果，以及**答过就不许再问**。
+#[tokio::test]
+async fn the_pre_launch_self_check_asks_once_and_remembers_the_answer() {
+    use crate::sync::selfcheck::Decision;
+
+    let fake = FakeTool::new("selfcheck");
+    let (daemon, _) = daemon_at(fake.keyring());
+    let signature = crate::sync::signature::of(&daemon.config.read().await.sync).unwrap();
+
+    // 新档案、没有指纹：认不出云端那一条 ⇒ **问一次**。
+    assert_eq!(daemon.sync_selfcheck("demo").await, Decision::Ask);
+
+    // "没问题"：就在这个目标上确认下来。
+    let value = call(&daemon, "sync.resolve", r#"{"id":"demo","choice":"ok"}"#).await;
+    assert_eq!(value["result"]["ok"], true, "{value}");
+    {
+        let config = daemon.config.read().await;
+        assert_eq!(
+            config.games["demo"].cloud_conclusion.as_deref(),
+            Some(format!("ok:{signature}").as_str())
+        );
+    }
+    // 已确认 ⇒ 下次不问、也不重扫（`Pull` 那条路一个字节都不读云端）。
+    assert_eq!(daemon.sync_selfcheck("demo").await, Decision::Pull);
+
+    // 换了目标（桶）：结论作废，回到"未定"。没有指纹时照样是"问一次"。
+    call(
+        &daemon,
+        "sync.set_settings",
+        r#"{"bucket":"another-bucket"}"#,
+    )
+    .await;
+    assert_eq!(daemon.sync_selfcheck("demo").await, Decision::Ask);
+
+    // "关掉这一款的同步"：只关这一款，而且记住"问过了"。
+    let value = call(&daemon, "sync.resolve", r#"{"id":"demo","choice":"off"}"#).await;
+    assert_eq!(value["result"]["ok"], true, "{value}");
+    {
+        let config = daemon.config.read().await;
+        assert!(!config.games["demo"].sync_enabled);
+        let conclusion = config.games["demo"].cloud_conclusion.clone().unwrap();
+        assert!(conclusion.starts_with("off:"), "{conclusion}");
+    }
+    // 关着的时候打开游戏：一个字都不做（不再问第二次）。
+    assert_eq!(daemon.sync_selfcheck("demo").await, Decision::Skip);
+
+    // 用户自己把这一款重新打开，而且指纹认不出云端那一条 ⇒ **不再问，直接新建**。
+    call(
+        &daemon,
+        "game.update",
+        r#"{"id":"demo","sync_enabled":true}"#,
+    )
+    .await;
+    let mut config = daemon.config.read().await.clone();
+    config.games.get_mut("demo").unwrap().exe_fingerprint = Some("v1:3:aabb".to_string());
+    assert_eq!(
+        crate::sync::selfcheck::decide(&config.games["demo"], Some(&signature), || {
+            crate::sync::selfcheck::Found::None
+        }),
+        Decision::Fresh,
+        "问过一次就不许再问：匹配不上就新建一条身份"
+    );
 }
