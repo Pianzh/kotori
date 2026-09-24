@@ -345,6 +345,24 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// 崩在写入中途留下的临时文件不该影响读取（GAP-2 的另一半）：读取只看正式那份，
+    /// `.tmp` 是写到一半的残骸 —— 这也正是"临时文件 + rename"这个写法的另一半好处。
+    #[test]
+    fn a_leftover_temp_file_does_not_disturb_the_config() {
+        let dir = test_scratch("config-leftover");
+        let path = dir.join("config.toml");
+        let mut config = Config::default();
+        config.daemon.socket_path = PathBuf::from("/run/kotori.sock");
+        save_to(&path, &config).unwrap();
+
+        // 模拟"写到一半被杀"：同目录里留下一份半截的临时文件。
+        std::fs::write(path.with_extension("toml.tmp"), "[daemon").unwrap();
+
+        let loaded = load_at(&path).expect("临时文件不该影响读取");
+        assert_eq!(loaded.daemon.socket_path, PathBuf::from("/run/kotori.sock"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A unique scratch directory that removes itself on drop.
     struct Scratch(PathBuf);
 

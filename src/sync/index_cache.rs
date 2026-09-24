@@ -172,6 +172,22 @@ mod tests {
         index
     }
 
+    /// 外层是认识的缓存格式，里层那份索引是"未来版本写的" —— 一律当没有缓存
+    /// （绝不按当前字段猜，BUG-25）。
+    #[test]
+    fn a_cache_holding_a_future_index_format_is_not_served() {
+        let dir = TempDir::new("future");
+        let signature = "v1:kopia::bucket:prefix";
+        let json = format!(
+            r#"{{"format":{CACHE_FORMAT},"signature":"{signature}","cached_at":"2026-09-25T00:00:00Z","index":{{"format":99,"updated":"2026-09-25T00:00:00Z","games":[]}}}}"#
+        );
+        std::fs::write(path_in(&dir.0, signature), json).unwrap();
+        assert!(
+            read_at(&dir.0, signature).is_none(),
+            "认不出的索引格式一律当没有缓存"
+        );
+    }
+
     #[test]
     fn a_cached_index_round_trips_with_its_signature() {
         let dir = TempDir::new("roundtrip");

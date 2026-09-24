@@ -521,4 +521,28 @@ mod tests {
         // `updated` 是结构字段，缺了就是坏文件 —— 不当成"空索引"（那会让它永远赢不了合并）。
         assert!(serde_json::from_str::<CloudIndex>(r#"{"format":1}"#).is_err());
     }
+
+    /// `is_supported()` 是三条读取路径共同的判据（BUG-25）：自己写的格式认，别的
+    /// 一律不认 —— 上面那条只证明了"格式号读得出来"，这一条证明"读出来之后怎么判"。
+    #[test]
+    fn only_our_own_format_counts_as_supported() {
+        assert!(CloudIndex::new().is_supported());
+        let future = r#"{"format":99,"updated":"2026-09-23T10:00:00Z","games":[]}"#;
+        assert!(
+            !serde_json::from_str::<CloudIndex>(future)
+                .unwrap()
+                .is_supported()
+        );
+    }
+
+    /// 名字里有多字节字符时**不许 panic**（BUG-26）：19 个字节、末字节是 `Z`，而第
+    /// 15 个字节正好落在某个两字节字符的内部 —— 从前 `at[..15]` 就是在这里炸的，
+    /// 一条异常对象名足以打断整个索引读取。
+    #[test]
+    fn a_multibyte_delta_name_is_rejected_instead_of_panicking() {
+        let at = format!("{}abZ", "é".repeat(8));
+        assert_eq!(at.len(), 19, "构造要正好 19 字节");
+        let name = format!("1a2b-{at}.json");
+        assert!(!is_delta_name(&name), "{name}");
+    }
 }
