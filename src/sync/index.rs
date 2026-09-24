@@ -239,23 +239,26 @@ pub fn is_delta_name(name: &str) -> bool {
     let Some(stem) = name.strip_suffix(".json") else {
         return false;
     };
-    match stem.rsplit_once('-') {
-        // 时间戳那一段必须是我们自己写出来的形状（`20260923T101500123Z`）。
-        Some((machine, at)) => {
-            !machine.is_empty()
-                && at.len() == 19
-                && at.ends_with('Z')
-                && at[..15].chars().enumerate().all(|(index, c)| {
-                    if index == 8 {
-                        c == 'T'
-                    } else {
-                        c.is_ascii_digit()
-                    }
-                })
-                && at[15..18].chars().all(|c| c.is_ascii_digit())
-        }
-        None => false,
-    }
+    let Some((machine, at)) = stem.rsplit_once('-') else {
+        return false;
+    };
+    // 时间戳那一段必须是我们自己写出来的形状（`20260923T101500123Z`）。
+    //
+    // ⚠ 一律按**字节**看，不按下标切 `str`：`at` 是桶里的名字，谁都能写 —— 凑够
+    // 19 个字节的多字节名字会让 `at[..15]` 落在字符中间直接 panic，一条异常对象名
+    // 就能打断整个索引读取（BUG-26）。
+    let bytes = at.as_bytes();
+    !machine.is_empty()
+        && bytes.len() == 19
+        && bytes[18] == b'Z'
+        && bytes[..15].iter().enumerate().all(|(index, byte)| {
+            if index == 8 {
+                *byte == b'T'
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
+        && bytes[15..18].iter().all(|byte| byte.is_ascii_digit())
 }
 
 /// 文件名友好的时间戳（`20260923T101500123Z`）。

@@ -128,11 +128,18 @@ impl Kopia {
     fn current_target(&self) -> String {
         match self.local_repository() {
             Some(path) => format!("filesystem:{}", path.display()),
-            None => format!(
-                "{}/{}",
-                self.settings.bucket.trim().trim_matches('/'),
-                args::repo_prefix(&self.settings)
-            ),
+            None => {
+                // endpoint 也算这条身份的一部分：换过 endpoint 之后，旧的
+                // repository.config 指向的是**另一个目标**，直接复用会让用户
+                // "地址看着改了、同步还是老样子"（BUG-21）。B2 凭据本身不进这里
+                // —— 凭据是 secret，作废连接走 `set_credentials` 那条路。
+                let endpoint = self.settings.endpoint.trim().trim_end_matches('/');
+                format!(
+                    "{}/{}/{endpoint}",
+                    self.settings.bucket.trim().trim_matches('/'),
+                    args::repo_prefix(&self.settings)
+                )
+            }
         }
     }
 
