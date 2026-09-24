@@ -296,7 +296,7 @@ fn switching_games_mid_save_still_persists_the_new_edits() {
         .as_ref()
         .expect("B 那一笔必须被补发，否则它就丢了");
     assert_eq!(resend.draft.game_id, "other");
-    assert_eq!(resend.draft.sharpness, 4.0);
+    assert_eq!(resend.draft.sharpness, 4);
 }
 
 /// 「启动 / 停止」那一颗按钮:**在跑的要去停,没在跑的才去启动**。
