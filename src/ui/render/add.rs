@@ -73,6 +73,13 @@ fn push_cloud_pick(ui: &mut Ui) {
     let pick = &ui.app.cloud_pick;
 
     push_bool(board.get_open(), pick.is_open(), |v| board.set_open(v));
+    // 「新建一条云端身份」那颗按钮只在单游戏页那条路上出现（添加页里"什么都不挑"
+    // 本身就是新建）。
+    push_bool(
+        board.get_can_create_identity(),
+        pick.purpose().can_create_identity(),
+        |v| board.set_can_create_identity(v),
+    );
     push_bool(board.get_loading(), pick.loading(), |v| {
         board.set_loading(v)
     });
@@ -87,11 +94,15 @@ fn push_cloud_pick(ui: &mut Ui) {
         .map(|row| CloudPickRow {
             cloud_id: row.cloud_id.clone().into(),
             name: row.name.clone().into(),
-            // 几版 + 最近一版（`latest_label` 一版都没有时是空串）。
-            meta: match row.latest_label() {
-                label if label.is_empty() => row.versions_label(),
-                label => format!("{} · {}", row.versions_label(), label),
-            }
+            // 摘要与单游戏页「当前绑定」那一行**同一个函数**（用户 2026-09-24："弹窗显示的
+            // 近似游戏信息使用的是和设置页面给出信息一样的函数"）。
+            meta: identity_summary(
+                &row.cloud_id,
+                &row.cloud_key,
+                row.versions as u64,
+                row.latest.as_deref().unwrap_or_default(),
+                row.size,
+            )
             .into(),
             local_label: row.local_label().into(),
         })

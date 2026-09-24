@@ -88,6 +88,37 @@ pub(super) fn push_detail(ui: &mut Ui) {
     push_bool(board.get_participating(), participating, |v| {
         board.set_participating(v)
     });
+    // 「当前绑定」那一行：名字为主，下面是摘要 —— 文案由 `model::cloud::identity_label`
+    // 统一生成（启动那一问里那条候选用的也是它，用户 2026-09-24 要的"同一个函数"）。
+    let label = app
+        .selected_sync_game()
+        .filter(|row| row.is_bound())
+        .map(|row| {
+            identity_label(
+                &row.cloud_id,
+                &row.cloud_key,
+                &row.cloud_name,
+                row.cloud_versions,
+                &row.cloud_latest,
+                row.cloud_size,
+            )
+        });
+    push_bool(board.get_bound(), label.is_some(), |v| board.set_bound(v));
+    let name = label
+        .as_ref()
+        .map(|label| label.name.as_str())
+        .unwrap_or("");
+    push_str(board.get_bound_name(), name, |v| board.set_bound_name(v));
+    let summary = label
+        .as_ref()
+        .map(|label| label.summary.as_str())
+        .unwrap_or("");
+    push_str(board.get_bound_summary(), summary, |v| {
+        board.set_bound_summary(v)
+    });
+    push_bool(board.get_new_pending(), app.sync_new_pending, |v| {
+        board.set_new_pending(v)
+    });
 
     push_saves(ui);
 }

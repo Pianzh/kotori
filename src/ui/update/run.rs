@@ -88,6 +88,8 @@ impl App {
             return Task::none();
         };
         self.sync_ask_hidden = false;
+        // 这一问结束了：云端那条"疑似找到的"事实也跟着作废（下次问会重新带一份）。
+        self.sync_ask_cloud = None;
         self.launching = Some(game_id.clone());
         let socket = self.daemon_socket.clone();
         Task::perform(
@@ -113,6 +115,8 @@ impl App {
             return Task::none();
         };
         self.sync_ask_hidden = false;
+        // 这一问结束了：云端那条"疑似找到的"事实也跟着作废（下次问会重新带一份）。
+        self.sync_ask_cloud = None;
         self.launching = Some(game_id.clone());
         let socket = self.daemon_socket.clone();
         Task::perform(
@@ -153,6 +157,27 @@ impl App {
         Task::perform(
             async move { cloud_list(&socket, false).await },
             Message::CloudPickLoaded,
+        )
+    }
+
+    /// 换绑 / 新建这一款的云端身份 —— 单游戏页那两个入口共用（都**不**启动游戏）。
+    ///
+    /// `cloud` 给 `None` 就是新建：daemon 会清掉本机记的身份，下次上传时新建一条（云端
+    /// 旧的那条不会删，随时能再绑回来）。换绑与新建都是明确的用户动作，界面上都先问过。
+    pub(super) fn change_binding(&mut self, cloud: Option<(String, String)>) -> Task<Message> {
+        let Some(id) = self.selected.clone() else {
+            return Task::none();
+        };
+        self.saved_ok = true;
+        self.saved_msg = Some(if cloud.is_some() {
+            "正在换绑…".to_string()
+        } else {
+            "正在新建云端身份…".to_string()
+        });
+        let socket = self.daemon_socket.clone();
+        Task::perform(
+            async move { resolve_pairing(&socket, id, cloud).await },
+            Message::SyncBindingChanged,
         )
     }
 

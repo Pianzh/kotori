@@ -125,11 +125,14 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_output_h_changed(|text| dispatch(Message::OutputHChanged(one_line(&text))));
     window.on_direct_launch_toggled(|value| dispatch(Message::DirectLaunchToggled(value)));
     window.on_auto_watch_toggled(|value| dispatch(Message::AutoWatchToggled(value)));
-    // 单游戏页那颗「参与云同步」开关：状态在一个全局里（见 `pages/game-sync.slint`），
-    // 回调也从那儿接（照 `CloudBoard`）。
-    window
-        .global::<GameSyncBoard>()
-        .on_toggled(|value| dispatch(Message::SyncParticipatingToggled(value)));
+    // 单游戏页那块「云存档」：状态在一个全局里（见 `pages/game-sync.slint`），回调也从
+    // 那儿接（照 `CloudBoard`）。
+    let game_sync = window.global::<GameSyncBoard>();
+    game_sync.on_toggled(|value| dispatch(Message::SyncParticipatingToggled(value)));
+    game_sync.on_rebind_requested(|| dispatch(Message::SyncRebindRequested));
+    game_sync.on_new_identity_requested(|| dispatch(Message::SyncNewIdentityRequested));
+    game_sync.on_new_identity_confirmed(|| dispatch(Message::SyncNewIdentityConfirmed));
+    game_sync.on_new_identity_cancelled(|| dispatch(Message::SyncNewIdentityCancelled));
     window
         .on_process_name_changed(|value| dispatch(Message::ProcessNameChanged(value.to_string())));
     window.on_stop_cancelled(|| dispatch(Message::StopCancelled));
@@ -235,6 +238,8 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     let cloud_pick = window.global::<CloudPickerState>();
     cloud_pick.on_open_for_add(|| dispatch(Message::CloudPickOpen(CloudPickPurpose::Add)));
     cloud_pick.on_open_for_launch(|| dispatch(Message::CloudPickOpen(CloudPickPurpose::Launch)));
+    cloud_pick.on_open_for_rebind(|| dispatch(Message::CloudPickOpen(CloudPickPurpose::Rebind)));
+    cloud_pick.on_new_identity(|| dispatch(Message::CloudPickNewIdentity));
     cloud_pick.on_query_changed(|text| dispatch(Message::CloudPickSearch(one_line(&text))));
     cloud_pick.on_chosen(|cloud_id| dispatch(Message::CloudPickChoose(cloud_id.to_string())));
     cloud_pick.on_closed(|| dispatch(Message::CloudPickDismiss));

@@ -13,6 +13,21 @@
 use crate::config::GameConfig;
 use crate::sync::signature::Conclusion;
 
+/// 云端一条身份里**给用户看的那几栏**（弹窗里"疑似找到的那一条"）。
+///
+/// ⚠ 与界面的 `CloudIdentityLabel` 一一对应：daemon 只报事实，**名字与摘要由界面用同一个
+/// 函数生成**（用户 2026-09-24："弹窗显示的近似游戏信息使用的是和设置页面给出信息一样的
+/// 函数就可以了，方便后期统一修改"）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloudPeek {
+    pub cloud_id: String,
+    pub cloud_key: String,
+    pub name: String,
+    pub versions: u64,
+    pub latest: String,
+    pub size: u64,
+}
+
 /// 指纹在当前云目标上找到了什么。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Found {
@@ -20,8 +35,9 @@ pub enum Found {
     None,
     /// 恰好命中一条，而且这条身份还没被本机别的档案认领。
     One { cloud_id: String, cloud_key: String },
-    /// 命中多条，或者命中的那条已经被本机别的档案占着 —— 都要问。
-    Many,
+    /// 命中多条，或者命中的那条已经被本机别的档案占着 —— 都要问。带上的那几条是给弹窗挑
+    /// "最像的一条"用的（规则在 [`crate::sync::matching::best_like`] 那一个函数里）。
+    Many(Vec<CloudPeek>),
 }
 
 /// 自检的结论。
@@ -35,8 +51,9 @@ pub enum Decision {
     Adopt { cloud_id: String, cloud_key: String },
     /// 不再问：直接新建一条身份（用户自己把"关掉过"的那款开关重新打开了）。
     Fresh,
-    /// 问一次。
-    Ask,
+    /// 问一次。`found` = **疑似找到的那一条**；`None` = 完全没找到，界面照实说、
+    /// 让你自己挑。
+    Ask { found: Option<CloudPeek> },
 }
 
 /// 要不要为了这次自检去**读云端**（kopia 那边读一次身份 = 一次 restore）。
@@ -85,17 +102,30 @@ where
                     cloud_key,
                 };
             }
-            Found::None | Found::Many => {}
+            // 命中多条：弹窗里只显示**最像的那一条**（规则在 `matching::best_like`，
+            // 现在是取第一条）。一条都没带（"唯一那条被本机别的档案占着"）就是 `None`。
+            Found::Many(candidates) => {
+                let found = crate::sync::matching::best_like(&candidates).cloned();
+                return ask_or_fresh(conclusion.as_ref(), found);
+            }
+            Found::None => {}
         }
     }
 
-    // 4. 没命中 / 命中多条：问一次 —— **除非**他上次就是答"关掉这一款"（那次已经问过
-    //    了，用户原话："如果匹配不上还强制打开就建立新游戏存档位置"）。
+    ask_or_fresh(conclusion.as_ref(), None)
+}
+
+/// 第 4 步：问一次 —— **除非**他上次就是答"关掉这一款"（那次已经问过了，用户原话：
+/// "如果匹配不上还强制打开就建立新游戏存档位置"）。
+///
+/// `found` 是"疑似找到的那一条"（没有就是完全没找到）—— 界面据此分两种说法，用户
+/// 2026-09-24："直接把找到像的和没找到像的打包成函数或者条件，分别显示疑似找到和完全
+/// 没找到两个 ui"。
+fn ask_or_fresh(conclusion: Option<&Conclusion>, found: Option<CloudPeek>) -> Decision {
     if matches!(conclusion, Some(Conclusion::Declined(_))) {
-        Decision::Fresh
-    } else {
-        Decision::Ask
+        return Decision::Fresh;
     }
+    Decision::Ask { found }
 }
 
 #[cfg(test)]
@@ -159,9 +189,16 @@ mod tests {
                 cloud_key: "demo".into()
             }
         );
-        // 换了桶又认不出来：问一次（这次他还没答过"关掉"）。
-        assert_eq!(decide(&game, Some(SIG), || Found::None), Decision::Ask);
-        assert_eq!(decide(&game, Some(SIG), || Found::Many), Decision::Ask);
+        // 换了桶又认不出来：问一次（这次他还没答过"关掉"），而且**不带**"疑似找到的那
+        // 一条" —— 完全没找到就不编名字。
+        assert_eq!(
+            decide(&game, Some(SIG), || Found::None),
+            Decision::Ask { found: None }
+        );
+        assert_eq!(
+            decide(&game, Some(SIG), || Found::Many(Vec::new())),
+            Decision::Ask { found: None }
+        );
     }
 
     #[test]
@@ -169,11 +206,14 @@ mod tests {
         let game = game();
         assert_eq!(
             decide(&game, Some(SIG), || panic!("没有指纹就不该去查")),
-            Decision::Ask
+            Decision::Ask { found: None }
         );
     }
 
     /// 用户答过"关掉这一款"，之后自己又把开关打开：**不再问**，直接新建身份。
+    ///
+    /// ⚠ 界面上那颗开关现在会**顺手清掉结论**（见 `game_rpc::rpc_game_update`），所以这条路
+    /// 主要服务"结论还在、开关已经被别的途径打开"的情形（老配置、CLI 直接改配置）。
     #[test]
     fn re_enabling_a_game_that_was_switched_off_creates_a_new_identity_silently() {
         let mut game = game();
@@ -188,6 +228,32 @@ mod tests {
                 cloud_id: "cloud-9".into(),
                 cloud_key: "demo".into()
             }
+        );
+    }
+
+    /// 指纹命中多条：问一次，并把**最像的那一条**带上（现在是取第一条，规则在
+    /// `matching::best_like`）—— 界面据此显示"疑似找到"。
+    #[test]
+    fn many_hits_ask_once_and_carry_the_best_one() {
+        let mut game = game();
+        game.exe_fingerprint = Some("v1:1:aa".into());
+        let peek = |cloud_id: &str, name: &str| CloudPeek {
+            cloud_id: cloud_id.to_string(),
+            cloud_key: format!("games/{cloud_id}"),
+            name: name.to_string(),
+            versions: 3,
+            latest: "20260911T101500Z".to_string(),
+            size: 4096,
+        };
+        assert_eq!(
+            decide(&game, Some(SIG), || Found::Many(vec![
+                peek("c1", "一号"),
+                peek("c2", "二号"),
+            ])),
+            Decision::Ask {
+                found: Some(peek("c1", "一号"))
+            },
+            "带上的必须是第一条（`best_like` 现在的规则）"
         );
     }
 

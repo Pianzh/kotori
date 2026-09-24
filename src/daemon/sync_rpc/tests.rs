@@ -248,8 +248,11 @@ async fn the_pre_launch_self_check_asks_once_and_remembers_the_answer() {
     let (daemon, _) = daemon_at(fake.keyring());
     let signature = crate::sync::signature::of(&daemon.config.read().await.sync).unwrap();
 
-    // 新档案、没有指纹：认不出云端那一条 ⇒ **问一次**。
-    assert_eq!(daemon.sync_selfcheck("demo").await, Decision::Ask);
+    // 新档案、没有指纹：认不出云端那一条 ⇒ **问一次**（不带"疑似找到的那一条"）。
+    assert_eq!(
+        daemon.sync_selfcheck("demo").await,
+        Decision::Ask { found: None }
+    );
 
     // "没问题"：就在这个目标上确认下来。
     let value = call(&daemon, "sync.resolve", r#"{"id":"demo","choice":"ok"}"#).await;
@@ -271,7 +274,10 @@ async fn the_pre_launch_self_check_asks_once_and_remembers_the_answer() {
         r#"{"bucket":"another-bucket"}"#,
     )
     .await;
-    assert_eq!(daemon.sync_selfcheck("demo").await, Decision::Ask);
+    assert_eq!(
+        daemon.sync_selfcheck("demo").await,
+        Decision::Ask { found: None }
+    );
 
     // "关掉这一款的同步"：只关这一款，而且记住"问过了"。
     let value = call(&daemon, "sync.resolve", r#"{"id":"demo","choice":"off"}"#).await;
@@ -285,20 +291,24 @@ async fn the_pre_launch_self_check_asks_once_and_remembers_the_answer() {
     // 关着的时候打开游戏：一个字都不做（不再问第二次）。
     assert_eq!(daemon.sync_selfcheck("demo").await, Decision::Skip);
 
-    // 用户自己把这一款重新打开，而且指纹认不出云端那一条 ⇒ **不再问，直接新建**。
+    // 用户自己把这一款重新打开：**上次那份结论被清掉**（用户 2026-09-24："之后我不论开关
+    // 云同步都不会再次弹窗，这也是问题"），于是下一次启动重新自检 —— 指纹认不出就是
+    // "再问一次"，不再是"直接新建、再也不问"。
     call(
         &daemon,
         "game.update",
         r#"{"id":"demo","sync_enabled":true}"#,
     )
     .await;
-    let mut config = daemon.config.read().await.clone();
-    config.games.get_mut("demo").unwrap().exe_fingerprint = Some("v1:3:aabb".to_string());
+    {
+        let config = daemon.config.read().await;
+        assert!(
+            config.games["demo"].cloud_conclusion.is_none(),
+            "重新打开要把上次那份结论清掉"
+        );
+    }
     assert_eq!(
-        crate::sync::selfcheck::decide(&config.games["demo"], Some(&signature), || {
-            crate::sync::selfcheck::Found::None
-        }),
-        Decision::Fresh,
-        "问过一次就不许再问：匹配不上就新建一条身份"
+        daemon.sync_selfcheck("demo").await,
+        Decision::Ask { found: None }
     );
 }

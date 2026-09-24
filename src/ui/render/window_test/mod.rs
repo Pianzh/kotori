@@ -277,6 +277,42 @@ fn library_and_sync_pages_render_without_a_display() {
     render(&mut ui);
     ui.app.sync_restore_pending = None;
 
+    // 单游戏页那块「云存档」：还没绑 / 已绑 / 正在确认新建，三种样子都画一遍量一遍。
+    // （agent 看不到画面，这一层是唯一的替代品 —— 见 `window_test` 的文件头。）
+    // ⚠ 先切到「游戏库」那一页、并把窗口撑高：详情页很长，`ElementHandle` 只看得到没被
+    // 裁掉的部分，而云存档那块在页面底部。
+    show_tab(&mut ui, Tab::Games);
+    ui.window.set_game_open(true);
+    ui.window
+        .window()
+        .set_size(slint::LogicalSize::new(1120.0, 2600.0));
+    ui.app.selected = Some("demo".into());
+    ui.app.draft = Some(Draft::from_game(&ui_game()));
+    render(&mut ui);
+    fits(&ui, &["GameSyncGroup"]);
+    ui.app.sync_new_pending = true;
+    render(&mut ui);
+    fits(&ui, &["GameSyncGroup"]);
+    ui.app.sync_new_pending = false;
+
+    // 启动前那一问：**疑似找到**（显示云端那一条）与**完全没找到**两种说法都要画得下。
+    ui.app.sync_ask = Some("demo".into());
+    ui.app.sync_ask_cloud = Some(SyncAskCloud {
+        cloud_id: "8f2c1234-0000-0000-0000-000000000000".into(),
+        cloud_key: "demo".into(),
+        name: "云端记下的名字（很长很长的那种）".into(),
+        versions: 3,
+        latest: "20260911T101500Z".into(),
+        size: 4096,
+    });
+    render(&mut ui);
+    fits(&ui, &["SyncAskDialog"]);
+    ui.app.sync_ask_cloud = None;
+    render(&mut ui);
+    fits(&ui, &["SyncAskDialog"]);
+    ui.app.sync_ask = None;
+    ui.app.selected = None;
+
     // 「云端存档」那一页在 `window_test::cloud` 里（它自己就够长了）。
     cloud::cloud_page(&mut ui);
 
@@ -336,6 +372,12 @@ fn library_and_sync_pages_render_without_a_display() {
             locations: 0,
             problem: Some("存档位置「%NOPE%」解析不了".into()),
             last: Some("× 2026-09-11T10:15 √".into()),
+            cloud_id: "8f2c1234-0000-0000-0000-000000000000".into(),
+            cloud_key: "demo".into(),
+            cloud_name: "Demo 云端那一条".into(),
+            cloud_versions: 3,
+            cloud_latest: "20260911T101500Z".into(),
+            cloud_size: 4096,
         }],
         ..sync_status_fixture()
     });

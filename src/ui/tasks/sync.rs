@@ -149,6 +149,28 @@ pub(in crate::ui) async fn sync_test(socket: &Path) -> Result<String, String> {
     Ok(str_field(&value, "remote"))
 }
 
+/// 把这一款绑到云端某一条身份上（`sync.resolve { choice:"pair" }`）。
+///
+/// `cloud` 给 `None` 就是**新建**：daemon 把这一款本机记的身份清掉，下次上传时新建一条
+/// （云端旧的那条不会删，随时能再绑回来）。两个入口共用：单游戏页的「更改绑定…」与
+/// 「新建云端身份…」（后者在界面上先要一次确认，用户 2026-09-24）。
+pub(in crate::ui) async fn resolve_pairing(
+    socket: &Path,
+    id: String,
+    cloud: Option<(String, String)>,
+) -> Result<(), String> {
+    let mut pairs: Vec<(&str, Value)> = vec![
+        ("id", Value::String(id)),
+        ("choice", Value::String("pair".to_string())),
+    ];
+    if let Some((cloud_id, cloud_key)) = cloud {
+        pairs.push(("cloud_id", Value::String(cloud_id)));
+        pairs.push(("cloud_key", Value::String(cloud_key)));
+    }
+    crate::rpc::call(socket, "sync.resolve", Some(crate::rpc::params(pairs))).await?;
+    Ok(())
+}
+
 /// 打开/关掉这一款的云同步（`game.update { sync_enabled }`）。
 ///
 /// 用户 2026-09-24 要的界面入口：以前**只有**"启动前那一问"能关掉它，关了就再也打不开。

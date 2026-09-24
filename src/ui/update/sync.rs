@@ -247,6 +247,44 @@ impl App {
                 }
                 Task::none()
             }
+            // ── 单游戏页的绑定（用户 2026-09-24：显示当前绑定、换绑、新建） ──
+            // 「更改绑定…」：打开云端清单，挑中的那条成为新的绑定（**不**启动游戏）。
+            Message::SyncRebindRequested => {
+                self.sync_new_pending = false;
+                self.cloud_pick.open(CloudPickPurpose::Rebind);
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { cloud_list(&socket, false).await },
+                    Message::CloudPickLoaded,
+                )
+            }
+            // 「新建云端身份…」：**先要一次确认**，确认才真的新建。
+            Message::SyncNewIdentityRequested => {
+                self.sync_new_pending = true;
+                Task::none()
+            }
+            Message::SyncNewIdentityCancelled => {
+                self.sync_new_pending = false;
+                Task::none()
+            }
+            Message::SyncNewIdentityConfirmed => {
+                self.sync_new_pending = false;
+                self.change_binding(None)
+            }
+            Message::SyncBindingChanged(result) => {
+                match result {
+                    Ok(()) => {
+                        self.saved_ok = true;
+                        self.saved_msg = Some("绑定已更新。".to_string());
+                    }
+                    Err(e) => {
+                        self.saved_ok = false;
+                        self.saved_msg = Some(format!("改绑定失败: {e}"));
+                    }
+                }
+                // 绑定变了 ⇒ 那一行要跟着变（状态是 daemon 算的，重新问一次）。
+                self.reload_sync()
+            }
             Message::SyncTested(result) => {
                 self.sync_form.busy = false;
                 self.sync_form.msg = Some(match result {

@@ -19,6 +19,16 @@ pub enum CloudPickPurpose {
     Add,
     /// 启动前那一问：挑中的那条就是"这一款在云端是谁"，挑完接着启动（`sync.resolve`）。
     Launch,
+    /// 单游戏页的「更改绑定…」：挑中的那条就是新的绑定，**不启动游戏**。这一种用途下
+    /// 浮层底部会多一条出路：新建一条身份（用户 2026-09-24 要的，且要确认才生效）。
+    Rebind,
+}
+
+impl CloudPickPurpose {
+    /// 这个用途下浮层里要不要给"新建一条云端身份"那颗按钮。
+    pub(in crate::ui) fn can_create_identity(self) -> bool {
+        matches!(self, CloudPickPurpose::Rebind)
+    }
 }
 
 /// 浮层的状态。

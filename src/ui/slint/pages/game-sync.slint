@@ -16,7 +16,21 @@ import { Switch } from "../widgets/controls.slint";
 // 500 行的硬线 —— 新增的东西走全局，窗口不必替它转发。
 export global GameSyncBoard {
     in-out property <bool> participating: true;
+    /// 这一款现在绑的云端身份（`false` = 还没绑）。
+    in-out property <bool> bound: false;
+    /// 绑的那一条叫什么（云端记下的名字），以及下面那行摘要。
+    in-out property <string> bound-name: "";
+    in-out property <string> bound-summary: "";
+    /// 正等着确认"新建一条云端身份"（两段式：先点、再确认）。
+    in-out property <bool> new-pending: false;
+
     callback toggled(bool);
+    /// 已绑时那颗「更改绑定…」：打开云端清单挑一条（选择器里也能改成新建）。
+    callback rebind-requested();
+    /// 还没绑时那颗「新建云端身份…」：先要一次确认。
+    callback new-identity-requested();
+    callback new-identity-confirmed();
+    callback new-identity-cancelled();
 }
 
 export component GameSyncGroup inherits Rectangle {
@@ -77,6 +91,40 @@ export component GameSyncGroup inherits Rectangle {
                         Switch {
                             checked <=> GameSyncBoard.participating;
                             toggled => { GameSyncBoard.toggled(GameSyncBoard.participating); }
+                        }
+                    }
+                    Divider { }
+                    CardRow {
+                        title: GameSyncBoard.bound ? GameSyncBoard.bound-name : "还没绑定云端存档";
+                        description: GameSyncBoard.new-pending
+                            ? "确认之后这一款会往新的一条上传。云端原来那条不会删，随时能再绑回来。"
+                            : (GameSyncBoard.bound ? GameSyncBoard.bound-summary : "这一款的存档上传时会在云端新建一条身份。");
+                        HorizontalLayout {
+                            spacing: 8px;
+                            alignment: center;
+                            if GameSyncBoard.new-pending : HorizontalLayout {
+                                spacing: 8px;
+                                StdButton {
+                                    label: "确认新建";
+                                    button-width: 88px;
+                                    clicked => { GameSyncBoard.new-identity-confirmed(); }
+                                }
+                                StdButton {
+                                    label: "取消";
+                                    button-width: 68px;
+                                    clicked => { GameSyncBoard.new-identity-cancelled(); }
+                                }
+                            }
+                            if !GameSyncBoard.new-pending && GameSyncBoard.bound : StdButton {
+                                label: "更改绑定…";
+                                button-width: 104px;
+                                clicked => { GameSyncBoard.rebind-requested(); }
+                            }
+                            if !GameSyncBoard.new-pending && !GameSyncBoard.bound : StdButton {
+                                label: "新建云端身份…";
+                                button-width: 128px;
+                                clicked => { GameSyncBoard.new-identity-requested(); }
+                            }
                         }
                     }
                     Divider { }

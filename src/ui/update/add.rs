@@ -93,6 +93,10 @@ impl App {
                     CloudPickPurpose::Add => self.add_match.pick(row),
                     // 启动前那一问:挑中的就是"这一款在云端是谁",挑完接着启动。
                     CloudPickPurpose::Launch => return self.sync_ask_paired(row),
+                    // 单游戏页换绑:挑中的那条成为新的绑定,**不**启动游戏。
+                    CloudPickPurpose::Rebind => {
+                        return self.change_binding(Some((row.cloud_id, row.cloud_key)));
+                    }
                 }
                 Task::none()
             }
@@ -104,6 +108,13 @@ impl App {
                 if purpose == CloudPickPurpose::Launch {
                     return self.sync_ask_declined();
                 }
+                Task::none()
+            }
+            // 浮层底部那颗「这一款要新建一条云端身份」：收起浮层、进入确认
+            // （确认画在单游戏页那一块里，见 `pages/game-sync.slint`）。
+            Message::CloudPickNewIdentity => {
+                self.cloud_pick.close();
+                self.sync_new_pending = true;
                 Task::none()
             }
             Message::MatchClearPick => {

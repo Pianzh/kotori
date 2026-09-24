@@ -70,6 +70,16 @@ pub enum Message {
     /// 单游戏页那颗「参与云同步」开关（`sync_enabled`，用户 2026-09-24 要的界面入口）。
     SyncParticipatingToggled(bool),
     SyncParticipatingSaved(bool, Result<(), String>),
+    /// 单游戏页「更改绑定…」：打开云端清单，挑中的那条成为新的绑定（不启动游戏）。
+    SyncRebindRequested,
+    /// 单游戏页「新建云端身份…」：**先要一次确认**（用户 2026-09-24：确认之后才正式新建）。
+    SyncNewIdentityRequested,
+    SyncNewIdentityConfirmed,
+    SyncNewIdentityCancelled,
+    /// 「更改绑定…」那个浮层底部那颗「新建一条云端身份」：收起浮层、进入确认。
+    CloudPickNewIdentity,
+    /// 换绑 / 新建的结果（成败都在这一页上说一句）。
+    SyncBindingChanged(Result<(), String>),
     GameSelected(String),
     BackToList,
     SearchChanged(String),

@@ -1,29 +1,33 @@
 // 启动前那一问:云同步自检认不出"云端哪一条是本机这一款"时,起游戏之前问一次。
 //
-// 用户 2026-09-22:"云同步(打开游戏)前**必须自检**",而自检里**只有这一种情况**会打断
-// 他。所以这个浮层只有一个职责:把问题说清楚,给四条出路。状态放在一个 **Slint 全局**里
-// (照 `ProcessPickerState` 的先例),窗口不必替它转发一串属性。
+// 用户 2026-09-22:"云同步(打开游戏)前**必须自检**",而自检里**只有这一种情况**会打断他。
+// 用户 2026-09-24 又钉了两条:
+//   * 文案要**简短通俗、不要括号、不要废话**,而且**说清云端那一条叫什么** —— 不然他
+//     没法定夺;
+//   * 分两种说法:**疑似找到**(显示"最像的那一条",名字与摘要由 `identity_label` 生成,
+//     与单游戏页「当前绑定」是同一个函数)与**完全没找到**(不编名字,让他自己挑)。
 //
-// 用户 2026-09-24 定的两条:
-//   * **关掉浮层(点空白/关闭)= 关掉这一款的同步,然后照常启动游戏** —— 自检绝不拦启动;
-//   * 四条出路里的「改配对…」要真的能挑云端已有的一条(`CloudPickerState` 那个选择器),
-//     挑完接着启动;挑不出来也没关系,他之后能在单游戏页里把这一款重新打开
-//     (`sync_enabled` 的界面入口就是为这条出路做的)。
+// 关掉浮层 = 关掉这一款的同步,然后照常启动 —— 自检绝不拦启动。
 
 import { Tokens } from "../theme.slint";
 import { AccentButton, StdButton } from "buttons.slint";
 
 export global SyncAskState {
     in-out property <bool> open: false;
-    /// 这一款叫什么(问题里要有名字,否则用户不知道说的是哪一款)。
+    /// 这一款叫什么。
     in-out property <string> game-name: "";
-    /// 一句话解释:为什么问、云端有哪几条候选。空串 = 什么都别说。
+    /// 一句话说明。空串 = 什么都别说。
     in-out property <string> message: "";
+    /// 云端有没有"疑似找到的那一条"。
+    in-out property <bool> cloud-found: false;
+    /// 那一条叫什么、以及下面那行摘要（都由 `model::cloud::identity_label` 生成）。
+    in-out property <string> cloud-name: "";
+    in-out property <string> cloud-summary: "";
 
-    /// 用户的回答:`ok`(没问题) / `pair`(新建一条身份) / `off`(关掉这一款的同步)。
+    /// 用户的回答:`ok`(就这样) / `pair`(新建一条) / `off`(关掉这一款的同步)。
     /// 三个回答之后都会**接着启动游戏**。
     callback answered(string);
-    /// 「改配对…」:收起这一问、打开云端清单,从云端已有的一条里挑。
+    /// 自己挑一条绑上:打开云端清单。
     callback pair-requested();
 }
 
@@ -31,7 +35,7 @@ export component SyncAskDialog inherits Rectangle {
     width: 100%;
     height: 100%;
 
-    // 遮罩:点空白处等于「关掉这一款的同步」,然后照常启动(不是"这次不启动")。
+    // 遮罩:点空白等于"关掉这一款的同步",然后照常启动。
     Rectangle {
         width: 100%;
         height: 100%;
@@ -44,7 +48,7 @@ export component SyncAskDialog inherits Rectangle {
 
     card := Rectangle {
         width: 480px;
-        height: 396px;
+        height: min(452px, root.height - 40px);
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         border-radius: Tokens.radius-card;
@@ -69,6 +73,32 @@ export component SyncAskDialog inherits Rectangle {
                 font-size: 13px;
                 color: Tokens.text-2;
             }
+
+            // 疑似找到的那一条：名字与摘要由 `identity_label` 生成（与单游戏页同一个函数）。
+            if SyncAskState.cloud-found : Rectangle {
+                background: Tokens.card;
+                border-color: Tokens.stroke;
+                border-width: 1px;
+                border-radius: Tokens.radius-card;
+                height: found.preferred-height;
+                found := VerticalLayout {
+                    padding: 10px;
+                    spacing: 4px;
+                    Text {
+                        text: SyncAskState.cloud-name;
+                        font-size: 13px;
+                        color: Tokens.text;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: SyncAskState.cloud-summary;
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+
             Text {
                 text: SyncAskState.message;
                 font-size: 12px;
@@ -76,30 +106,28 @@ export component SyncAskDialog inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            // 四条出路,从"最省事"排到"最保守";每一行都写清后果 —— 猜错的代价是
-            // 铺错存档,所以这里不能只有按钮名。
             AccentButton {
-                label: "没问题，就同步这一款";
+                label: "就按现在这样同步";
                 button-width: parent.width;
                 clicked => { SyncAskState.answered("ok"); }
             }
             StdButton {
-                label: "改配对：绑到云端已有的那一条…";
+                label: "自己挑一条绑上…";
                 button-width: parent.width;
                 clicked => { SyncAskState.pair_requested(); }
             }
             StdButton {
-                label: "新建一条身份（云端这一款是另一份，跟它分开存）";
+                label: "给这一款新建一条";
                 button-width: parent.width;
                 clicked => { SyncAskState.answered("pair"); }
             }
             StdButton {
-                label: "关掉这一款的同步";
+                label: "这一款以后不云同步了";
                 button-width: parent.width;
                 clicked => { SyncAskState.answered("off"); }
             }
             Text {
-                text: "选哪一条都会照常开始游戏；关掉之后想再打开，去这一款的设置页把「参与云同步」重新打开。";
+                text: "选哪一条都会开始游戏。关掉之后想再打开，去这一款的设置页。";
                 font-size: 11px;
                 color: Tokens.text-3;
                 wrap: word-wrap;

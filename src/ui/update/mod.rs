@@ -110,6 +110,13 @@ impl App {
                     .is_ok_and(|value| value["needs_sync_decision"] == serde_json::json!(true))
                 {
                     self.sync_ask = self.launching.take();
+                    // 云端"疑似找到的那一条"：有就显示（名字与摘要由界面用同一个函数生成），
+                    // `None` 就是"完全没找到" —— 界面分两种说法，**不编名字**。
+                    self.sync_ask_cloud = result
+                        .as_ref()
+                        .ok()
+                        .and_then(|value| value.get("cloud"))
+                        .and_then(parse_sync_ask_cloud);
                     self.error = None;
                     return Task::none();
                 }
@@ -140,6 +147,8 @@ impl App {
                     self.confirm_delete = false;
                     // 二次确认属于上一款,别带过来。
                     self.confirm_stop = false;
+                    // 同理,"确认新建"那个两段式状态也不许跟着换款。
+                    self.sync_new_pending = false;
                     // Seed the form from the *stored* profile. Anything else
                     // means a plain "open + save" silently rewrites settings.
                     self.draft = Some(Draft::from_game(g));
@@ -287,6 +296,7 @@ impl App {
             | Message::CloudPickSearch(..)
             | Message::CloudPickChoose(..)
             | Message::CloudPickDismiss
+            | Message::CloudPickNewIdentity
             | Message::GamePaired(..)) => self.update_add(m),
             // ── 云同步（处理在 `update::update_sync`） ──
             m @ (Message::SyncStatusLoaded(..)
@@ -307,6 +317,11 @@ impl App {
             | Message::SyncTested(..)
             | Message::SyncParticipatingToggled(..)
             | Message::SyncParticipatingSaved(..)
+            | Message::SyncRebindRequested
+            | Message::SyncNewIdentityRequested
+            | Message::SyncNewIdentityConfirmed
+            | Message::SyncNewIdentityCancelled
+            | Message::SyncBindingChanged(..)
             | Message::SyncMasterPasswordChanged(..)
             | Message::SyncUnlock
             | Message::SyncUnlocked(..)

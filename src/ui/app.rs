@@ -18,6 +18,10 @@ pub struct App {
     /// 那一问被「改配对…」让位给云端清单时置起：`sync_ask` 还留着（挑完要用它启动），
     /// 但浮层先收起来 —— 两块浮层叠在一起会互相挡住。
     pub(super) sync_ask_hidden: bool,
+    /// 单游戏页正等着确认"新建一条云端身份"（两段式：先点、再确认才真的新建）。
+    pub(super) sync_new_pending: bool,
+    /// 启动前那一问里"疑似找到的那一条"（`None` = 完全没找到，界面照实说）。
+    pub(super) sync_ask_cloud: Option<SyncAskCloud>,
     pub(super) selected: Option<String>,
     pub(super) draft: Option<Draft>,
     pub(super) saving: bool,
@@ -115,6 +119,8 @@ impl App {
                 cloud: CloudState::default(),
                 sync_ask: None,
                 sync_ask_hidden: false,
+                sync_new_pending: false,
+                sync_ask_cloud: None,
                 daemon_socket: socket,
                 daemon_connected: None,
                 loading: false,

@@ -34,6 +34,12 @@ export global CloudPickerState {
     callback open-for-add();
     /// 启动前那一问的「改配对…」喊这里（同一个选择器，挑中之后落点不同）。
     callback open-for-launch();
+    /// 单游戏页的「更改绑定…」喊这里。
+    callback open-for-rebind();
+    /// 浮层底部那颗「这一款要新建一条云端身份」（确认之后才真的新建）。
+    callback new-identity();
+    /// 单游戏页的「更改绑定…」进来时可以多一条出路：新建。
+    in-out property <bool> can-create-identity: false;
 }
 
 export component CloudPickerDialog inherits Rectangle {
@@ -136,8 +142,21 @@ export component CloudPickerDialog inherits Rectangle {
             }
 
             Divider { }
+            // 单游戏页的「更改绑定…」进到这里时，还有一条出路：**新建**一条云端身份
+            // （用户 2026-09-24："按更改绑定按钮之后可以新建身份"）。添加页没有这一项
+            // —— 那边"什么都不挑"就等于新建。
+            if CloudPickerState.can-create-identity : VerticalLayout {
+                spacing: 8px;
+                StdButton {
+                    label: "这一款要新建一条云端身份";
+                    button-width: parent.width;
+                    clicked => { CloudPickerState.new-identity(); }
+                }
+            }
             Text {
-                text: "挑中的那条会成为这一款的云端身份：以后两边的版本存在同一处。不确定就别挑 —— 添加之后第一次上传会自己认领。";
+                text: CloudPickerState.can-create-identity
+                    ? "挑一条就会改成绑它，以后这一款往那条上传。不确定就别挑。"
+                    : "挑中的那条会成为这一款的云端身份：以后两边的版本存在同一处。不确定就别挑 —— 添加之后第一次上传会自己认领。";
                 font-size: 11px;
                 color: Tokens.text-3;
                 wrap: word-wrap;

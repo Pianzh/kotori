@@ -6,6 +6,21 @@
 
 use crate::ui::*;
 
+/// 启动前那一问里"**疑似找到的那一条**"（daemon 只报事实）。
+///
+/// 名字与摘要**不在这里拼** —— 由 `model::cloud::identity_label` 生成，与单游戏页的
+/// 「当前绑定」那一行是同一个函数（用户 2026-09-24："弹窗显示的近似游戏信息使用的是和
+/// 设置页面给出信息一样的函数就可以了"）。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncAskCloud {
+    pub cloud_id: String,
+    pub cloud_key: String,
+    pub name: String,
+    pub versions: u64,
+    pub latest: String,
+    pub size: u64,
+}
+
 /// One game's sync situation, as reported by `sync.status`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct SyncGameRow {
@@ -17,6 +32,23 @@ pub struct SyncGameRow {
     pub problem: Option<String>,
     /// Human-readable "when and how it went" for the last sync.
     pub last: Option<String>,
+    /// 这一款现在绑的云端身份（空 = 还没绑）。单游戏页要显示它，并且能换绑。
+    pub cloud_id: String,
+    /// 那条身份在桶里的落点（本机记着的那份；显示与换绑都要）。
+    pub cloud_key: String,
+    /// 云端记下的名字（从本机缓存索引里查的**镜像**，可能还没刷新到）。
+    pub cloud_name: String,
+    /// 云端有几版、最近一版的原始名字、那一版多大（摘要用；索引里没有就是 0 / 空）。
+    pub cloud_versions: u64,
+    pub cloud_latest: String,
+    pub cloud_size: u64,
+}
+
+impl SyncGameRow {
+    /// 现在绑没绑上云端那一条。
+    pub(in crate::ui) fn is_bound(&self) -> bool {
+        !self.cloud_id.is_empty()
+    }
 }
 
 impl SyncGameRow {

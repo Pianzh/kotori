@@ -169,14 +169,42 @@ pub(super) fn push_sync_ask(ui: &mut Ui) {
     push_bool(ask.get_open(), open, |v| ask.set_open(v));
     let name = game.map(|game| game.name.clone()).unwrap_or_default();
     push_str(ask.get_game_name(), &name, |v| ask.set_game_name(v));
-    let message = if game.is_some() {
-        "云端有这一款游戏，但认不出本机这一份是哪一条（exe 与云端记下的指纹不一致）。\
-         选「没问题」就按当前配对继续；选「改配对」能从云端已有的一条里挑一条绑上；\
-         选「新建」会给这一份建一条新身份。选完都照常开始游戏。"
-    } else {
+    // 一句话说清现状：有像的就说有像的，没有就说没有 —— 用户 2026-09-24：文案要
+    // "简短通俗、不要括号、不要废话"。云端那一条叫什么画在下面那块卡片里，名字与摘要
+    // 由 `identity_label` 生成。
+    let message = if game.is_none() {
         ""
+    } else if ui.app.sync_ask_cloud.is_some() {
+        "云端有一条像的，但不敢替你定。"
+    } else {
+        "云端没有对得上的。"
     };
     push_str(ask.get_message(), message, |v| ask.set_message(v));
+    // "疑似找到的那一条"：名字与摘要走 `identity_label`（与单游戏页「当前绑定」**同一个
+    // 函数**）；没有就是"完全没找到"，界面照实说、让用户自己挑。
+    push_bool(
+        ask.get_cloud_found(),
+        ui.app.sync_ask_cloud.is_some(),
+        |v| ask.set_cloud_found(v),
+    );
+    let (cloud_name, cloud_summary) = match &ui.app.sync_ask_cloud {
+        Some(cloud) => {
+            let label = identity_label(
+                &cloud.cloud_id,
+                &cloud.cloud_key,
+                &cloud.name,
+                cloud.versions,
+                &cloud.latest,
+                cloud.size,
+            );
+            (label.name, label.summary)
+        }
+        None => (String::new(), String::new()),
+    };
+    push_str(ask.get_cloud_name(), &cloud_name, |v| ask.set_cloud_name(v));
+    push_str(ask.get_cloud_summary(), &cloud_summary, |v| {
+        ask.set_cloud_summary(v)
+    });
 }
 
 #[cfg(test)]

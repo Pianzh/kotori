@@ -43,6 +43,15 @@ pub(in crate::ui) fn parse_sync_status(value: &Value) -> Result<SyncStatus, Stri
                         .get("location_problem")
                         .and_then(|v| v.as_str())
                         .map(str::to_string),
+                    cloud_id: str_field(row, "cloud_id"),
+                    cloud_key: str_field(row, "cloud_key"),
+                    cloud_name: str_field(row, "cloud_name"),
+                    cloud_versions: row
+                        .get("cloud_versions")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
+                    cloud_latest: str_field(row, "cloud_latest"),
+                    cloud_size: row.get("cloud_size").and_then(|v| v.as_u64()).unwrap_or(0),
                     last: row.get("last").and_then(|last| {
                         if last.is_null() {
                             return None;
@@ -170,6 +179,28 @@ pub(in crate::ui) fn describe_sync_outcome(value: &Value) -> String {
         return format!("没有需要同步的变化（跳过 {skipped} 个位置）");
     }
     format!("完成：{moved} 个位置已同步，跳过 {skipped} 个")
+}
+
+/// 启动那一问里那一条"疑似找到的"（`needs_sync_decision` 回包里的 `cloud`）。
+///
+/// ⚠ 名字与摘要不在这里拼：daemon 只报事实，界面用 `identity_label` 生成 —— 与单游戏页
+/// 「当前绑定」那一行是**同一个函数**（用户 2026-09-24）。
+pub(in crate::ui) fn parse_sync_ask_cloud(value: &Value) -> Option<SyncAskCloud> {
+    if value.is_null() {
+        return None;
+    }
+    let cloud_id = str_field(value, "cloud_id");
+    if cloud_id.is_empty() {
+        return None;
+    }
+    Some(SyncAskCloud {
+        cloud_id,
+        cloud_key: str_field(value, "cloud_key"),
+        name: str_field(value, "name"),
+        versions: value.get("versions").and_then(|v| v.as_u64()).unwrap_or(0),
+        latest: str_field(value, "latest"),
+        size: value.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
+    })
 }
 
 #[cfg(test)]

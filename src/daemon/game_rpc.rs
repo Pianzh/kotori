@@ -229,6 +229,12 @@ impl Daemon {
             // 每款一个的云同步开关（见 `GameConfig::sync_enabled`）。
             if let Some(sync_enabled) = patch.sync_enabled {
                 game.sync_enabled = sync_enabled;
+                // **手动重新打开 = 重新开始**（用户 2026-09-24："之后我不论开关云同步都不会
+                // 再次弹窗，这也是问题"）：把上次那份结论（已确认 / 已拒绝）清掉，下一次启动
+                // 会重新自检 —— 指纹还认得出就静默认领，认不出才再问一次。
+                if sync_enabled {
+                    game.cloud_conclusion = None;
+                }
             }
 
             if let Some(direct_launch) = patch.direct_launch {
@@ -268,10 +274,24 @@ impl Daemon {
         // 问之前，这条路上返回"要决定"就等于让用户点不动「启动」—— 一个真回归。其余
         // 结论（静默认领 / 已确认 / 跳过）不需要界面配合，一律照做。
         let decision = self.sync_selfcheck(id).await;
-        if decision == crate::sync::selfcheck::Decision::Ask {
+        if matches!(decision, crate::sync::selfcheck::Decision::Ask { .. }) {
             if selfcheck {
                 tracing::info!("{id}: 启动前要问一次配对（指纹认不出云端那一条）");
-                return Ok(json!({ "needs_sync_decision": true }));
+                // 把"疑似找到的那一条"一起带回界面：有就显示它（名字与摘要由界面用**同一个
+                // 函数**生成），没有就是"完全没找到"。用户 2026-09-24 要弹窗说清云端那款叫
+                // 什么，否则他没法定夺。
+                let cloud = match &decision {
+                    crate::sync::selfcheck::Decision::Ask { found: Some(found) } => json!({
+                        "cloud_id": &found.cloud_id,
+                        "cloud_key": &found.cloud_key,
+                        "name": &found.name,
+                        "versions": found.versions,
+                        "latest": &found.latest,
+                        "size": found.size,
+                    }),
+                    _ => serde_json::Value::Null,
+                };
+                return Ok(json!({ "needs_sync_decision": true, "cloud": cloud }));
             }
             tracing::debug!("{id}: 认不出云端那一条，但客户端答不了这一问 —— 照旧启动");
         }

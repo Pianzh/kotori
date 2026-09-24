@@ -11,6 +11,7 @@
 
 mod add;
 mod cloud;
+mod cloud_label;
 mod cloud_pick;
 mod environment;
 mod game;
@@ -26,9 +27,10 @@ pub use sync::{SyncGameRow, SyncStatus};
 
 pub(super) use add::{AddMatch, MATCH_DEBOUNCE, MatchPhase};
 pub(super) use cloud::{CloudGameRow, CloudListReply, CloudState, CloudVersionRow};
+pub(super) use cloud_label::{identity_label, identity_summary};
 pub(super) use cloud_pick::{CloudPick, CloudPickPurpose};
 pub(super) use environment::{EnvCheck, Environment};
 pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, SAVE_PATH_KINDS, SaveAttempt};
 pub(super) use picker::ProcessPicker;
 pub(super) use session::{MAX_AUTO_RETRIES, STATUS_POLL};
-pub(super) use sync::{CredentialStore, SyncForm, engine_switched_note};
+pub(super) use sync::{CredentialStore, SyncAskCloud, SyncForm, engine_switched_note};

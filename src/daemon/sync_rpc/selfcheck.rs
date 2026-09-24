@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 
 use super::Daemon;
 use crate::sync::index::IndexGame;
-use crate::sync::selfcheck::{Decision, Found};
+use crate::sync::selfcheck::{CloudPeek, Decision, Found};
 use crate::sync::signature::{self, Conclusion};
 
 impl Daemon {
@@ -62,11 +62,12 @@ impl Daemon {
             .filter(|game| !fingerprint.is_empty() && game.identity.has_fingerprint(fingerprint))
             .collect();
         let [only] = hits.as_slice() else {
-            return if hits.is_empty() {
-                Found::None
-            } else {
-                Found::Many
-            };
+            if hits.is_empty() {
+                return Found::None;
+            }
+            // 命中多条 ⇒ 要问，并把这几条的事实带上（弹窗里显示"最像的那一条"，挑法在
+            // `matching::best_like` 里，现在就是取第一条）。
+            return Found::Many(hits.iter().map(|game| peek(game)).collect());
         };
         // 这条身份已经被**本机别的档案**认领了 ⇒ 要问：本机不该有两个游戏共用一条身份。
         let taken = {
@@ -76,7 +77,8 @@ impl Daemon {
             })
         };
         if taken {
-            return Found::Many;
+            // 唯一命中却被占用：这一条照样得让用户看见（"疑似找到"的就是它）。
+            return Found::Many(vec![peek(only)]);
         }
         Found::One {
             cloud_id: only.identity.cloud_id.clone(),
@@ -117,7 +119,7 @@ impl Daemon {
                 self.stamp_conclusion(game_id, Conclusion::confirmed(&signature))
                     .await
             }
-            Decision::Skip | Decision::Pull | Decision::Ask => Ok(()),
+            Decision::Skip | Decision::Pull | Decision::Ask { .. } => Ok(()),
         }
     }
 
@@ -193,5 +195,19 @@ impl Daemon {
         }
         tracing::info!("{game_id}: 启动前自检的回答 {choice}");
         Ok(json!({ "ok": true }))
+    }
+}
+
+/// 索引里那一条 → 弹窗要显示的那几栏（[`CloudPeek`]）。
+///
+/// ⚠ 只搬事实、不拼文案：名字与摘要由界面用**同一个函数**生成（见 `CloudPeek` 的注释）。
+fn peek(game: &IndexGame) -> CloudPeek {
+    CloudPeek {
+        cloud_id: game.identity.cloud_id.clone(),
+        cloud_key: game.cloud_key.clone(),
+        name: game.identity.name.clone(),
+        versions: game.versions as u64,
+        latest: game.latest.clone().unwrap_or_default(),
+        size: game.size,
     }
 }
