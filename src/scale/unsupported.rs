@@ -79,8 +79,27 @@ impl ScaleEngine for UnsupportedScaleEngine {
         if killed == 0
             && let Some(name) = session.process_name.as_deref()
         {
-            for other in crate::process::find_pids(name) {
-                killed += crate::process::kill_tree(other);
+            // ⚠ 光按名字杀是**越界**：机器上可能有另一款同名游戏，或者用户自己开的
+            // 工具顶着这个名字（BUG-23）。有 exe 完整路径这条凭据时，只认路径对得上
+            // 的那些；连凭据都没有才退回按名字 —— 那本来就是"启动器交接"那条路。
+            let wanted = session
+                .exe_path
+                .as_ref()
+                .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()));
+            for entry in crate::process::snapshot() {
+                if !entry.matches(name) {
+                    continue;
+                }
+                if let Some(wanted) = &wanted {
+                    let found = entry
+                        .exe_path()
+                        .map(|path| std::fs::canonicalize(&path).unwrap_or(path));
+                    if found.as_ref() != Some(wanted) {
+                        tracing::debug!("同名但不是这一局（{name}）：不动 pid {}", entry.pid);
+                        continue;
+                    }
+                }
+                killed += crate::process::kill_tree(entry.pid);
             }
         }
         tracing::info!(
