@@ -85,6 +85,7 @@ pub enum ScaleCommand {
     /// Nudge sharpness: positive is sharper, negative is softer
     Sharpness {
         /// Steps, e.g. 1 or -1
+        #[arg(allow_negative_numbers = true)]
         delta: i32,
         /// Session to act on; only needed with more than one game running
         session_id: Option<String>,
