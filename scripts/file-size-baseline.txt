@@ -1,5 +1,5 @@
 # 超过 500 行的文件。规矩是只减不增：这个列表只允许变短。
 # 由 scripts/check-file-size.sh --update 生成，别手改。
-715	src/scale/gamescope.rs
+713	src/scale/gamescope.rs
 603	src/secrets/encrypted.rs
 524	src/scale/x11.rs

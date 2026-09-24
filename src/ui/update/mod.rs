@@ -10,6 +10,7 @@ use super::*;
 mod add;
 mod cloud;
 mod picker;
+mod profile;
 // 「启动 / 停止」那一族住在 `run.rs`;`pub(in crate::ui)` 只为单元测试叫得到它。
 pub(in crate::ui) mod run;
 mod settings;
@@ -200,78 +201,20 @@ impl App {
                 self.search = query;
                 Task::none()
             }
-            Message::AlgoChanged(algo) => {
-                if let Some(d) = &mut self.draft {
-                    d.algo = algo;
-                }
-                self.schedule_auto_save()
-            }
-            Message::SharpnessChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.sharpness = v.round() as u32;
-                }
-                self.schedule_auto_save()
-            }
-            Message::InternalWChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.internal_w = v;
-                }
-                self.schedule_auto_save()
-            }
-            Message::InternalHChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.internal_h = v;
-                }
-                self.schedule_auto_save()
-            }
-            Message::OutputWChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.output_w = v;
-                }
-                self.schedule_auto_save()
-            }
-            Message::OutputHChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.output_h = v;
-                }
-                self.schedule_auto_save()
-            }
-            Message::ScaleRatioChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.scale_ratio = v;
-                }
-                self.schedule_auto_save()
-            }
-            Message::FullscreenToggled(b) => {
-                if let Some(d) = &mut self.draft {
-                    d.fullscreen = b;
-                }
-                self.schedule_auto_save()
-            }
-            Message::FramerateChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.framerate = v;
-                }
-                self.schedule_auto_save()
-            }
-            Message::ExePathChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.exe = v;
-                }
-                self.schedule_auto_save()
-            }
-            Message::LaunchArgsChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.launch_args = v;
-                }
-                self.schedule_auto_save()
-            }
-            Message::GamescopeArgsChanged(v) => {
-                if let Some(d) = &mut self.draft {
-                    d.gamescope_args = v;
-                }
-                self.schedule_auto_save()
-            }
+            // 单游戏设置页那一族"改一笔就自动保存":十二个分支只差写哪个字段,
+            // 整族住在 `update/profile.rs`(见那边的文件头)。
+            m @ (Message::AlgoChanged(..)
+            | Message::SharpnessChanged(..)
+            | Message::InternalWChanged(..)
+            | Message::InternalHChanged(..)
+            | Message::OutputWChanged(..)
+            | Message::OutputHChanged(..)
+            | Message::ScaleRatioChanged(..)
+            | Message::FullscreenToggled(..)
+            | Message::FramerateChanged(..)
+            | Message::ExePathChanged(..)
+            | Message::LaunchArgsChanged(..)
+            | Message::GamescopeArgsChanged(..)) => self.update_profile_edit(m),
             Message::DeleteRequested => {
                 self.confirm_delete = true;
                 Task::none()
