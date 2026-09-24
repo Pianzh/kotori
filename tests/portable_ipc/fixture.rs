@@ -53,6 +53,18 @@ impl Fixture {
             let wine = bin.join("wine");
             std::fs::write(&wine, "#!/bin/sh\nexec \"$@\"\n").unwrap();
             std::fs::set_permissions(wine, std::fs::Permissions::from_mode(0o755)).unwrap();
+            // 假 gamescope：只把自己怎么被调用的记下来，然后立刻退出。这一条是
+            // **必须**的 —— 缺了它，daemon 会去 PATH 上找机器里那套真 gamescope，
+            // 而它在无显示环境下会 SIGABRT（2026-09-25 用户收到过 DrKonqi 的崩溃
+            // 通知），CI runner 上又根本没有它，本机与 CI 于是跑的不是同一条路。
+            let probe = dir.join("gamescope.log");
+            let gamescope = bin.join("gamescope");
+            std::fs::write(
+                &gamescope,
+                format!("#!/bin/sh\necho \"$*\" >> '{}'\nexit 0\n", probe.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(gamescope, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
         let config = json!({
             "daemon": {"auto_watch_migrated":true},

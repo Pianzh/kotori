@@ -119,12 +119,17 @@ fn manual_add_and_wine_settings_over_ipc() {
     // 这一局真跑起来要真 wine / gamescope,而测试机不一定有 —— 所以只钉住"不再是
     // 那句「仅观测模式」":它要么真的去启动(报缺 wine/gamescope,或者干脆起来了),
     // 要么失败在别的地方,但不会因为这只开关被拒。
+    let probe = fixture.enable_fake_display();
     let response = fixture.rpc("game.launch", json!({ "id": "my-game" }));
     let message = response["error"]["message"].as_str().unwrap_or_default();
     assert!(
         !message.contains("仅观测"),
         "自动追踪不该挡住启动:{response}"
     );
+    // 这一按必须真的碰到夹具里那套假 gamescope。少了这一条，"daemon 用了机器上
+    // 那套真 gamescope"就没有任何断言看得见 —— 2026-09-25 用户就是这么收到
+    // DrKonqi 的崩溃通知的，而 CI runner 上根本没有 gamescope 可给它用。
+    assert!(probe.exists(), "启动没走到夹具的假 gamescope:{response}");
 
     // 没写进程名也不报错:自动追踪按 exe 文件名认人(见 `GameConfig::watch_name`),
     // 而"是不是它"由完整路径说了算;认出与否由后台那圈轮询决定(见 `watch.rs` 的 e2e)。
@@ -233,18 +238,7 @@ fn manual_add_and_wine_settings_over_ipc() {
 #[test]
 fn launch_builds_the_expected_gamescope_command() {
     let mut fixture = Fixture::new("launch");
-    let bin = fixture.dir.join("bin");
-    std::fs::create_dir_all(&bin).unwrap();
-    let probe = fixture.dir.join("probe.txt");
-
-    let script = format!(
-        "#!/bin/sh\n[ \"$1\" = \"--kotori-warmup\" ] && exit 0\n{{ echo \"argv:$*\"; echo \"cwd:$(pwd)\"; echo \"WINEPREFIX:${{WINEPREFIX:-}}\"; }} >> '{}'\nexit 0\n",
-        probe.display()
-    );
-    for name in ["gamescope", "wine"] {
-        write_script(&bin.join(name), &script);
-    }
-    fixture.extra_path = Some(bin.clone());
+    let probe = fixture.enable_fake_display();
     fixture.start();
 
     // A game directory, an executable, and a wine prefix that looks real.

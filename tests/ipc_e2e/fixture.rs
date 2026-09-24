@@ -69,13 +69,18 @@ sharpness = 4
         );
         std::fs::write(&config, config_body).unwrap();
 
+        // 假 gamescope/wine 是**默认**装的,不是可选开关,理由见
+        // [`Self::enable_fake_display`]。
+        install_fake_display(&dir);
+        let extra_path = Some(dir.join("bin"));
+
         Self {
             dir,
             config,
             socket,
             log,
             child: None,
-            extra_path: None,
+            extra_path,
             envs: Vec::new(),
         }
     }
@@ -167,20 +172,16 @@ exit 0
         ));
     }
 
-    /// Add fake `gamescope`/`wine` that record how they were invoked and exit.
-    pub(crate) fn enable_fake_display(&mut self) -> PathBuf {
-        let bin = self.dir.join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let probe = self.dir.join("probe.txt");
-        let script = format!(
-            "#!/bin/sh\n[ \"$1\" = \"--kotori-warmup\" ] && exit 0\n{{ echo \"argv:$*\"; echo \"cwd:$(pwd)\"; echo \"WINEPREFIX:${{WINEPREFIX:-}}\"; }} >> '{}'\nexit 0\n",
-            probe.display()
-        );
-        for name in ["gamescope", "wine"] {
-            write_script(&bin.join(name), &script);
-        }
-        self.extra_path = Some(bin);
-        probe
+    /// 假 `gamescope`/`wine`：把自己**怎么被调用**写进探针文件，然后立刻退出。
+    ///
+    /// 夹具**默认就装了**它们（见 [`Self::new`]），这里只是把探针路径交出去。
+    /// 用户 2026-09-25 在无显示环境跑测试时收到了 DrKonqi 的 gamescope 崩溃通知：
+    /// 有两条用例当时还没装假货，daemon 就往 PATH 上找到了机器里那套真 gamescope，
+    /// 而它在没有 X/Wayland 时 SIGABRT。测试不许依赖"这台机器上装了什么"
+    /// （CI runner 上根本没有 gamescope），所以**用假的必须是默认路径**，
+    /// 而不是靠每一条新用例记得来调这个函数。
+    pub(crate) fn enable_fake_display(&self) -> PathBuf {
+        self.dir.join("probe.txt")
     }
 
     pub(crate) fn start(&mut self) {
@@ -275,6 +276,24 @@ exit 0
         }
         false
     }
+}
+
+/// 在夹具目录里装一套假的 `gamescope`/`wine`，返回探针文件的路径。
+///
+/// 探针里逐行记着 `argv:`/`cwd:`/`WINEPREFIX:` —— 会话与缩放那几条用例就是靠它
+/// 断言"daemon 到底拼出了什么命令行"，而不是靠去问系统上那套真工具。
+fn install_fake_display(dir: &std::path::Path) -> PathBuf {
+    let bin = dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let probe = dir.join("probe.txt");
+    let script = format!(
+        "#!/bin/sh\n[ \"$1\" = \"--kotori-warmup\" ] && exit 0\n{{ echo \"argv:$*\"; echo \"cwd:$(pwd)\"; echo \"WINEPREFIX:${{WINEPREFIX:-}}\"; }} >> '{}'\nexit 0\n",
+        probe.display()
+    );
+    for name in ["gamescope", "wine"] {
+        write_script(&bin.join(name), &script);
+    }
+    probe
 }
 
 impl Drop for Fixture {
