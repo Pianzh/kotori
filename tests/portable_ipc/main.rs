@@ -4,6 +4,7 @@ mod fixture;
 mod lifecycle;
 #[path = "../support/native.rs"]
 mod native;
+mod watch;
 
 use std::time::Duration;
 

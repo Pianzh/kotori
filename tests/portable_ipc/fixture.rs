@@ -99,6 +99,7 @@ impl Fixture {
             .env("KOTORI_FAKE_LOG", self.dir.join("rclone.log"))
             .env("KOTORI_FAKE_FAIL", self.dir.join("fail"))
             .env("KOTORI_OUTPUT_RESOLUTION", "1920x1080")
+            .env("KOTORI_WINESERVER", self.dir.join("no-wineserver"))
             .env_remove("WINEPREFIX")
             .stdin(Stdio::null())
             .stdout(log.try_clone().unwrap())
@@ -201,6 +202,8 @@ impl Fixture {
 
 impl Drop for Fixture {
     fn drop(&mut self) {
+        // 直启游戏属于 daemon 的子进程，失败时也给 helper 一次正常退出机会。
+        let _ = std::fs::write(self.dir.join("release"), b"cleanup");
         self.child.take();
         if std::thread::panicking() {
             eprintln!("--- daemon ---\n{}", self.logs());
