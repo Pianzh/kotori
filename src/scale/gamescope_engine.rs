@@ -15,9 +15,9 @@ use tokio::sync::{RwLock, broadcast};
 
 use crate::util::executor::find_binary;
 
-use super::gamescope::{ActionOutcome, AppliedAction, ApplyError, describe, wants};
-use super::x11::{GamescopeDisplay, Settings};
-use super::{
+use super::{ActionOutcome, AppliedAction, ApplyError, describe, wants};
+use crate::scale::x11::{GamescopeDisplay, Settings};
+use crate::scale::{
     LaunchSpec, ScaleAction, ScaleSession, SessionEvent, SessionKind, build_gamescope_args,
 };
 
@@ -43,7 +43,7 @@ pub struct GamescopeScaleEngine {
 }
 
 impl GamescopeScaleEngine {
-    pub(super) fn new() -> Self {
+    pub fn new() -> Self {
         let gamescope_path = find_binary("gamescope")
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|| "gamescope".to_string());
@@ -213,15 +213,15 @@ impl GamescopeScaleEngine {
         // this path is a ladder step, which the CLI still offers for anything
         // between the two.
         let ratio = if action == ScaleAction::ToggleScale {
-            super::toggled_ratio(
+            crate::scale::toggled_ratio(
                 session.runtime_ratio,
-                super::toggle_target(&session.profile, session.output_size),
+                crate::scale::toggle_target(&session.profile, session.output_size),
             )
         } else {
-            let index = super::ladder_index_for(session.runtime_ratio);
-            super::SCALE_LADDER[match action {
-                ScaleAction::ScaleUp => super::ladder_step(index, true),
-                ScaleAction::ScaleDown => super::ladder_step(index, false),
+            let index = crate::scale::ladder_index_for(session.runtime_ratio);
+            crate::scale::SCALE_LADDER[match action {
+                ScaleAction::ScaleUp => crate::scale::ladder_step(index, true),
+                ScaleAction::ScaleDown => crate::scale::ladder_step(index, false),
                 _ => 0, // ResetScale, and anything else that reaches here
             }]
         };
