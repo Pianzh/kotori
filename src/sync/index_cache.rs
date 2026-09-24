@@ -101,6 +101,18 @@ pub fn read_at(root: &Path, signature: &str) -> Option<CachedIndex> {
         );
         return None;
     }
+    // 缓存里**嵌着**的那份索引也要过格式这一关：外层是我们的缓存格式，里层是云端
+    // 写下的索引格式，未来版本写的东西不该被这一版按当前字段解释（BUG-25）。
+    if let Some(index) = &cached.index
+        && !index.is_supported()
+    {
+        tracing::warn!(
+            "缓存里那份云端索引的格式不认识（当作没有缓存）: {}（格式 {}）",
+            path.display(),
+            index.format
+        );
+        return None;
+    }
     Some(cached)
 }
 

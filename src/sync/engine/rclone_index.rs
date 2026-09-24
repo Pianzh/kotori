@@ -58,7 +58,16 @@ impl RcloneZip {
             .read_json(&index_main_path(&self.settings), "索引")
             .await
         {
-            Ok(main) => main,
+            Ok(Some(index)) if index.is_supported() => Some(index),
+            // 格式不认识与"读不懂"同一条待遇（BUG-25）：当没有，深扫会重写一份。
+            Ok(Some(index)) => {
+                tracing::warn!(
+                    "云端索引的格式不认识，先当没有（深度扫描会重写一份）: {}",
+                    index.format
+                );
+                None
+            }
+            Ok(None) => None,
             Err(error) => {
                 tracing::warn!("云端索引读不懂，先当没有（深度扫描会重写一份）: {error}");
                 None
@@ -93,7 +102,11 @@ impl RcloneZip {
                 .read_json::<CloudIndex>(&index_delta_path(&self.settings, line), "索引")
                 .await
             {
-                Ok(Some(index)) => deltas.push((line.to_string(), index)),
+                Ok(Some(index)) if index.is_supported() => deltas.push((line.to_string(), index)),
+                // 同上：认不出格式的增量当没有（BUG-25）。
+                Ok(Some(index)) => {
+                    tracing::warn!("索引增量 {line} 的格式不认识，先跳过: {}", index.format);
+                }
                 Ok(None) => {}
                 Err(error) => tracing::warn!("索引增量 {line} 读不了，先跳过: {error}"),
             }

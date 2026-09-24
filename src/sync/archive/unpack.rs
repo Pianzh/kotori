@@ -82,6 +82,19 @@ pub fn extract(zip_path: &Path, into: &Path) -> Result<Manifest, String> {
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| format!("{} 不是有效的 zip 包: {e}", zip_path.display()))?;
 
+    // 远端包是**外部输入**：一个异常包不该把临时目录撑爆、也不该把 CPU 卡死
+    // （BUG-28）。下面几个都是"正常存档碰不到"的量级。
+    const MAX_ENTRIES: usize = 20_000;
+    const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
+    const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+    if archive.len() > MAX_ENTRIES {
+        return Err(format!(
+            "包内条目太多（{} 项，上限 {MAX_ENTRIES}），拒绝解包",
+            archive.len()
+        ));
+    }
+    let mut written_total: u64 = 0;
     for index in 0..archive.len() {
         let mut item = archive
             .by_index(index)
@@ -106,8 +119,21 @@ pub fn extract(zip_path: &Path, into: &Path) -> Result<Manifest, String> {
         }
         let mut out = File::create(&destination)
             .map_err(|e| format!("无法写入 {}: {e}", destination.display()))?;
-        std::io::copy(&mut item, &mut out)
+        // 按**实际写出的字节**记账，不看条目自己声明的尺寸：包是远端来的，
+        // 声明值可以是假的。
+        let mut limited = std::io::Read::take(&mut item, MAX_FILE_BYTES + 1);
+        let written = std::io::copy(&mut limited, &mut out)
             .map_err(|e| format!("解包 {} 失败: {e}", destination.display()))?;
+        if written > MAX_FILE_BYTES {
+            return Err(format!("包内 {name} 超过单个文件的上限，拒绝解包"));
+        }
+        written_total = written_total.saturating_add(written);
+        if written_total > MAX_TOTAL_BYTES {
+            return Err(format!(
+                "包解出来的总量超过上限（{} GiB），拒绝解包",
+                MAX_TOTAL_BYTES / (1024 * 1024 * 1024)
+            ));
+        }
 
         if let Some(entry) = manifest.entries.iter().find(|entry| entry.name() == name) {
             set_mtime(&out, entry.mtime_ms)?;

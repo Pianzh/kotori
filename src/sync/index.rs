@@ -109,6 +109,15 @@ impl Default for CloudIndex {
 }
 
 impl CloudIndex {
+    /// 这份索引的格式我们认不认识。
+    ///
+    /// 桶是**外部输入**：未来版本写下的索引不该被这一版按"当前字段"解释。三条读取
+    /// 路径（rclone、kopia、本地缓存）都要过这一关 —— 认不出就当它没有，让深扫重写
+    /// 一份（BUG-25）。写入路径不用问：自己写的就是自己认的格式。
+    pub fn is_supported(&self) -> bool {
+        self.format == INDEX_FORMAT
+    }
+
     pub fn new() -> Self {
         Self {
             format: INDEX_FORMAT,

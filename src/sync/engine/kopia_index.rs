@@ -10,7 +10,7 @@
 use std::path::Path;
 
 use super::super::SyncError;
-use super::super::index::{CloudIndex, INDEX_FILE, INDEX_MAIN, IndexBundle};
+use super::super::index::{CloudIndex, INDEX_FILE, INDEX_FORMAT, INDEX_MAIN, IndexBundle};
 use super::kopia::{COMMAND_TIMEOUT, Kopia};
 use super::kopia_args as args;
 use super::kopia_index_args as index_args;
@@ -37,9 +37,16 @@ impl Kopia {
         let path = into.join(INDEX_FILE);
         let text = std::fs::read_to_string(&path)
             .map_err(|e| SyncError::Command(format!("索引快照里没有 {}: {e}", path.display())))?;
-        serde_json::from_str(&text)
-            .map(Some)
-            .map_err(|e| SyncError::Command(format!("云端索引读不懂: {e}")))
+        let index: CloudIndex = serde_json::from_str(&text)
+            .map_err(|e| SyncError::Command(format!("云端索引读不懂: {e}")))?;
+        // 格式不认识与"读不懂"同一条待遇：上层会把这份索引当没有（BUG-25）。
+        if !index.is_supported() {
+            return Err(SyncError::Command(format!(
+                "云端索引的格式不认识: {}（这一版只认 {INDEX_FORMAT}）",
+                index.format
+            )));
+        }
+        Ok(Some(index))
     }
 
     /// 读云端索引：合并快照 + **还没并进去**的那些增量。
