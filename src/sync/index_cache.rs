@@ -181,7 +181,10 @@ mod tests {
         let json = format!(
             r#"{{"format":{CACHE_FORMAT},"signature":"{signature}","cached_at":"2026-09-25T00:00:00Z","index":{{"format":99,"updated":"2026-09-25T00:00:00Z","games":[]}}}}"#
         );
-        std::fs::write(path_in(&dir.0, signature), json).unwrap();
+        let path = path_in(&dir.0, signature);
+        // 目录得先有：`write_at` 会自己建，这里绕开它直接写文件，就得自己来。
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, json).unwrap();
         assert!(
             read_at(&dir.0, signature).is_none(),
             "认不出的索引格式一律当没有缓存"
