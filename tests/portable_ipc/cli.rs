@@ -199,3 +199,51 @@ fn cli_upload_versions_and_restore_round_trip_actual_bytes() {
     assert_eq!(std::fs::read(save).unwrap(), b"must survive failed upload");
     fixture.shutdown();
 }
+
+/// 三条"用户直接看到的那行字"（BUG-5 / BUG-11 / BUG-14+37）—— 在此之前它们
+/// 一条测试都没有，全靠手验。
+#[test]
+fn scan_list_and_reload_say_what_they_know() {
+    let mut fixture = Fixture::new("cli-output");
+    fixture.start();
+
+    // 三个**同名、不同目录**的游戏：`add` 会给后两条加后缀，展示也该跟着加
+    // —— `a&b` / `a—b` 归一化之后都是 `a-b`，从前三条会印成同一个 id（BUG-5）。
+    let library = fixture.dir.join("library");
+    for parent in ["a-b", "a&b", "a—b"] {
+        let dir = library.join(parent);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("Game.exe"), b"fixture").unwrap();
+    }
+    let scan = run(&fixture, &["scan", library.to_str().unwrap()]);
+    assert!(scan.ok, "{}", scan.err);
+    let ids: Vec<String> = scan
+        .out
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix('['))
+        .filter_map(|rest| rest.split(']').next())
+        .map(str::to_string)
+        .collect();
+    assert_eq!(ids.len(), 3, "三个目录该有三条:\n{}", scan.out);
+    let unique: std::collections::HashSet<&String> = ids.iter().collect();
+    assert_eq!(unique.len(), 3, "三条的 id 撞在一起了:{ids:?}");
+
+    // 收进库里，再 `list` 两次：顺序要**一模一样**（BUG-37），而且两个开关都
+    // 得印出来（BUG-14）—— `list` 直接读配置文件，不经过 daemon。
+    assert!(run(&fixture, &["add", library.to_str().unwrap()]).ok);
+    let first = run(&fixture, &["list"]);
+    let second = run(&fixture, &["list"]);
+    assert!(first.ok && second.ok);
+    assert_eq!(first.out, second.out, "同一份配置两次 list 该一字不差");
+    assert!(
+        first.out.contains("watch:") && first.out.contains("direct:"),
+        "两个开关都该印出来:\n{}",
+        first.out
+    );
+
+    // `reload` 报的得是真的款数（BUG-11：从前永远印 0 款）。
+    let reload = run(&fixture, &["reload"]);
+    assert!(reload.ok, "{}", reload.err);
+    assert!(reload.out.contains("3 款"), "该报 3 款:\n{}", reload.out);
+    fixture.shutdown();
+}
