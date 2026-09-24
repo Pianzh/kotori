@@ -55,6 +55,23 @@ pub fn targets(game: &GameConfig, config: &Config) -> Result<Vec<SaveTarget>, St
             exclude: save.exclude.clone(),
         });
     }
+
+    // 两个位置算出同一个云端目录名 = 它们在桶里共用一个 `save_key`，而解包时是按
+    // **第一个**匹配的位置解释包内条目的 —— 第二个位置的文件会被铺到第一个位置去
+    // （BUG-17：`a/b` 与 `a_b` 都抹成 `rel-a_b`，长路径也可能在前 48 个字符上撞车）。
+    // 这是配置错误，说清楚让用户改，而不是猜。
+    for (index, target) in targets.iter().enumerate() {
+        if let Some(earlier) = targets[..index]
+            .iter()
+            .find(|other| other.key == target.key)
+        {
+            return Err(format!(
+                "存档位置「{}」与「{}」在云端算出来是同一个目录名（{}），会互相覆盖 —— \
+                 请改掉其中一个",
+                target.configured, earlier.configured, target.key
+            ));
+        }
+    }
     Ok(targets)
 }
 
@@ -147,5 +164,38 @@ mod tests {
 
         let error = targets(&game, &Config::default()).unwrap_err();
         assert!(error.contains("根目录"), "{error}");
+    }
+
+    #[test]
+    fn two_locations_sharing_a_cloud_key_are_refused() {
+        use crate::config::{GameConfig, SavePath, SavePathKind, ScaleProfile};
+
+        // `a/b` 与 `a_b` 都会被 `save_key` 抹成 `rel-a_b`：这是 BUG-17 里最直白的
+        // 那一对，也是"同一个位置两种写法"最常见的形态。
+        let game = GameConfig {
+            cloud_id: None,
+            exe_fingerprint: None,
+            cloud_dir: None,
+            cloud_rejected: Vec::new(),
+            sync_enabled: true,
+            cloud_conclusion: None,
+            name: "demo".into(),
+            game_dir: PathBuf::from("/games/demo"),
+            exe_path: PathBuf::from("/games/demo/game.exe"),
+            launch_args: Vec::new(),
+            save_paths: vec![
+                SavePath::new(SavePathKind::Relative, "a/b"),
+                SavePath::new(SavePathKind::Relative, "a_b"),
+            ],
+            wine_prefix: None,
+            auto_watch: false,
+            direct_launch: false,
+            process_name: None,
+            scale_profile: ScaleProfile::default_for(),
+            created_at: chrono::Utc::now(),
+        };
+
+        let error = targets(&game, &Config::default()).unwrap_err();
+        assert!(error.contains("同一个目录名"), "{error}");
     }
 }
