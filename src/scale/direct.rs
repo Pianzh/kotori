@@ -302,7 +302,7 @@ fn spawn_watch_task(
     prefix: Option<PathBuf>,
 ) {
     tokio::spawn(async move {
-        // 这个 prefix 只有 unix 侧收尾时用(`close_wine`)——Windows 上游戏是我们
+        // 这个 prefix 只有 unix 侧收尾时用(`close_wine_unshared`)——Windows 上游戏是我们
         // 直接 spawn 的,没有 wine 那一摊要关,参数因此在那一边"没人读"。
         #[cfg(not(unix))]
         let _ = prefix;
@@ -338,8 +338,10 @@ fn spawn_watch_task(
         tracing::info!("session {sid}: {} exited", follow.label());
         sessions.write().await.remove(&sid);
         // `None`(观测会话)时它什么都不做:那是用户自己的 prefix,关不得。
+        // ⚠ 只关**没有别的会话在用**的 prefix(BUG-22),理由见 `close_wine_unshared`。
         #[cfg(unix)]
-        super::gamescope::close_wine(prefix.as_deref()).await;
+        super::gamescope::close_wine_unshared(&sessions, prefix.as_deref(), Some(sid.as_str()))
+            .await;
         let _ = events.send(SessionEvent {
             session_id: sid,
             game_id,

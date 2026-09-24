@@ -286,10 +286,31 @@ fn screen_size() -> (u32, u32) {
 ///
 /// Always called *after* the game's processes are gone: while a game is running
 /// this would kill that game's own server.
-pub(super) async fn close_wine(prefix: Option<&Path>) {
-    if let Some(prefix) = prefix {
-        crate::wine::close_prefix(prefix).await;
+///
+/// ⚠ **这个 prefix 上还有我方别的会话时不关**：`wineserver -k` 会把挂在这个
+/// prefix 上的进程一起带走，而"全局 `~/.wine`"这种共用 prefix 很常见 —— 一款退出
+/// 不该让另一款跟着掉线（BUG-22）。`except` 是正在收尾的这一局（它自己可能还在
+/// 会话表里，`None` = 表里没有它）。
+pub(super) async fn close_wine_unshared(
+    sessions: &Arc<RwLock<HashMap<String, ScaleSession>>>,
+    prefix: Option<&Path>,
+    except: Option<&str>,
+) {
+    let Some(prefix) = prefix else {
+        return;
+    };
+    let shared = sessions.read().await.values().any(|session| {
+        Some(session.session_id.as_str()) != except
+            && session.wine_prefix.as_deref() == Some(prefix)
+    });
+    if shared {
+        tracing::info!(
+            "prefix {} 还有别的会话在用，不关它的 wine server",
+            prefix.display()
+        );
+        return;
     }
+    crate::wine::close_prefix(prefix).await;
 }
 
 /// Human-readable summary of a filter setting, for logs and RPC answers.
@@ -524,7 +545,7 @@ impl ScaleEngine for GamescopeScaleEngine {
 
             // Everything of the game's is gone by now; wine's server is the last
             // thing to close, or it leaves a `winedevice.exe` behind.
-            close_wine(wine_prefix.as_deref()).await;
+            close_wine_unshared(&sessions, wine_prefix.as_deref(), Some(sid.as_str())).await;
 
             sessions.write().await.remove(&sid);
             let _ = events.send(SessionEvent {
@@ -573,7 +594,12 @@ impl ScaleEngine for GamescopeScaleEngine {
                 kill_session_now(watchdog);
                 // 还留着的那一份就用 wine 自己的服务器收:`wineserver -k` 之后
                 // `winedevice.exe` 才会真的消失(实测)。
-                close_wine(watchdog_prefix.as_deref()).await;
+                close_wine_unshared(
+                    &watchdog_sessions,
+                    watchdog_prefix.as_deref(),
+                    Some(watchdog_sid.as_str()),
+                )
+                .await;
                 return;
             }
         });
@@ -625,7 +651,12 @@ impl ScaleEngine for GamescopeScaleEngine {
                          （游戏内部退出／启动器交接），kotori 收尾整组进程"
                     );
                     terminate_session(root).await;
-                    close_wine(detector_prefix.as_deref()).await;
+                    close_wine_unshared(
+                        &detector_sessions,
+                        detector_prefix.as_deref(),
+                        Some(detector_sid.as_str()),
+                    )
+                    .await;
                     return;
                 }
             });
@@ -655,7 +686,12 @@ impl ScaleEngine for GamescopeScaleEngine {
 
         // ...and the tree is still not the whole story: the same `winedevice.exe`
         // outlives the kill, so wine's server is closed for this prefix as well.
-        close_wine(session.wine_prefix.as_deref()).await;
+        close_wine_unshared(
+            &self.sessions,
+            session.wine_prefix.as_deref(),
+            Some(session.session_id.as_str()),
+        )
+        .await;
 
         Ok(())
     }
