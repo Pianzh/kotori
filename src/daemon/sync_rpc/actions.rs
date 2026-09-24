@@ -147,8 +147,11 @@ impl Daemon {
 
     /// The version packages the cloud holds for a game.
     ///
-    /// ⚠ 收的是**本机游戏 id**，于是只有"这一款在云端正好落在同名目录里"时才碰对
-    /// 地方。界面一律走 [`Self::rpc_sync_cloud_versions`]；这一条留给 CLI 与既有 e2e。
+    /// 收的是**本机游戏 id**，但版本是按**云端落点**放的：第一次上传时身份一建，
+    /// 落点就不再等于本机 id（kopia 那边落点就是身份 uuid），所以这里必须先把 id
+    /// 解析成落点。从前直接把 id 当落点用，只有"这一款在云端正好落在同名目录里"
+    /// 时才碰对地方 —— 那正是 rclone 上的巧合，而 kopia 上列出来永远是空的
+    /// （PLATFORMS 2026-09-24 记的那条未定性现象）。
     pub(in crate::daemon) async fn rpc_sync_versions(
         &self,
         game_id: &str,
@@ -159,8 +162,12 @@ impl Daemon {
         if !settings.enabled {
             return Err("云同步未启用".to_string());
         }
+        let cloud_key = self.cloud_key_of(game_id).await?;
         let runner = self.sync_runner(&settings)?;
-        let versions = runner.packages(game_id).await.map_err(|e| e.to_string())?;
+        let versions = runner
+            .packages(&cloud_key)
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(json!({ "versions": versions }))
     }
 
