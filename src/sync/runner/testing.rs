@@ -13,6 +13,13 @@ use crate::config::{SyncConfig, SyncEngine};
 use crate::secrets::{Keyring, SecretKey};
 use crate::sync::SaveTarget;
 
+mod native {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/support/native.rs"
+    ));
+}
+
 /// A stand-in `rclone` backed by a directory.
 pub(super) struct FakeRclone {
     pub(super) dir: PathBuf,
@@ -21,80 +28,19 @@ pub(super) struct FakeRclone {
 
 impl FakeRclone {
     pub(super) fn new(tag: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "kotori-rclone-{tag}-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
+        let dir = native::scratch(&format!("rclone-{tag}"));
         std::fs::create_dir_all(dir.join("bucket")).unwrap();
         let bin = dir.join("rclone");
 
+        // wrapper 只负责每个 Runner 的独立路径；命令语义与 E2E 共用原生 helper。
+        let quote =
+            |path: &Path| format!("'{}'", path.display().to_string().replace('\'', "'\\''"));
         let script = format!(
-            r#"#!/bin/sh
-[ "$1" = "{warmup}" ] && exit 0
-dir='{dir}'
-bucket="$dir/bucket"
-{{
-  echo "argv:$*"
-  env | grep '^RCLONE_CONFIG' | sed 's/^/env:/' | sort
-}} >> "$dir/log"
-if [ -f "$dir/fail" ] && printf '%s' "$*" | grep -qF "$(cat "$dir/fail")"; then
-  echo "fake rclone: refusing $1" >&2
-  exit 1
-fi
-# 远端名 `kotori:bkt/prefix/...` 就是 bucket 下的路径,和真 rclone 一样把 `:`
-# 当分隔符。
-resolve() {{ printf '%s' "$1" | tr ':' '/'; }}
-case "$1" in
-  mkdir)
-    mkdir -p "$bucket/$(resolve "$2")"
-    ;;
-  copyto)
-    case "$2" in
-      kotori:*) src="$bucket/$(resolve "$2")"; dst="$3" ;;
-      *) src="$2"; dst="$bucket/$(resolve "$3")" ;;
-    esac
-    mkdir -p "$(dirname "$dst")"
-    cp "$src" "$dst"
-    ;;
-  lsf)
-    target="$bucket/$(resolve "$3")"
-    [ -d "$target" ] && ls -1 "$target"
-    ;;
-  # `lsjson --files-only <dir>`：与 lsf 同一件事，但每条带 Size（界面上"这一版多大"）。
-  lsjson)
-    target=''
-    for a in "$@"; do
-      case "$a" in
-        --files-only) ;;
-        *) target="$a" ;;
-      esac
-    done
-    p="$bucket/$(resolve "$target")"
-    printf '['
-    first=1
-    if [ -d "$p" ]; then
-      for f in "$p"/*; do
-        [ -f "$f" ] || continue
-        n=${{f##*/}}
-        s=$(wc -c < "$f")
-        [ $first -eq 1 ] || printf ','
-        first=0
-        printf '{{"Path":"%s","Name":"%s","Size":%s,"IsDir":false}}' "$n" "$n" "$s"
-      done
-    fi
-    printf ']'
-    ;;
-  # 读回一个对象:身份卡就是这么读的。
-  cat) cat "$bucket/$(resolve "$2")" ;;
-  deletefile)
-    rm -f "$bucket/$(resolve "$2")"
-    ;;
-esac
-exit 0
-"#,
-            dir = dir.display(),
-            warmup = crate::secrets::testing::WARMUP_FLAG
+            "#!/bin/sh\nexec {} --rclone-root {} --rclone-log {} --rclone-fail {} \"$@\"\n",
+            quote(native::executable()),
+            quote(&dir.join("bucket/kotori")),
+            quote(&dir.join("log")),
+            quote(&dir.join("fail")),
         );
         crate::secrets::testing::write_executable(&bin, &script);
 
@@ -205,7 +151,7 @@ exit 0
 
 impl Drop for FakeRclone {
     fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.dir).ok();
+        native::cleanup(&self.dir);
     }
 }
 
