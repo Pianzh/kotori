@@ -11,6 +11,10 @@ use crate::secrets::Keyring;
 
 use super::{CHECK_TIMEOUT, Daemon, GameOutcome, PULL_TIMEOUT, SETTLE_DELAY, sync};
 
+/// 「恢复」自己的总上限：它要下载、解包、再铺回本机，比"点开看一眼"慢得多 ——
+/// 网络卡住时用户不该无限等，而正常的一次恢复也绝不能被误杀（BUG-12）。
+const RESTORE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// 同步现在为什么跑不起来；一切就绪时是 `None`。
 ///
 /// 顺序是"先问最根本的"：配置本身写错了吗 → 凭据在不在 → 当前引擎那个程序找得到吗。
@@ -150,6 +154,11 @@ impl Daemon {
         game_id: &str,
     ) -> Result<Value, String> {
         let settings = self.config.read().await.sync.clone();
+        // 关着的时候直接说清楚：从前这里照样构造 runner、照样发远端调用，用户看到的
+        // 是"等半天然后一个网络错误"，分不清是没开还是网不通（BUG-12）。
+        if !settings.enabled {
+            return Err("云同步未启用".to_string());
+        }
         let runner = self.sync_runner(&settings)?;
         let versions = runner.packages(game_id).await.map_err(|e| e.to_string())?;
         Ok(json!({ "versions": versions }))
@@ -225,16 +234,24 @@ impl Daemon {
         let cloud_id = self.cloud_id_of(game_id).await?;
 
         let cloud_key = self.cloud_key_of(game_id).await?;
-        let outcome = runner
-            .restore(
+        let outcome = tokio::time::timeout(
+            RESTORE_TIMEOUT,
+            runner.restore(
                 game_id,
                 &name,
                 &cloud_key,
                 &targets,
                 cloud_id.as_deref(),
                 version,
+            ),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "恢复《{name}》超过 {} 分钟没有结束 —— 网络通不通?",
+                RESTORE_TIMEOUT.as_secs() / 60
             )
-            .await;
+        })?;
         self.sync.remember(game_id, "恢复", &outcome);
         Ok(json!({ "ok": outcome.ok, "game": outcome }))
     }
