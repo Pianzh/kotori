@@ -53,11 +53,17 @@ impl Daemon {
     ///
     /// 写入时机都在"我们刚知道最新内容"这一刻：上传成功、深扫之后、联网读到之后
     /// （见 [`Daemon::cloud_index_view`] 与 [`Daemon::refresh_cached_index`]）。
-    fn remember_index(&self, signature: &str, index: Option<CloudIndex>) {
+    /// 写下缓存，并把**这一份**（连同它自己的 `cached_at`）交回去。
+    ///
+    /// 交回去是为了"一次采样，一处真相"：调用方要拿那个时间去回答用户，而它若是自己
+    /// 再采一次，就会比文件里的晚 1ms —— "第一次响应里的时间"与"第二次读缓存拿到的"
+    /// 于是对不上（`tests/ipc_e2e/sync_index.rs` 上红了五轮的就是它）。
+    fn remember_index(&self, signature: &str, index: Option<CloudIndex>) -> CachedIndex {
         let cached = CachedIndex::new(signature, index);
         if let Err(error) = index_cache::write_at(&crate::config::data_dir(), &cached) {
             tracing::warn!("云端索引缓存没写成（不影响别的）: {error}");
         }
+        cached
     }
 
     /// 记下（或清掉）最近一次刷新失败的原因 —— 读的时候要把它带给界面。
@@ -72,11 +78,14 @@ impl Daemon {
     /// 真的去云端读一次索引，顺便更新缓存与"上次刷新失败"那笔账。
     ///
     /// **只有这一处**碰网络：用户按的刷新、本地还没有缓存，两条路都汇到这里。
+    ///
+    /// 交回去的是 `(索引, 写进缓存的那个时间)` —— 时间必须来自写入的那一份，见
+    /// [`Self::remember_index`]。
     async fn fetch_index(
         &self,
         signature: &str,
         settings: &SyncConfig,
-    ) -> Result<Option<CloudIndex>, String> {
+    ) -> Result<(Option<CloudIndex>, String), String> {
         let runner = self.sync_runner(settings)?;
         let index = tokio::time::timeout(CHECK_TIMEOUT, runner.read_index())
             .await
@@ -87,8 +96,8 @@ impl Daemon {
                 )
             })?
             .map_err(|e| e.to_string())?;
-        self.remember_index(signature, index.clone());
-        Ok(index)
+        let cached = self.remember_index(signature, index.clone());
+        Ok((index, cached.cached_at))
     }
 
     /// 读云端索引：**只看本机缓存**；只有用户按刷新、或者本地**还没有**缓存时才去云端。
@@ -119,8 +128,7 @@ impl Daemon {
         }
 
         match self.fetch_index(&signature, &settings).await {
-            Ok(index) => {
-                let cached_at = crate::sync::index::stamp();
+            Ok((index, cached_at)) => {
                 self.remember_refresh_error(None).await;
                 let len = index.as_ref().map(CloudIndex::len);
                 tracing::debug!(
@@ -166,7 +174,7 @@ impl Daemon {
             return;
         };
         match self.fetch_index(&signature, &settings).await {
-            Ok(index) => {
+            Ok((index, _)) => {
                 let count = index.as_ref().map(CloudIndex::len);
                 self.remember_refresh_error(None).await;
                 tracing::debug!("云端索引已刷新（{why}）: {count:?} 款");
