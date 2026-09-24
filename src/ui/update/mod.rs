@@ -140,6 +140,12 @@ impl App {
                 Task::none()
             }
             Message::GameSelected(id) => {
+                // 换款之前把上一款那笔编辑交出去：防抖窗口里挂着的那一次会被这一笔
+                // 取代（世代 +1），而 `begin_auto_save` 拿的是**当前**草稿 —— 也就是
+                // 上一款的。`self.draft` 下面就被换成新款了，不先发这一笔，上一款的
+                // 编辑就只留在内存里（BUG-18）。
+                let flush = self.begin_auto_save();
+                self.cancel_auto_save();
                 let mut load_sync = false;
                 if let Some(g) = self.games.iter().find(|g| g.id == id) {
                     self.selected = Some(g.id.clone());
@@ -157,19 +163,26 @@ impl App {
                     load_sync = self.sync_status.is_none();
                 }
                 if load_sync {
-                    return Task::perform(async { load_sync_status().await }, |result| {
-                        Message::SyncStatusLoaded(Box::new(result))
-                    });
+                    return Task::batch([
+                        flush,
+                        Task::perform(async { load_sync_status().await }, |result| {
+                            Message::SyncStatusLoaded(Box::new(result))
+                        }),
+                    ]);
                 }
-                Task::none()
+                flush
             }
             Message::BackToList => {
+                // 离开这一页之前先把草稿交出去：`draft` 下面就被清掉了，不先发这一笔，
+                // 防抖窗口里那次编辑就只留在内存里（BUG-18 的另一半）。
+                let flush = self.begin_auto_save();
+                self.cancel_auto_save();
                 self.selected = None;
                 self.draft = None;
                 self.saved_msg = None;
                 self.confirm_delete = false;
                 self.confirm_stop = false;
-                Task::none()
+                flush
             }
             Message::SearchChanged(query) => {
                 self.search = query;
@@ -415,9 +428,12 @@ impl App {
                     }
                 }
 
-                // 这一笔已经过期(按过「重置」,或者又改过):配置里现在写着的是一个
-                // 用户不要的值,用手上的草稿再存一次把它拉回来。
-                if same_game && generation != self.autosave_generation {
+                // 这一笔已经过期(按过「重置」、又改过,或者用户已经翻到别的游戏去了):
+                // 配置里现在写着的可能是一个用户不要的值,用手上的草稿再存一次把它拉
+                // 回来。⚠ **不能只看 `same_game`**:切到另一款之后,新款那笔编辑会因为
+                // "上一笔还在路上"被退回,这里若不补发就再也没人发它了 —— B 的修改就是
+                // 这样丢的(BUG-18)。
+                if generation != self.autosave_generation {
                     return self.begin_auto_save();
                 }
                 // 存完把库读一遍:列表与"已存值"要跟上,否则退出这一页再进来看到的是旧的。
