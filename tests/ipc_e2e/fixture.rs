@@ -27,16 +27,7 @@ pub(crate) struct Fixture {
 
 impl Fixture {
     pub(crate) fn new(tag: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "kotori-e2e-{}-{}-{}",
-            tag,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::native::scratch(&format!("e2e-{tag}"));
 
         let config = dir.join("config.toml");
         let socket = dir.join("kotori.sock");
@@ -105,95 +96,15 @@ sharpness = 4
         let secrets = self.dir.join("secrets");
         std::fs::create_dir_all(&secrets).unwrap();
 
-        write_script(
-            &bin.join("rclone"),
-            &format!(
-                r#"#!/bin/sh
-[ "$1" = "--kotori-warmup" ] && exit 0
-dir='{dir}'
-log='{log}'
-# 桶可以换到别处：两台机器共用一个桶就是靠它（见 `share_bucket_with`）。
-bucket="${{KOTORI_FAKE_BUCKET:-{dir}}}"
-printf 'argv:%s\n' "$*" >> "$log"
-
-# Map a remote path onto the on-disk bucket; local paths pass through.
-remote_path() {{
-  case "$1" in
-    kotori:*) printf '%s/%s' "$bucket" "${{1#kotori:}}" ;;
-    *) printf '%s' "$1" ;;
-  esac
-}}
-
-cmd="$1"; shift
-case "$cmd" in
-  mkdir) mkdir -p "$(remote_path "$1")" ;;
-  # One version is one package: a transfer is a single object each way.
-  copyto)
-    sp=$(remote_path "$1"); dp=$(remote_path "$2")
-    mkdir -p "$(dirname "$dp")"
-    cp "$sp" "$dp"
-    ;;
-  # `lsf --files-only <game>`: the file names *are* the version list.
-  # `lsf --dirs-only <games>`: the directory names *are* the games.
-  lsf)
-    target=''; mode='files'
-    for a in "$@"; do
-      case "$a" in
-        --files-only) mode='files' ;;
-        --dirs-only) mode='dirs' ;;
-        *) target="$a" ;;
-      esac
-    done
-    p=$(remote_path "$target")
-    if [ -d "$p" ]; then
-      if [ "$mode" = 'dirs' ]; then
-        # rclone 给目录名加尾斜杠（--dir-slash 的默认值），假货照做。
-        for d in "$p"/*/; do
-          [ -d "$d" ] || continue
-          d=${{d%/}}
-          printf '%s/\n' "${{d##*/}}"
-        done
-      else
-        # 真 rclone 的 --files-only 列出**所有**文件（包、身份卡、别人放的东西），
-        # 由 kotori 自己按名字筛；这里只 grep .zip 会让身份卡在测试里"不存在"。
-        ls -1 "$p"
-      fi
-    fi
-    ;;
-  # `lsjson --files-only <dir>`：与 lsf 同一件事，但每条带 Size（界面上"这一版多大"）。
-  lsjson)
-    target=''
-    for a in "$@"; do
-      case "$a" in
-        --files-only) ;;
-        *) target="$a" ;;
-      esac
-    done
-    p="$(remote_path "$target")"
-    printf '['
-    first=1
-    if [ -d "$p" ]; then
-      for f in "$p"/*; do
-        [ -f "$f" ] || continue
-        n=${{f##*/}}
-        s=$(wc -c < "$f")
-        [ $first -eq 1 ] || printf ','
-        first=0
-        printf '{{"Path":"%s","Name":"%s","Size":%s,"IsDir":false}}' "$n" "$n" "$s"
-      done
-    fi
-    printf ']'
-    ;;
-  # `cat <remote>`：读回一个对象（身份卡就是这么读的）。
-  cat) cat "$(remote_path "$1")" ;;
-  deletefile) rm -f "$(remote_path "$1")" ;;
-esac
-exit 0
-"#,
-                dir = self.dir.display(),
-                log = log.display()
-            ),
-        );
+        std::fs::copy(crate::native::executable(), bin.join("rclone")).unwrap();
+        self.envs
+            .push(("KOTORI_FAKE_BUCKET".into(), self.dir.display().to_string()));
+        self.envs
+            .push(("KOTORI_FAKE_LOG".into(), log.display().to_string()));
+        self.envs.push((
+            "KOTORI_FAKE_FAIL".into(),
+            self.dir.join("fail").display().to_string(),
+        ));
 
         // Mirrors the parts of secret-tool kotori relies on; entries are files
         // named after the `account` attribute.
@@ -314,6 +225,8 @@ exit 0
     }
 
     pub(crate) fn rpc(&self, method: &str, params: Value) -> Value {
+        // 只记方法与结果，不把凭据参数复制到诊断日志。
+        let started = Instant::now();
         let mut stream = UnixStream::connect(&self.socket)
             .unwrap_or_else(|e| panic!("connect failed: {e}\n{}", self.logs()));
         stream
@@ -331,8 +244,24 @@ exit 0
         stream.flush().unwrap();
 
         let mut line = String::new();
-        BufReader::new(stream).read_line(&mut line).unwrap();
-        serde_json::from_str(&line).unwrap_or_else(|e| panic!("bad response {line:?}: {e}"))
+        BufReader::new(stream)
+            .read_line(&mut line)
+            .unwrap_or_else(|e| panic!("{method}: read failed: {e}\n{}", self.logs()));
+        let response: Value = serde_json::from_str(&line)
+            .unwrap_or_else(|e| panic!("{method}: bad response {line:?}: {e}\n{}", self.logs()));
+        let mut trace = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(self.dir.join("rpc.log"))
+            .unwrap();
+        writeln!(
+            trace,
+            "{method} {}ms error={}",
+            started.elapsed().as_millis(),
+            response["error"]["code"]
+        )
+        .unwrap();
+        response
     }
 
     pub(crate) fn wait_for_exit(&mut self, timeout: Duration) -> bool {
@@ -354,6 +283,9 @@ impl Drop for Fixture {
             let _ = child.kill();
             let _ = child.wait();
         }
-        std::fs::remove_dir_all(&self.dir).ok();
+        if std::thread::panicking() {
+            eprintln!("--- daemon log ---\n{}", self.logs());
+        }
+        crate::native::cleanup(&self.dir);
     }
 }

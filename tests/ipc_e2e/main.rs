@@ -15,7 +15,10 @@
 //! 游戏库的增删改、启动与跟随会话、云同步。
 
 mod fixture;
+mod fixture_contract;
 mod helpers;
+#[path = "../support/native.rs"]
+mod native;
 
 mod daemon;
 mod library;
