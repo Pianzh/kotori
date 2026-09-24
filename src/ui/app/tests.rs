@@ -255,6 +255,50 @@ fn a_late_save_never_touches_another_games_draft() {
     assert!(app.saved_msg.is_none(), "已经离开那一页了,别在这儿报");
 }
 
+/// `BUG-18` 的回归：A 的保存还在路上时切到 B、改 B —— B 那一笔不能没人发。
+///
+/// 从前 `ProfileSaved` 只在"还是同一款"时才补发，于是切款之后 B 的编辑会因为
+/// "上一笔还在路上"被退回，而且再也没人发它 —— 用户看到的是"改了、没保存"
+/// （GAP-3 一直说这条没有回归测试）。
+#[test]
+fn switching_games_mid_save_still_persists_the_new_edits() {
+    let (mut app, _task) = App::new();
+    app.games = vec![
+        ui_game(),
+        UiGame {
+            id: "other".into(),
+            name: "Other".into(),
+            ..ui_game()
+        },
+    ];
+
+    // A 改一笔，让保存上路。
+    app.update(Message::GameSelected("demo".into()));
+    app.update(Message::AlgoChanged("Nis".into()));
+    app.update(Message::AutoSave(app.autosave_generation));
+    assert!(app.save_in_flight.is_some(), "A 那一笔该在路上");
+
+    // 切到 B 再改 B：这一笔因为"上一笔还在路上"发不出去（`begin_auto_save` 退回）。
+    app.update(Message::GameSelected("other".into()));
+    app.update(Message::SharpnessChanged(4.0));
+    app.update(Message::AutoSave(app.autosave_generation));
+    assert!(
+        app.save_in_flight
+            .as_ref()
+            .is_some_and(|attempt| attempt.draft.game_id == "demo"),
+        "在路上的仍然是 A 那一笔"
+    );
+
+    // A 的回包到了：世代已经变了（切款 + 改 B）⇒ 必须**补发**手上这份（B 的）。
+    app.update(Message::ProfileSaved(1, Ok(())));
+    let resend = app
+        .save_in_flight
+        .as_ref()
+        .expect("B 那一笔必须被补发，否则它就丢了");
+    assert_eq!(resend.draft.game_id, "other");
+    assert_eq!(resend.draft.sharpness, 4.0);
+}
+
 /// 「启动 / 停止」那一颗按钮:**在跑的要去停,没在跑的才去启动**。
 ///
 /// 用户 2026-09-20 实测报的 bug:详情页头部那颗按钮在游戏跑起来之后显示成「停止」,
