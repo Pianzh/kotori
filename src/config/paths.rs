@@ -294,6 +294,57 @@ mod tests {
         assert!(dir.exists(), "读不动不许把它搬走");
     }
 
+    /// 原子写的证明：一边写、一边读，读到的永远是**完整的**一份（GAP-2 的一半）。
+    ///
+    /// 只跑 unix：Windows 上 `rename` 撞上"正被打开的文件"会失败，那是另一套文件
+    /// 共享语义（生产路径里 daemon 是唯一写者，读方是同一个进程用 RwLock 串着的，
+    /// 撞不上）。
+    #[cfg(unix)]
+    #[test]
+    fn a_reader_never_sees_a_half_written_config() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let dir = test_scratch("config-atomic");
+        let path = dir.join("config.toml");
+        // 写一份**很长**的值：写到一半被读到，长度就会短一截（或者 TOML 直接读不懂）。
+        let long = "x".repeat(200_000);
+
+        // 先落一份，免得把"还没有文件"（那是默认值）误判成"读到半份"。
+        let mut initial = Config::default();
+        initial.daemon.socket_path = PathBuf::from(&long);
+        save_to(&path, &initial).unwrap();
+
+        let stop = Arc::new(AtomicBool::new(false));
+        let writer = {
+            let path = path.clone();
+            let stop = stop.clone();
+            let long = long.clone();
+            std::thread::spawn(move || {
+                for _ in 0..50 {
+                    let mut config = Config::default();
+                    config.daemon.socket_path = PathBuf::from(&long);
+                    save_to(&path, &config).unwrap();
+                }
+                stop.store(true, Ordering::Relaxed);
+            })
+        };
+
+        let mut reads = 0;
+        while !stop.load(Ordering::Relaxed) {
+            let loaded = load_at(&path).expect("读到半份配置：原子写没生效");
+            assert_eq!(
+                loaded.daemon.socket_path.to_string_lossy().len(),
+                long.len(),
+                "读到的必须是完整的一份"
+            );
+            reads += 1;
+        }
+        writer.join().unwrap();
+        assert!(reads > 0, "读线程一次都没跑");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A unique scratch directory that removes itself on drop.
     struct Scratch(PathBuf);
 

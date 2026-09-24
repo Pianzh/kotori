@@ -70,28 +70,57 @@ pub fn read_dir_manifest(dir: &Path) -> Result<Manifest, String> {
     parse_manifest(&raw)
 }
 
+/// 解包时的护栏：远端包是**外部输入**，一个异常包不该把临时目录撑爆、也不该把
+/// CPU 卡死（BUG-28）。下面三个都是"正常存档绝碰不到"的量级。
+///
+/// 做成可注入的值是为了**能测**：20000 个条目、512 MiB 的包在测试里造不出来，
+/// 而那几条护栏又必须真的被验过（GAP-5）。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct Limits {
+    /// 包内成员数上限。
+    pub entries: usize,
+    /// 单个文件写出的字节上限。
+    pub file_bytes: u64,
+    /// 整包写出的字节上限。
+    pub total_bytes: u64,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            entries: 20_000,
+            file_bytes: 512 * 1024 * 1024,
+            total_bytes: 4 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
 /// 把包解到 `into`（一个临时目录），按清单把修改时间盖回每个文件。
 ///
 /// 时间必须自己盖：zip 条目里存的是 2 秒精度的 DOS 时间，直接用它会让"谁新"
 /// 在往返一次之后变得不可判——上传→取回→再比较，本该判成"一样"，却可能因为
 /// 时间被抹平而判成"本机更新"，那之后就再也取不回云端的新存档了。
 pub fn extract(zip_path: &Path, into: &Path) -> Result<Manifest, String> {
+    extract_with(zip_path, into, Limits::default())
+}
+
+/// [`extract`]，但护栏可以调小 —— 只给测试用（见 [`Limits`]）。
+pub(super) fn extract_with(
+    zip_path: &Path,
+    into: &Path,
+    limits: Limits,
+) -> Result<Manifest, String> {
     let manifest = read_manifest(zip_path)?;
     let file =
         File::open(zip_path).map_err(|e| format!("无法打开存档包 {}: {e}", zip_path.display()))?;
     let mut archive = zip::ZipArchive::new(file)
         .map_err(|e| format!("{} 不是有效的 zip 包: {e}", zip_path.display()))?;
 
-    // 远端包是**外部输入**：一个异常包不该把临时目录撑爆、也不该把 CPU 卡死
-    // （BUG-28）。下面几个都是"正常存档碰不到"的量级。
-    const MAX_ENTRIES: usize = 20_000;
-    const MAX_FILE_BYTES: u64 = 512 * 1024 * 1024;
-    const MAX_TOTAL_BYTES: u64 = 4 * 1024 * 1024 * 1024;
-
-    if archive.len() > MAX_ENTRIES {
+    if archive.len() > limits.entries {
         return Err(format!(
-            "包内条目太多（{} 项，上限 {MAX_ENTRIES}），拒绝解包",
-            archive.len()
+            "包内条目太多（{} 项，上限 {}），拒绝解包",
+            archive.len(),
+            limits.entries
         ));
     }
     let mut written_total: u64 = 0;
@@ -121,17 +150,17 @@ pub fn extract(zip_path: &Path, into: &Path) -> Result<Manifest, String> {
             .map_err(|e| format!("无法写入 {}: {e}", destination.display()))?;
         // 按**实际写出的字节**记账，不看条目自己声明的尺寸：包是远端来的，
         // 声明值可以是假的。
-        let mut limited = std::io::Read::take(&mut item, MAX_FILE_BYTES + 1);
+        let mut limited = std::io::Read::take(&mut item, limits.file_bytes + 1);
         let written = std::io::copy(&mut limited, &mut out)
             .map_err(|e| format!("解包 {} 失败: {e}", destination.display()))?;
-        if written > MAX_FILE_BYTES {
+        if written > limits.file_bytes {
             return Err(format!("包内 {name} 超过单个文件的上限，拒绝解包"));
         }
         written_total = written_total.saturating_add(written);
-        if written_total > MAX_TOTAL_BYTES {
+        if written_total > limits.total_bytes {
             return Err(format!(
                 "包解出来的总量超过上限（{} GiB），拒绝解包",
-                MAX_TOTAL_BYTES / (1024 * 1024 * 1024)
+                limits.total_bytes / (1024 * 1024 * 1024)
             ));
         }
 

@@ -7,7 +7,7 @@
 use std::path::{Path, PathBuf};
 
 use super::gather::excluded_by;
-use super::unpack::{parse_manifest, read_manifest};
+use super::unpack::{Limits, extract_with, parse_manifest, read_manifest};
 use super::*;
 use crate::sync::SaveTarget;
 
@@ -285,4 +285,45 @@ fn a_manifest_from_a_newer_kotori_is_refused_rather_than_guessed() {
     let manifest = parse_manifest(legacy).unwrap();
     assert!(manifest.has_location("rel-a"));
     assert!(!manifest.has_location("rel-b"));
+}
+
+/// 护栏一：包内成员太多（GAP-5）。上限调到 1，两个成员就该被拒 —— 真实上限是
+/// 20000，测试里造不出那种包，所以护栏本身做成可注入的（见 `unpack::Limits`）。
+#[test]
+fn a_package_with_too_many_members_is_refused() {
+    let dir = temp("too-many");
+    let saves = dir.join("saves");
+    write(&saves, "a.sav", "one");
+    write(&saves, "b.sav", "two");
+    let zip = dir.join("v.zip");
+    pack(&zip, &[target("rel-savedata", &saves)], now(), None).unwrap();
+
+    let limits = Limits {
+        entries: 1,
+        ..Limits::default()
+    };
+    let error = extract_with(&zip, &dir.join("out"), limits).unwrap_err();
+    assert!(error.contains("条目太多"), "{error}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+/// 护栏二：单个成员写出的字节超过上限（GAP-5）。按**实际写出的字节**记账，
+/// 不信条目自己声明的尺寸 —— 包是远端来的。
+#[test]
+fn a_member_over_the_file_limit_is_refused() {
+    let dir = temp("too-big");
+    let saves = dir.join("saves");
+    write(&saves, "a.sav", "0123456789");
+    let zip = dir.join("v.zip");
+    pack(&zip, &[target("rel-savedata", &saves)], now(), None).unwrap();
+
+    let limits = Limits {
+        file_bytes: 4,
+        ..Limits::default()
+    };
+    let error = extract_with(&zip, &dir.join("out"), limits).unwrap_err();
+    assert!(error.contains("超过单个文件的上限"), "{error}");
+
+    std::fs::remove_dir_all(&dir).ok();
 }
