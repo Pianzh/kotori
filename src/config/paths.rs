@@ -184,12 +184,28 @@ pub fn load() -> anyhow::Result<Config> {
 /// The daemon remembers the file it was started with instead of re-resolving it
 /// on every write, so a config that was loaded from one path can never be saved
 /// over another.
+///
+/// ⚠ **读不动**与**读不懂**是两件事，别混成一条路：读不动（权限、I/O 错误）如实
+/// 报错，既不把文件搬去 `.corrupt`、也不回退默认值 —— 否则下一次保存会把一份默认
+/// 配置写到原路径上，用户的库就此不见（BUG-15 的另一半）。只有真的解析不了，才按
+/// 下面那条老规矩备份并回退。
 pub fn load_at(path: &Path) -> anyhow::Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    match load_from(path) {
-        Ok(config) => Ok(config),
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        // 刚好被删掉：与"还没有配置"同一条路。
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
+        Err(err) => {
+            return Err(anyhow::anyhow!("读不了配置文件 {}: {err}", path.display()));
+        }
+    };
+    match toml::from_str::<Config>(&content) {
+        Ok(mut config) => {
+            config.normalize();
+            Ok(config)
+        }
         Err(err) => {
             let backup = path.with_extension("toml.corrupt");
             let moved = std::fs::rename(path, &backup).is_ok();
@@ -263,6 +279,19 @@ pub(crate) fn test_scratch(tag: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 读不动 ≠ 配置坏了：前者如实报错，既不把文件搬去 `.corrupt`、也不回退默认值
+    /// —— 否则某一次保存会把一份默认配置写到原路径上，用户的库就此不见（BUG-15
+    /// 的另一半）。
+    #[test]
+    fn an_unreadable_config_is_an_error_not_a_fresh_start() {
+        // 把路径指到一个**目录**上：读它必然失败，而且不是 NotFound（那个仍然是
+        // "还没有配置"）。
+        let dir = test_scratch("config-unreadable");
+        let error = load_at(&dir).expect_err("读不动时必须报错");
+        assert!(error.to_string().contains("读不了配置文件"), "{error}");
+        assert!(dir.exists(), "读不动不许把它搬走");
+    }
 
     /// A unique scratch directory that removes itself on drop.
     struct Scratch(PathBuf);
