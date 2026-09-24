@@ -271,16 +271,26 @@ async fn a_real_kopia_repository_is_visible_from_another_machine() {
         vec!["20260901T000000000Z-aaaa1111"],
         "B 要看得见 A 拍的版本"
     );
+    let games = b.cloud_games().await.unwrap();
+    assert_eq!(games.len(), 1);
+    assert_eq!(games[0].id, "demo");
+    assert_eq!(games[0].versions, 1);
     assert_eq!(
-        b.cloud_games().await.unwrap(),
-        vec![CloudGame {
-            id: "demo".to_string(),
-            versions: 1,
-            latest: Some("20260916T120000000Z-abcd1234".to_string()),
-            size: 0,
-        }],
-        "也要说得清云端有哪几款、各有几版"
+        games[0].latest.as_deref(),
+        Some("20260901T000000000Z-aaaa1111")
     );
+    // 大小包括序列化 manifest，不能用与实际工件无关的占位数字。
+    let expected_size = work
+        .join("payload/kotori-manifest.json")
+        .metadata()
+        .unwrap()
+        .len()
+        + work
+            .join("payload/savedata/save01.sav")
+            .metadata()
+            .unwrap()
+            .len();
+    assert_eq!(games[0].size, expected_size);
     // B 自己一版都没拍过：上面那两条只可能是从仓库里读来的。
     assert_eq!(
         a.versions("demo").await.unwrap(),
