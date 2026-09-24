@@ -145,8 +145,21 @@ impl CloudIndex {
             .iter_mut()
             .find(|known| known.identity.cloud_id == game.identity.cloud_id)
         {
-            Some(known) if known.updated >= game.updated => {}
-            Some(known) => *known = game,
+            Some(known) if known.updated >= game.updated => {
+                // 这一条比对面新，但对面可能带着**我们没有的机器**：两台机器同时写
+                // 索引时，整条按时间胜出会把对方那台机器的指纹、位置与 exe 路径丢掉
+                // （BUG-24）。机器是"一台一条"的集合，只并集、绝不覆盖。
+                for machine in &game.identity.machines {
+                    known.identity.merge_machine(machine.clone());
+                }
+            }
+            Some(known) => {
+                let mut incoming = game;
+                for machine in &known.identity.machines {
+                    incoming.identity.merge_machine(machine.clone());
+                }
+                *known = incoming;
+            }
             None => self.games.push(game),
         }
     }
@@ -340,6 +353,58 @@ mod tests {
         // 另一款就是另一条。
         union.merge(game("c2", "two", "另一款", machine("a", &["f9"], &[])));
         assert_eq!(union.len(), 2);
+    }
+
+    /// 两台机器同时给同一款写增量：后到的那份若整条胜出，就会把对面那台机器的
+    /// 指纹与位置抹掉（BUG-24）。机器是"一台一条"的集合，只并集。
+    #[test]
+    fn a_later_write_does_not_erase_the_other_machines_record() {
+        // b 在 a 之后写，但它读到的是更早的并集（没看见 a）⇒ 更新的那份里只有 b。
+        let mut union = CloudIndex::new();
+        let mut from_a = game(
+            "c1",
+            "one",
+            "同名",
+            machine("a", &["fa"], &["D:/A/game.exe"]),
+        );
+        from_a.updated = "2026-09-23T10:00:00Z".to_string();
+        union.merge(from_a);
+
+        let mut from_b = game(
+            "c1",
+            "one",
+            "同名",
+            machine("b", &["fb"], &["D:/B/game.exe"]),
+        );
+        from_b.updated = "2026-09-23T11:00:00Z".to_string();
+        union.merge(from_b);
+
+        let mut ids: Vec<&str> = union.games[0]
+            .identity
+            .machines
+            .iter()
+            .map(|m| m.machine_id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["a", "b"], "两台机器都该在:{ids:?}");
+
+        // 反过来的到达顺序（旧的那份后到）同样不能抹掉新的那台。
+        let mut union = CloudIndex::new();
+        let mut newer = game("c1", "one", "同名", machine("b", &["fb"], &[]));
+        newer.updated = "2026-09-23T11:00:00Z".to_string();
+        union.merge(newer);
+        let mut older = game("c1", "one", "同名", machine("a", &["fa"], &[]));
+        older.updated = "2026-09-23T10:00:00Z".to_string();
+        union.merge(older);
+
+        let mut ids: Vec<&str> = union.games[0]
+            .identity
+            .machines
+            .iter()
+            .map(|m| m.machine_id.as_str())
+            .collect();
+        ids.sort_unstable();
+        assert_eq!(ids, vec!["a", "b"], "两台机器都该在:{ids:?}");
     }
 
     #[test]
