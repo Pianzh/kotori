@@ -12,8 +12,8 @@ use crate::process;
 use crate::util::executor::find_binary;
 
 use super::teardown::{
-    GAME_GONE_GRACE, GAME_POLL, TEARDOWN_GRACE, TEARDOWN_POLL, kill_session_now, pid_alive,
-    stuck_in_teardown, terminate_session,
+    GAME_GONE_GRACE, GAME_POLL, TEARDOWN_GRACE, TEARDOWN_POLL, close_wine_unshared,
+    kill_session_now, pid_alive, stuck_in_teardown, terminate_session,
 };
 
 use super::x11::{GamescopeDisplay, Settings};
@@ -273,44 +273,6 @@ impl GamescopeScaleEngine {
 /// 把结果回传(见 HANDOVER §5 里 `resize_window` 那条)。
 fn screen_size() -> (u32, u32) {
     crate::display::primary_resolution_or((FALLBACK_OUTPUT_WIDTH, FALLBACK_OUTPUT_HEIGHT))
-}
-
-/// Wine's own half of a teardown.
-///
-/// The process group and the process tree are kotori's kill; this is wine's, and
-/// it is not optional. Measured (2026-09-13): wine's `winedevice.exe` ignores
-/// `SIGTERM` and puts itself in a process group of its own, so it survives every
-/// signal kotori sends and then sits in whatever systemd scope the session lived
-/// in until that scope's 90 s `TimeoutStopSec` runs out — which is a 90 s
-/// shutdown, twice over. `wineserver -k` is what actually removes it.
-///
-/// Always called *after* the game's processes are gone: while a game is running
-/// this would kill that game's own server.
-///
-/// ⚠ **这个 prefix 上还有我方别的会话时不关**：`wineserver -k` 会把挂在这个
-/// prefix 上的进程一起带走，而"全局 `~/.wine`"这种共用 prefix 很常见 —— 一款退出
-/// 不该让另一款跟着掉线（BUG-22）。`except` 是正在收尾的这一局（它自己可能还在
-/// 会话表里，`None` = 表里没有它）。
-pub(super) async fn close_wine_unshared(
-    sessions: &Arc<RwLock<HashMap<String, ScaleSession>>>,
-    prefix: Option<&Path>,
-    except: Option<&str>,
-) {
-    let Some(prefix) = prefix else {
-        return;
-    };
-    let shared = sessions.read().await.values().any(|session| {
-        Some(session.session_id.as_str()) != except
-            && session.wine_prefix.as_deref() == Some(prefix)
-    });
-    if shared {
-        tracing::info!(
-            "prefix {} 还有别的会话在用，不关它的 wine server",
-            prefix.display()
-        );
-        return;
-    }
-    crate::wine::close_prefix(prefix).await;
 }
 
 /// Human-readable summary of a filter setting, for logs and RPC answers.

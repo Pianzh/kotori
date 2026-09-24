@@ -340,7 +340,7 @@ fn spawn_watch_task(
         // `None`(观测会话)时它什么都不做:那是用户自己的 prefix,关不得。
         // ⚠ 只关**没有别的会话在用**的 prefix(BUG-22),理由见 `close_wine_unshared`。
         #[cfg(unix)]
-        super::gamescope::close_wine_unshared(&sessions, prefix.as_deref(), Some(sid.as_str()))
+        super::teardown::close_wine_unshared(&sessions, prefix.as_deref(), Some(sid.as_str()))
             .await;
         let _ = events.send(SessionEvent {
             session_id: sid,

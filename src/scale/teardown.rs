@@ -6,7 +6,14 @@
 //! story; the short version is that wine's `winedevice.exe` ignores SIGTERM and
 //! gamescope waits for it forever, so somebody has to put a ceiling on it.
 
+use std::collections::HashMap;
+use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
+
+use tokio::sync::RwLock;
+
+use super::ScaleSession;
 
 /// Check whether a process (by pid) still exists.
 pub(super) fn pid_alive(pid: i32) -> bool {
@@ -147,6 +154,45 @@ fn signal(root: i32, tree: &[i32], signal: i32) {
     }
 }
 
+/// 「这个 prefix 上还有没有**别的**会话在用」—— 没有才轮到我们关它。
+///
+/// `wineserver -k` 会把这个 prefix 上的进程一起带走（见 [`crate::wine::close_prefix`]），
+/// 而"全局 `~/.wine`"这种共用 prefix 很常见：一款退出不该让另一款跟着掉线（BUG-22）。
+/// `except` 是正在收尾的这一局（它自己可能还在会话表里，`None` = 表里已经没有它）。
+pub(super) async fn prefix_is_unshared(
+    sessions: &Arc<RwLock<HashMap<String, ScaleSession>>>,
+    prefix: &Path,
+    except: Option<&str>,
+) -> bool {
+    !sessions.read().await.values().any(|session| {
+        Some(session.session_id.as_str()) != except
+            && session.wine_prefix.as_deref() == Some(prefix)
+    })
+}
+
+/// 收尾时关掉这一局的 wine server —— **只有这个 prefix 上没有别的会话**时才关。
+///
+/// 它原来住在 `gamescope.rs`，搬到这儿有两个理由：一是它讲的正是收尾（这个模块的
+/// 题目），二是 `gamescope.rs` 已经七百多行、不该再往上加。搬过来之后那个判断还能
+/// 被单测直接验（下面 `a_prefix_another_session_still_uses_is_left_alone`）。
+pub(super) async fn close_wine_unshared(
+    sessions: &Arc<RwLock<HashMap<String, ScaleSession>>>,
+    prefix: Option<&Path>,
+    except: Option<&str>,
+) {
+    let Some(prefix) = prefix else {
+        return;
+    };
+    if !prefix_is_unshared(sessions, prefix, except).await {
+        tracing::info!(
+            "prefix {} 还有别的会话在用，不关它的 wine server",
+            prefix.display()
+        );
+        return;
+    }
+    crate::wine::close_prefix(prefix).await;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,5 +241,66 @@ mod tests {
         terminate_session(0).await;
         terminate_session(4_242_424).await;
         assert!(started.elapsed() < std::time::Duration::from_millis(500));
+    }
+
+    /// 造一个只关心 `session_id` 与 `wine_prefix` 的会话（其余字段占位）。
+    fn session(id: &str, prefix: Option<&Path>) -> ScaleSession {
+        ScaleSession {
+            session_id: id.to_string(),
+            game_id: Some(format!("game-{id}")),
+            gamescope_pid: None,
+            profile: crate::config::ScaleProfile::default_for(),
+            output_size: (0, 0),
+            runtime_ratio: 1.0,
+            started_at: std::time::Instant::now(),
+            process_group: None,
+            process_name: None,
+            exe_path: None,
+            wine_prefix: prefix.map(Path::to_path_buf),
+            watch_only: false,
+            direct: false,
+        }
+    }
+
+    /// BUG-22 的回归：**共用一个 prefix 的两个会话**里，一个收尾不该把另一个的
+    /// wine server 一起关掉（`wineserver -k` 会把那个 prefix 上的一切带走）。
+    #[tokio::test]
+    async fn a_prefix_another_session_still_uses_is_left_alone() {
+        let sessions: Arc<RwLock<HashMap<String, ScaleSession>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let shared = Path::new("/home/me/.wine");
+        sessions
+            .write()
+            .await
+            .insert("a".into(), session("a", Some(shared)));
+        sessions
+            .write()
+            .await
+            .insert("b".into(), session("b", Some(shared)));
+
+        assert!(
+            !prefix_is_unshared(&sessions, shared, Some("a")).await,
+            "b 还在用这个 prefix，不该轮到 a 去关"
+        );
+        // 自己不算"别人"：表里只剩自己时，那就是该关的时候。
+        assert!(!prefix_is_unshared(&sessions, shared, None).await);
+
+        // b 走了 ⇒ 才轮到关。
+        sessions.write().await.remove("b");
+        assert!(prefix_is_unshared(&sessions, shared, Some("a")).await);
+
+        // 用**别的** prefix 的会话不影响判断。
+        sessions.write().await.insert(
+            "c".into(),
+            session("c", Some(Path::new("/games/other/prefix"))),
+        );
+        assert!(prefix_is_unshared(&sessions, shared, Some("a")).await);
+
+        // 没有 prefix 的会话（观测会话）也不算数。
+        sessions
+            .write()
+            .await
+            .insert("d".into(), session("d", None));
+        assert!(prefix_is_unshared(&sessions, shared, Some("a")).await);
     }
 }
