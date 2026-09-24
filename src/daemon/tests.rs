@@ -304,7 +304,7 @@ async fn status_on_unknown_session_lists_nothing_new() {
         value["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("session not found")
+            .contains("找不到会话")
     );
 }
 

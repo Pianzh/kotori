@@ -127,7 +127,7 @@ fn main() -> anyhow::Result<()> {
     // `warn`, and `RUST_LOG` still overrides everything when debugging.
     const DEFAULT_LOG: &str = "info,\
          wgpu_core=warn,wgpu_hal=warn,wgpu_types=warn,naga=warn,\
-         winit=warn,calloop=warn,sctk=warn,sctk_adwaita=warn,iced_wgpu=warn";
+         winit=warn,calloop=warn,sctk=warn,sctk_adwaita=warn";
     fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(DEFAULT_LOG)),
@@ -204,8 +204,13 @@ fn main() -> anyhow::Result<()> {
                 println!("No games found in {}", directory.display());
             } else {
                 println!("Found {} game(s) in {}:", games.len(), directory.display());
+                // 展示也按 `add` 那套分配规则预演一遍：同一个 id 撞车时 `add` 会加
+                // 后缀，展示若还直接 `generate_game_id`，三条不同的游戏会印成同一个
+                // id（BUG-5，用户报过）。预演只动配置的副本，一个字节都不落盘。
+                let mut preview = config::load()?;
                 for g in &games {
-                    let id = game::generate_game_id(&g.name);
+                    let id = game::generate_unique_game_id(&preview, &g.name);
+                    preview.games.insert(id.clone(), g.clone());
                     println!("  [{}] {} -> {}", id, g.name, g.exe_path.display());
                 }
             }

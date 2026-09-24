@@ -241,7 +241,7 @@ pub enum ScaleError {
     #[error("游戏启动失败：{0}")]
     StartFailed(String),
 
-    #[error("session not found: {0}")]
+    #[error("找不到会话：{0}")]
     SessionNotFound(String),
 
     #[error("protocol error: {0}")]

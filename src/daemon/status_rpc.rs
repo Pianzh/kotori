@@ -198,7 +198,10 @@ impl Daemon {
         let path = self.config_path.read().await.clone();
         let new_config = crate::config::load_at(&path).map_err(|e| e.to_string())?;
         *self.config.write().await = new_config;
+        // CLI 要报"重读进来多少款"：从前这里只回 `success`，`kotori reload` 于是
+        // 永远印 0 款（BUG-11），用户会以为手改的配置没生效。
+        let games = self.config.read().await.games.len();
         tracing::info!("configuration reloaded");
-        Ok(json!({ "success": true }))
+        Ok(json!({ "success": true, "games": games }))
     }
 }

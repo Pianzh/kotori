@@ -67,9 +67,17 @@ pub fn list() -> anyhow::Result<()> {
     }
 
     println!("Configured games:");
-    for (id, game) in &config.games {
+    // 稳定的顺序：`config.games` 是 HashMap，直接遍历的话同一份配置每次印出来的
+    // 次序都可能不同，脚本与人工对照都失去依据（BUG-37）。
+    let mut games: Vec<_> = config.games.iter().collect();
+    games.sort_by(|a, b| a.0.cmp(b.0));
+    for (id, game) in games {
         println!("  {} - {}", id, game.name);
         println!("    exe:     {}", game.exe_path.display());
+        // 这两个开关从前只活在配置里，`list` 看不见（BUG-14）：CLI 用户没法确认
+        // 这一条到底是自动追踪、只观测会话还是直接启动。
+        println!("    watch:   {}", game.auto_watch);
+        println!("    direct:  {}", game.direct_launch);
         let scale = &game.scale_profile;
         // 两处留空都要说"自动",而不是印两个 0:游戏分辨率留空＝由 gamescope
         // 定(它自己的默认值),输出尺寸留空＝启动时按屏幕算。
@@ -150,9 +158,8 @@ pub fn generate_game_id(dir_name: &str) -> String {
 }
 
 /// [`generate_game_id`], but collisions get a numeric suffix (`name-2`, …)
-/// instead of being an error: two library entries for the same game are legal
-/// (two launch argument sets, two save-path sets, one launching and one
-/// watch-only entry), and a UUID would fix the collision by making the id
+/// instead of being an error: different directories can normalize to the same id
+/// (see [`add_games`]), and a UUID would fix the collision by making the id
 /// unreadable — it also shows up in the cloud layout.
 pub fn generate_unique_game_id(config: &crate::config::Config, name: &str) -> String {
     let base = generate_game_id(name);
@@ -188,15 +195,11 @@ pub fn exe_owner(
 
 /// 「这个 exe 已经在库里了」的一句话。
 ///
-/// ⚠ **它带着一条已经作废的结论,别照它理解现在的规矩。** 从前这里写着"同一个 exe
-/// 建多条档案是允许的(警告但不阻止)",还拿"两套启动参数、一条直启一条仅观测"当理由
-/// —— 那个理由是**错的**:直接启动与自动追踪本来就是**同一条档案上的两个开关**
-/// (用户 2026-09-21 原话:"它本来就只是一个选项,应该是同一个档案的")。现在的规矩是
-/// **一个 exe 只许有一条档案**:`game.create` 早已硬拒绝,`game.update` 与扫描那条路
-/// 的收口 —— 连同这个函数与它拼的那句提示语 —— 一起见根目录的 `PLAN-cloud-identity.md`
-/// (临时计划文档,功能做完随功能删)。
+/// 规矩是**一个 exe 只许有一条档案**：直接启动与自动追踪本来就是同一条档案上的两个
+/// 开关（用户 2026-09-21 原话："它本来就只是一个选项，应该是同一个档案的"），
+/// `game.create` 已经硬拒绝，`game.update` 与扫描那条路的收口还在计划里。
 ///
-/// 今天只剩 CLI 的 `add` 还在用它,而那条路的行为是**跳过**已入库的 exe,所以这句提示
+/// 今天只剩 CLI 的 `add` 还在用它，而那条路的行为是**跳过**已入库的 exe，所以这句提示
 /// 实际只在"同一个文件的两种写法"时才可能出现。
 ///
 /// Paths are compared canonicalized (resolving symlinks; both sides fall back
@@ -223,9 +226,9 @@ pub fn duplicate_exe_warning(
         return None;
     }
     Some(format!(
-        "可执行文件已被这些档案使用：{}。同一个 exe 建多条档案是允许的（两套启动参数、\
-         一条启动一条仅观测等），但注意：云端的版本历史按档案分开存，观测同一进程名时\
-         分不清谁在跑，两边同时运行还会写同一个本地存档目录。",
+        "可执行文件已被这些档案使用：{}。同一个 exe 现在只许有一条档案，多出来的那条\
+         要么是同一个文件的另一种写法（相对路径、符号链接），要么是旧配置留下来的 ——\
+         请合并或删掉多余的那条。",
         same.join("、")
     ))
 }

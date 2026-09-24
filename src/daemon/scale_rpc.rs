@@ -177,6 +177,6 @@ impl Daemon {
         self.engine
             .get_session(session_id)
             .await
-            .ok_or_else(|| format!("session not found: {session_id}"))
+            .ok_or_else(|| format!("找不到会话：{session_id}"))
     }
 }
