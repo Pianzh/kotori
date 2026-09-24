@@ -140,14 +140,15 @@ fn a_second_machine_pairs_by_fingerprint_and_follows_the_same_directory() {
         "该有时间: {versions}"
     );
 
-    // ⚠ 老的 `sync.versions` 收的是**本机 id**，在这台机器上会列到空目录里去。这不是
-    // 意外，正是新 RPC 存在的理由（界面一律走上面那一条）；留着这条断言，是为了下次
-    // 有人"顺手把两个统一一下"时立刻看见差异。
+    // ⚠ 从前 `sync.versions` 收的是**本机 id** 并直接拿它当落点用，在这台机器上会列到
+    // 空目录里去；那时留着下面这条断言，正是为了"哪天有人把两条路统一了"能立刻看见。
+    // 2026-09-25 统一了：这条 RPC 现在先把 id 解析成落点（配置里没有这一款时才拿入参
+    // 当落点），于是两条路给出同一个答案 —— 断言跟着改成统一之后的期望。
     let by_id = machine_b.rpc("sync.versions", json!({ "id": "renamed" }));
     assert_eq!(
         by_id["result"]["versions"].as_array().unwrap().len(),
-        0,
-        "{by_id}"
+        2,
+        "按本机 id 问也该问到同一个落点: {by_id}"
     );
 }
 

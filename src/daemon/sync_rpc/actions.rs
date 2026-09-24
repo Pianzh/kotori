@@ -162,7 +162,15 @@ impl Daemon {
         if !settings.enabled {
             return Err("云同步未启用".to_string());
         }
-        let cloud_key = self.cloud_key_of(game_id).await?;
+        // 本机配置里有这一款时，按记下来的**云端落点**问：落点不一定等于本机 id ——
+        // 第一次上传时身份一建，落点就不再等于 id（kopia 那边落点就是身份 uuid），
+        // 从前直接拿 id 当落点用，kopia 上永远列不到（PLATFORMS 2026-09-24 那条
+        // 未定性现象就是它）。配置里没有这一款时（"云端有、本机没有"的那类）保持
+        // 老行为：把传进来的字符串当落点试一次，别把这条路堵死。
+        let cloud_key = match self.cloud_key_of(game_id).await {
+            Ok(key) => key,
+            Err(_) => game_id.to_string(),
+        };
         let runner = self.sync_runner(&settings)?;
         let versions = runner
             .packages(&cloud_key)
