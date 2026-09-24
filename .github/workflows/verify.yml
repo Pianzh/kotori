@@ -132,7 +132,13 @@ jobs:
         # 单元测试里有一大堆平台相关的代码(进程表、exe 路径、kill_tree、空设备名、
         # 路径分隔符)只有在这边跑才算数 —— 2026-09-21 在 VM 的 Windows 10 LTSC
         # 上实测 263 passed / 0 failed,这里盯的是 runner 上有没有环境差异。
-        run: cargo test --all-targets --locked
+        #
+        # ⚠ `--test-threads=1` 是给 `portable_ipc` 那一组的:每条都要起一个真 daemon
+        #   (外加假 rclone/wine 的辅助进程),而 runner 只有两三个核 —— 十几条并发时,
+        #   后台那条"退出后上传"会把 `sync.status` 堵到超时(2026-09-25 复现过两轮:
+        #   8 passed / 2 failed,两条都卡在夹具的 RPC 超时上,而同一份代码在 Linux 上
+        #   全绿)。串行多花几十秒,换掉这种假红。
+        run: cargo test --all-targets --locked -- --test-threads=1
 
       - name: 取固定版本 kopia 并校验 sha256
         shell: pwsh
