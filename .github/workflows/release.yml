@@ -3,6 +3,11 @@
 # 为什么和 ci.yml 分开:日常 CI 是"守门人"(每次 push 都跑,只求别腐烂),发布是一次性的
 # 交付动作。混在一起早晚会出现"某次 push 意外发了 Release"。
 #
+# ⚠ 发布必须依赖**同 SHA 的验证**:release 汇总 job needs 下面的 verify job
+#   (reusable verify.yml —— fmt/clippy/全部测试/固定 kopia 的四个 ignored 测试),
+#   构建 job 与它并行、互不等待。之所以天然同 SHA:workflow_call 的 job 与构建 job
+#   在同一个 ref 上 checkout,不需要另传 SHA。
+#
 # ⚠ **只有 Windows 内置 kopia.exe**。Linux / ARM 上它在发行版仓库里(Arch 走 archlinuxcn),
 #   而 Windows 用户不该为了存档同步先去 GitHub 下个 zip、解压、再想办法把它摆进 PATH。
 #   内置的那份就放在 kotori.exe **旁边** —— `sync::executables::beside_kotori` 找的就是
@@ -29,6 +34,18 @@ env:
   KOPIA_VERSION: "0.23.1"
 
 jobs:
+  # ── 验证:发布前必须过同 SHA 的 Linux/Windows 验证 ───────────────────────
+  # fmt / clippy / 全部测试 / 固定版本 kopia 的四个 ignored 本地仓库测试都在
+  # verify.yml(reusable workflow,CI 与 Release 共用这一份)。kopia 版本在这里
+  # 写死为与上面 KOPIA_VERSION 相同的值(actionlint 实测:`with` 里不能用 env
+  # 上下文,只能字面量)—— **升级 KOPIA_VERSION 时两处必须一起改**。
+  # 与构建 job 并行;release 汇总 job needs 它,保证"verify 测的那份"与
+  # "内置进 Windows 包的那份"是同一个版本。
+  verify:
+    uses: ./.github/workflows/verify.yml
+    with:
+      kopia-version: "0.23.1"
+
   # ── Linux:x86_64 与 aarch64 是同一份东西的两个架构 ───────────────────────────
   linux:
     strategy:
@@ -103,22 +120,10 @@ jobs:
         # 那个文件在仓库里,checkout 之后自动生效,本地 VM 编出来的形状和这里一致。
 
       - name: 取 kopia 并校验 sha256
+        # 下载、校验官方 checksums、解压收在 scripts/install-kopia.ps1 —— 与
+        # verify.yml 的 Windows 臂共用同一份逻辑,版本也只有 env 里那一个。
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $base  = "https://github.com/kopia/kopia/releases/download/v$env:KOPIA_VERSION"
-          $asset = "kopia-$env:KOPIA_VERSION-windows-x64.zip"
-          Invoke-WebRequest "$base/$asset"        -OutFile kopia.zip
-          Invoke-WebRequest "$base/checksums.txt" -OutFile kopia-checksums.txt
-          # 一行一个 "<sha256>  <文件名>"(官方可能写成 "sha *name" 的二进制模式,只取第一段)。
-          $line = Select-String -Path kopia-checksums.txt -Pattern ([regex]::Escape($asset)) |
-                  Select-Object -First 1
-          if (-not $line) { throw "checksums.txt 里没有 $asset" }
-          $want = ($line.Line -split '\s+')[0].ToLower()
-          $got  = (Get-FileHash kopia.zip -Algorithm SHA256).Hash.ToLower()
-          if ($got -ne $want) { throw "kopia 校验失败: 期望 $want, 实际 $got" }
-          Write-Host "kopia $asset sha256 校验通过"
-          Expand-Archive kopia.zip -DestinationPath kopia
+        run: ./scripts/install-kopia.ps1 "$env:KOPIA_VERSION"
 
       - name: 打包
         shell: pwsh
@@ -177,7 +182,7 @@ jobs:
 
   # ── 汇总:把三端产物挂到同一个 Release 上 ────────────────────────────────────
   release:
-    needs: [linux, windows]
+    needs: [linux, windows, verify]
     # 手动触发时只构建、不发布 —— 免得验证打包流程顺手发出一个 Release。
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
