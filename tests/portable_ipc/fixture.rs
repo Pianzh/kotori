@@ -28,6 +28,14 @@ impl Fixture {
         &self.endpoint
     }
 
+    pub fn select_engine(&self, engine: &str) {
+        let path = self.dir.join("config.toml");
+        let mut config: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        config["sync"]["engine"] = toml::Value::String(engine.into());
+        std::fs::write(path, toml::to_string(&config).unwrap()).unwrap();
+    }
+
     pub fn new(tag: &str) -> Self {
         // 先完成 helper 编译，再开始任何进程握手的超时计时。
         let helper = crate::native::executable();
@@ -102,6 +110,7 @@ impl Fixture {
             .env("KOTORI_FAKE_BUCKET", self.dir.join("bucket"))
             .env("KOTORI_FAKE_LOG", self.dir.join("rclone.log"))
             .env("KOTORI_FAKE_FAIL", self.dir.join("fail"))
+            .env("KOTORI_KOPIA_REPOSITORY", self.dir.join("repository"))
             .env("KOTORI_OUTPUT_RESOLUTION", "1920x1080")
             .env("KOTORI_WINESERVER", self.dir.join("no-wineserver"))
             .env_remove("WINEPREFIX")

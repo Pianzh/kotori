@@ -40,6 +40,23 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
     let root = root.ok_or("fake bucket must be explicitly configured")?;
+    // 真实 rclone 的本地存储验收：只替换远端位置，命令/选项交给真实程序解析。
+    if let Some(binary) = std::env::var_os("KOTORI_REAL_RCLONE") {
+        let mapped: Vec<_> = args
+            .iter()
+            .map(|arg| {
+                arg.strip_prefix("kotori:").map_or_else(
+                    || std::ffi::OsString::from(arg),
+                    |remote| root.join(remote).into_os_string(),
+                )
+            })
+            .collect();
+        let status = std::process::Command::new(binary).args(mapped).status()?;
+        if !status.success() {
+            return Err(format!("real rclone exited: {status}").into());
+        }
+        return Ok(());
+    }
     if let Some(log) = log {
         let mut record = format!("argv:{}\n", args.join(" "));
         for (key, value) in std::env::vars().filter(|(key, _)| key.starts_with("RCLONE_CONFIG")) {

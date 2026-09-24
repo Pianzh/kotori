@@ -1,6 +1,7 @@
 //! 两端共用的真 daemon 契约，平台差异只在传输和假 wine 适配。
 
 mod cli;
+mod engines;
 mod fixture;
 mod lifecycle;
 #[path = "../support/native.rs"]
