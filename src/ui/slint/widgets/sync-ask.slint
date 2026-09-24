@@ -53,7 +53,10 @@ export component SyncAskDialog inherits Rectangle {
 
     card := Rectangle {
         width: 480px;
-        height: min(452px, root.height - 40px);
+        // 高度**跟着内容走**：写死高度时，内容一少（比如这次没有"疑似找到"那块卡片），
+        // `VerticalLayout` 会把余量摊到各项之间，看着就像散架了（用户 2026-09-24 报的排版
+        // 问题）。上限照旧别顶出窗口。
+        height: min(body.preferred-height + 48px, root.height - 40px);
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         border-radius: Tokens.radius-card;
