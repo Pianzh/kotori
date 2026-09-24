@@ -6,6 +6,13 @@ use serde_json::json;
 fn round_trip(engine: &str) {
     let mut fixture = Fixture::new(engine);
     fixture.select_engine(engine);
+    if engine == "rclone" {
+        // 本地文件系统要求被列举目录存在；对象存储的空前缀没有此要求。
+        for directory in ["games/contract", "index/main", "index/log"] {
+            std::fs::create_dir_all(fixture.dir.join("bucket/fixture/saves").join(directory))
+                .unwrap();
+        }
+    }
     fixture.start();
     let exe = fixture.game_exe();
     assert_eq!(
