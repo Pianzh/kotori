@@ -220,12 +220,26 @@ pub fn save(config: &Config) -> anyhow::Result<()> {
 }
 
 /// Save the config to an explicit path, creating parent directories.
+///
+/// 原子写：先写同目录的临时文件、`sync_all`，再 `rename` 覆盖。直接
+/// `std::fs::write` 会先把原文件截断，写到一半断电/进程被杀就只剩半份 TOML ——
+/// 而读取方把"读不懂"当成"配置坏了"，于是把它搬去 `.corrupt` 并回退默认值，
+/// 用户的库就此看不见了（BUG-15）。
 pub fn save_to(path: &Path, config: &Config) -> anyhow::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let content = toml::to_string_pretty(config)?;
-    std::fs::write(path, content)?;
+    let tmp = path.with_extension("toml.tmp");
+    let mut file = std::fs::File::create(&tmp)?;
+    std::io::Write::write_all(&mut file, content.as_bytes())?;
+    file.sync_all()?;
+    drop(file);
+    // 沿用原文件的权限（原件可能是 0600，新建的文件会退回默认值）。
+    if let Ok(metadata) = std::fs::metadata(path) {
+        let _ = std::fs::set_permissions(&tmp, metadata.permissions());
+    }
+    std::fs::rename(&tmp, path)?;
     Ok(())
 }
 

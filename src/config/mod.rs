@@ -76,6 +76,10 @@ pub struct GameConfig {
     /// from the exe's parent directory.
     #[serde(default)]
     pub game_dir: PathBuf,
+    /// Older or hand-edited configs may leave this out; one entry missing its
+    /// path must not take the whole file down with it (BUG-10). Such an entry
+    /// stays in the library and simply fails to launch until it is edited.
+    #[serde(default)]
     pub exe_path: PathBuf,
     /// Extra arguments passed to the exe.
     #[serde(default)]
