@@ -55,7 +55,7 @@ impl RcloneZip {
         // 身份卡那边），它坏了必须还能靠「深度扫描云端」重写一份出来 —— 硬报错的话
         // `update_index` 一上来就读它，连重建都做不了，人就卡死在那儿了。
         let main: Option<CloudIndex> = match self
-            .read_json(&index_main_path(&self.settings), "索引")
+            .read_json::<CloudIndex>(&index_main_path(&self.settings), "索引")
             .await
         {
             Ok(Some(index)) if index.is_supported() => Some(index),

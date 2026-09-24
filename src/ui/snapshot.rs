@@ -22,6 +22,9 @@
 //! something viewable. (The `png` entry in `Cargo.toml` has no caller — nothing
 //! ever asked it for a PNG — so that dependency line is dead weight.)
 
+// 只有 debug 那份 `install_capture` 用得到它，release 里这个导入是多余的
+// （`cargo build --release` 会报 unused import）。
+#[cfg(debug_assertions)]
 use std::time::Duration;
 
 use super::*;
