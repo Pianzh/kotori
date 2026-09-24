@@ -87,7 +87,7 @@ export component GameSyncGroup inherits Rectangle {
                     Divider { }
                     CardRow {
                         title: "参与云同步";
-                        description: "关掉之后这一款不再自动同步(启动前不取回、退出后不上传);「立即同步」这类手动动作不受它限制。";
+                        description: "关掉之后这一款不再自动同步(启动前不取回、退出后不上传),随时能再打开;「立即同步」这类手动动作不受它限制。";
                         Switch {
                             checked <=> GameSyncBoard.participating;
                             toggled => { GameSyncBoard.toggled(GameSyncBoard.participating); }

@@ -92,20 +92,28 @@ impl App {
         self.sync_ask_cloud = None;
         self.launching = Some(game_id.clone());
         let socket = self.daemon_socket.clone();
-        Task::perform(
-            async move {
-                let mut params = serde_json::Map::new();
-                params.insert("id".into(), Value::String(game_id.clone()));
-                params.insert("choice".into(), Value::String(choice));
-                crate::rpc::call(&socket, "sync.resolve", Some(params)).await?;
+        // 回答会改这一款的状态（暂时关掉同步 / 新建身份），**界面得跟着变**：游戏列表与
+        // 同步状态都重新拉一次 —— 用户 2026-09-24 报的就是这个："点了『这一款以后不云同步』，
+        // 参与云同步的按钮还是开着的，和现实对不上"。
+        let refresh_sync = self.reload_sync();
+        Task::batch([
+            Task::perform(
+                async move {
+                    let mut params = serde_json::Map::new();
+                    params.insert("id".into(), Value::String(game_id.clone()));
+                    params.insert("choice".into(), Value::String(choice));
+                    crate::rpc::call(&socket, "sync.resolve", Some(params)).await?;
 
-                let mut params = serde_json::Map::new();
-                params.insert("id".into(), Value::String(game_id));
-                params.insert("selfcheck".into(), Value::Bool(true));
-                crate::rpc::call(&socket, "game.launch", Some(params)).await
-            },
-            Message::LaunchDone,
-        )
+                    let mut params = serde_json::Map::new();
+                    params.insert("id".into(), Value::String(game_id));
+                    params.insert("selfcheck".into(), Value::Bool(true));
+                    crate::rpc::call(&socket, "game.launch", Some(params)).await
+                },
+                Message::LaunchDone,
+            ),
+            Task::perform(async { load_without_booting().await }, Message::GamesLoaded),
+            refresh_sync,
+        ])
     }
 
     /// 启动那一问里挑定了云端的一条：交给 daemon（`sync.resolve { choice:"pair" }` 带上
@@ -126,22 +134,28 @@ impl App {
         self.sync_ask_cloud = None;
         self.launching = Some(game_id.clone());
         let socket = self.daemon_socket.clone();
-        Task::perform(
-            async move {
-                let mut params = serde_json::Map::new();
-                params.insert("id".into(), Value::String(game_id.clone()));
-                params.insert("choice".into(), Value::String("pair".to_string()));
-                params.insert("cloud_id".into(), Value::String(cloud_id));
-                params.insert("cloud_key".into(), Value::String(cloud_key));
-                crate::rpc::call(&socket, "sync.resolve", Some(params)).await?;
+        // 绑上之后界面也要跟着变（游戏列表 + 同步状态，尤其是单游戏页那行"当前绑定"）。
+        let refresh_sync = self.reload_sync();
+        Task::batch([
+            Task::perform(
+                async move {
+                    let mut params = serde_json::Map::new();
+                    params.insert("id".into(), Value::String(game_id.clone()));
+                    params.insert("choice".into(), Value::String("pair".to_string()));
+                    params.insert("cloud_id".into(), Value::String(cloud_id));
+                    params.insert("cloud_key".into(), Value::String(cloud_key));
+                    crate::rpc::call(&socket, "sync.resolve", Some(params)).await?;
 
-                let mut params = serde_json::Map::new();
-                params.insert("id".into(), Value::String(game_id));
-                params.insert("selfcheck".into(), Value::Bool(true));
-                crate::rpc::call(&socket, "game.launch", Some(params)).await
-            },
-            Message::LaunchDone,
-        )
+                    let mut params = serde_json::Map::new();
+                    params.insert("id".into(), Value::String(game_id));
+                    params.insert("selfcheck".into(), Value::Bool(true));
+                    crate::rpc::call(&socket, "game.launch", Some(params)).await
+                },
+                Message::LaunchDone,
+            ),
+            Task::perform(async { load_without_booting().await }, Message::GamesLoaded),
+            refresh_sync,
+        ])
     }
 
     /// 弹窗里那颗「就绑这一条」：绑上弹窗里显示的那一条（"疑似找到"时才有这颗按钮）。

@@ -231,7 +231,7 @@ impl App {
                         self.saved_msg = Some(if enabled {
                             "这一款已参与云同步。".to_string()
                         } else {
-                            "这一款已停止云同步（手动「立即同步」仍然可用）。".to_string()
+                            "这一款已暂时关掉云同步（随时能在这一页再打开）。".to_string()
                         });
                     }
                     Err(e) => {
