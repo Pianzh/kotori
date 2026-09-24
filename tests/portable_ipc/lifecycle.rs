@@ -75,18 +75,35 @@ fn journey(observe: bool) {
         "session outlived game"
     );
     let packages = fixture.dir.join("bucket/fixture/saves/games/journey");
+    // ⚠ 先等**桶里出现包**：这是纯文件系统观察，一个 RPC 都不发。从前这里是在
+    // `wait_until` 里每 50ms 问一次 `sync.status`，几百个请求堆在一起 —— Windows
+    // 上每个 `sync.status` 背后都要探一遍引擎，几十上百发叠起来，总有一发会撞上
+    // fixture 的超时（2026-09-25 连着几轮挂在 `sync.status` 上，而同一份代码在
+    // Linux 上全绿）。同步点该是**直接证据**，不是把 daemon 压垮。
     assert!(
         wait_until(Duration::from_secs(30), || {
-            let response = fixture.rpc("sync.status", json!({}));
-            response["result"]["games"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|g| {
-                    g["id"] == "journey" && g["last"]["ok"] == true && g["last"]["action"] == "上传"
+            std::fs::read_dir(&packages)
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .any(|entry| entry.path().extension().is_some_and(|ext| ext == "zip"))
                 })
+                .unwrap_or(false)
         }),
-        "exit upload did not complete\n{}",
+        "exit upload did not publish a package\n{}",
+        fixture.logs()
+    );
+    // 包已经在那儿了，再问一次 daemon 的记账（一次请求，不是几百次）。
+    let response = fixture.rpc("sync.status", json!({}));
+    assert!(
+        response["result"]["games"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|g| {
+                g["id"] == "journey" && g["last"]["ok"] == true && g["last"]["action"] == "上传"
+            }),
+        "sync.status 没记下这次上传: {response}\n{}",
         fixture.logs()
     );
     let files: Vec<_> = std::fs::read_dir(&packages)
