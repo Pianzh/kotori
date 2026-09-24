@@ -16,6 +16,9 @@ use super::teardown::{
     kill_session_now, pid_alive, stuck_in_teardown, terminate_session,
 };
 
+// ⚠ `gamescope.rs` 是**文件模块**:它的子模块默认要在 `gamescope/` 目录下,
+// 而这里就住在同一个目录里 —— 用 `#[path]` 指过去。
+#[path = "gamescope_engine.rs"]
 mod gamescope_engine;
 
 pub use gamescope_engine::GamescopeScaleEngine;
