@@ -84,6 +84,64 @@ fn status_and_reload_report_missing_daemon_without_starting_one() {
 }
 
 #[test]
+fn negative_sharpness_is_a_valid_argument_and_reaches_session_validation() {
+    let mut fixture = Fixture::new("cli-negative");
+    fixture.start();
+    let reply = run(&fixture, &["scale", "sharpness", "-1"]);
+    assert!(!reply.ok, "there is no active session");
+    assert!(
+        !reply.err.contains("unexpected argument"),
+        "documented negative argument rejected by parser: {}",
+        reply.err
+    );
+    assert!(
+        !reply.err.contains("Usage:"),
+        "argument parsing failed: {}",
+        reply.err
+    );
+    fixture.shutdown();
+}
+
+#[test]
+fn scan_is_read_only_and_repeated_add_preserves_game_settings() {
+    let mut fixture = Fixture::new("cli-library");
+    fixture.start();
+    let directory = fixture.dir.join("中文 library");
+    let game = directory.join("Example Game");
+    std::fs::create_dir_all(&game).unwrap();
+    std::fs::write(game.join("Game.exe"), b"fixture executable").unwrap();
+    let before = std::fs::read(fixture.dir.join("config.toml")).unwrap();
+    let scan = run(&fixture, &["scan", directory.to_str().unwrap()]);
+    assert!(scan.ok && scan.out.contains("Game.exe"));
+    assert_eq!(
+        std::fs::read(fixture.dir.join("config.toml")).unwrap(),
+        before
+    );
+    assert!(run(&fixture, &["add", directory.to_str().unwrap()]).ok);
+    let response = fixture.rpc("game.list", json!({}));
+    let games = response["result"]["games"].as_array().unwrap();
+    assert_eq!(games.len(), 1, "{response}");
+    let id = games[0]["id"].as_str().unwrap();
+    assert_eq!(
+        fixture.rpc(
+            "game.update",
+            json!({"id":id, "name":"User Label", "auto_watch":false, "direct_launch":true})
+        )["result"]["success"],
+        true
+    );
+    assert!(run(&fixture, &["add", directory.to_str().unwrap()]).ok);
+    let response = fixture.rpc("game.list", json!({}));
+    let games = response["result"]["games"].as_array().unwrap();
+    assert_eq!(games.len(), 1, "duplicate created: {response}");
+    assert_eq!(games[0]["name"], "User Label");
+    assert_eq!(games[0]["direct_launch"], true);
+    assert_eq!(games[0]["auto_watch"], false);
+    let listed = run(&fixture, &["list"]);
+    assert!(listed.ok && listed.out.contains("User Label"));
+    fixture.shutdown();
+}
+
+#[test]
 fn cli_upload_versions_and_restore_round_trip_actual_bytes() {
     let mut fixture = Fixture::new("cli-sync");
     fixture.start();
