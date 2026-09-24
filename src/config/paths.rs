@@ -193,19 +193,18 @@ pub fn load_at(path: &Path) -> anyhow::Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
     }
-    let content = match std::fs::read_to_string(path) {
-        Ok(content) => content,
+    // 「读不动」在这里先挡住：权限不对、路径其实是个目录、盘掉了 —— 这些是"这台机器
+    // 现在读不到它"，不是"这份配置坏了"。读全文一次（配置很小，多读一次不值得省），
+    // 之后剩下的失败就只可能是"读不懂"。
+    if let Err(err) = std::fs::read_to_string(path) {
         // 刚好被删掉：与"还没有配置"同一条路。
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Config::default()),
-        Err(err) => {
-            return Err(anyhow::anyhow!("读不了配置文件 {}: {err}", path.display()));
+        if err.kind() == std::io::ErrorKind::NotFound {
+            return Ok(Config::default());
         }
-    };
-    match toml::from_str::<Config>(&content) {
-        Ok(mut config) => {
-            config.normalize();
-            Ok(config)
-        }
+        return Err(anyhow::anyhow!("读不了配置文件 {}: {err}", path.display()));
+    }
+    match load_from(path) {
+        Ok(config) => Ok(config),
         Err(err) => {
             let backup = path.with_extension("toml.corrupt");
             let moved = std::fs::rename(path, &backup).is_ok();
@@ -223,6 +222,8 @@ pub fn load_at(path: &Path) -> anyhow::Result<Config> {
 }
 
 /// Load and parse a config from an explicit path (strict: no fallback).
+///
+/// [`load_at`] 先探一次"读不读得到"，再把它当严格解析用 —— 两条路的区别在调用方。
 pub fn load_from(path: &Path) -> anyhow::Result<Config> {
     let content = std::fs::read_to_string(path)?;
     let mut config: Config = toml::from_str(&content)?;

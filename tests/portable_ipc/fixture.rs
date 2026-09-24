@@ -150,7 +150,11 @@ impl Fixture {
             .build()
             .unwrap();
         runtime.block_on(async {
-            tokio::time::timeout(Duration::from_secs(10), async {
+            // ⚠ 30 秒，不是 10：这一条是**测试自己**的同步点，不是产品行为。CI 的
+            // Windows runner 上，一个请求背后可能起进程（`sync.status` 会碰引擎），
+            // 慢起来十几秒很正常 —— 10 秒会把它误判成"daemon 卡死"，`lifecycle::
+            // direct_exit_uploads_the_actual_save_bytes` 就这么红过好几轮。
+            tokio::time::timeout(Duration::from_secs(30), async {
                 #[cfg(unix)]
                 let stream = tokio::net::UnixStream::connect(&self.endpoint)
                     .await
