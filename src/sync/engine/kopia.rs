@@ -469,6 +469,20 @@ fn local_repository_from_env() -> Option<PathBuf> {
         .filter(|path| !path.as_os_str().is_empty())
 }
 
+/// 凭据换过之后，把这个数据目录下的 kopia 连接记录作废。
+///
+/// `ensure_connected` 是靠一份 marker（`target.txt`）判断"还连着吗"的，而 **B2 凭据
+/// 不在那份判断里**：换过 key 之后，`repository.config` 里存的还是旧凭据，下一次同步
+/// 会接着用它 —— 用户看到的是"新 key 明明保存成功了，同步还在报旧凭据的错"
+/// （BUG-21 的后半）。删掉 marker 就够了：下次会重新 `connect`，而 `connect` 会用
+/// 新凭据重写那份 `repository.config`。
+pub(crate) fn forget_connection() {
+    let marker = crate::config::data_dir().join("kopia").join("target.txt");
+    if marker.exists() && std::fs::remove_file(&marker).is_ok() {
+        tracing::info!("凭据变了，作废 kopia 的连接记录：{}", marker.display());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

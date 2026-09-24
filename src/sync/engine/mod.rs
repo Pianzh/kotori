@@ -43,6 +43,9 @@ mod rclone_index;
 mod tests;
 
 pub use kopia_args::repo_prefix;
+// 换 B2 凭据之后要作废 kopia 的连接记录（BUG-21）：daemon 那边保存凭据时调它，
+// 而 kopia 模块本身是私有的。
+pub(crate) use kopia::forget_connection;
 
 /// 真正干活的引擎。这个枚举就是"两个引擎"这件事本身。
 enum Inner {

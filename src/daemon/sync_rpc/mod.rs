@@ -335,6 +335,8 @@ impl Daemon {
                 .keyring()
                 .clear(SecretKey::B2AppKey)
                 .map_err(|e| e.to_string())?;
+            // 凭据没了，那份记着旧凭据的 kopia 连接也不该再用（BUG-21）。
+            crate::sync::engine::forget_connection();
             return Ok(json!({ "cleared": true }));
         }
 
@@ -351,6 +353,9 @@ impl Daemon {
             .set(SecretKey::B2AppKey, app_key)
             .map_err(|e| e.to_string())?;
         tracing::info!("B2 credentials stored in the keyring");
+        // ⚠ 换过 key 之后必须让 kopia 重连：那份 `repository.config` 里存的是旧凭据，
+        // 不重连就会变成"key 明明保存成功了，同步还报旧凭据的错"（BUG-21）。
+        crate::sync::engine::forget_connection();
         Ok(json!({ "stored": true }))
     }
 }
