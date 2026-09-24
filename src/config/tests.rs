@@ -8,6 +8,33 @@
 
 use super::*;
 
+/// 一条**缺** `exe_path` 的条目不该把整份配置拖下水（BUG-10）。
+///
+/// 从前 `exe_path` 没有 `serde(default)`：手写或旧版留下的半条记录会让整份
+/// `toml::from_str` 失败 —— 于是同一份文件里**其它**游戏也跟着消失，`load_at` 还会
+/// 把文件改名成 `.corrupt`。现在那一条自己空着（启动会失败，但库还在），别的照旧。
+#[test]
+fn one_entry_missing_its_exe_does_not_take_the_whole_file_down() {
+    let config: Config = toml::from_str(
+        r#"
+[games.good]
+name = "好的"
+exe_path = "/games/good/game.exe"
+
+[games.broken]
+name = "缺字段的"
+"#,
+    )
+    .expect("一条缺字段不该让整份配置解析失败");
+
+    assert_eq!(config.games.len(), 2, "两条都该在");
+    assert!(config.games["broken"].exe_path.as_os_str().is_empty());
+    assert_eq!(
+        config.games["good"].exe_path.to_string_lossy(),
+        "/games/good/game.exe"
+    );
+}
+
 /// 手写配置的最小写法:一个游戏条目只要 `name` 与 `exe_path`。
 ///
 /// `scale_profile` 与 `created_at` 从前是必填,而少写的代价不是"用默认值",

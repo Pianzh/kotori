@@ -516,4 +516,31 @@ mod tests {
         // 所有端一致才有"双系统互通"这一说；改它等于把所有老仓库锁在门外。
         assert_eq!(DEFAULT_PASSWORD, "kotori");
     }
+
+    /// 连接身份里必须带着 endpoint（BUG-21）：换过地址之后，旧的 `repository.config`
+    /// 指向的是**另一个目标**，直接复用会让用户看到"地址明明改了、同步还是老样子"。
+    #[test]
+    fn a_changed_endpoint_is_a_different_connection() {
+        let engine = |endpoint: &str| {
+            Kopia::with_binary(
+                PathBuf::from("/bin/true"),
+                SyncConfig {
+                    endpoint: endpoint.to_string(),
+                    bucket: "bucket".to_string(),
+                    ..SyncConfig::default()
+                },
+                Keyring::memory(),
+            )
+            .with_home(std::env::temp_dir().join("kotori-kopia-target"))
+        };
+
+        let plain = engine("").current_target();
+        let b2 = engine("https://api001.backblazeb2.com").current_target();
+        assert_ne!(plain, b2, "换了 endpoint 就是另一个连接目标");
+        assert_eq!(
+            engine("https://api001.backblazeb2.com/").current_target(),
+            b2,
+            "尾斜杠不该算成两个地址"
+        );
+    }
 }
