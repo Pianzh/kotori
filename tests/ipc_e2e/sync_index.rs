@@ -218,6 +218,11 @@ fn adding_a_game_asks_the_index_whether_the_cloud_already_has_it() {
 ///   * 本地还没有缓存时 → 去云端读一次并把它存下来（`from_cache: false`）；
 ///   * 之后默认读 → 同一个结果，**一次 rclone 调用都不多**（`from_cache: true`）；
 ///   * `refresh: true`（「云端存档」页那颗刷新按钮）→ 真的再去云端。
+///
+/// ⚠ 用户 2026-09-24 把这口径钉得更死："只有按刷新键和每小时自动同步才会从云端更新本地
+/// 索引，其他所有查询都只查本地索引" —— 所以**缓存旧了也不联网**（原来那条"读的时候发现
+/// 超一小时就顺手刷一次"已经删掉），要新内容只有按刷新、或者等后台那一趟（起来先刷一次 +
+/// 每小时）。
 #[test]
 fn the_cloud_list_is_read_from_a_local_cache_after_the_first_fetch() {
     let mut machine = Fixture::new("cache");

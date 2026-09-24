@@ -87,6 +87,15 @@ pub struct MachineIdentity {
     /// 这台机器上这款游戏配了哪些存档位置（`save_key`），用来做位置对齐（§2.7）。
     #[serde(default)]
     pub locations: Vec<String>,
+    /// 那几个存档位置的**父目录名**（原始路径的倒数第二段，见
+    /// [`crate::sync::remote_paths::parent_dir`]）。
+    ///
+    /// 用户 2026-09-24："关于存档位置，我们暂时以父目录名称来规定" —— 整条 `save_key`
+    /// 跨机器常常对不上（末段目录名各写各的），父目录名才对得起来。与 `locations` 一样
+    /// **只用来列候选**（弱判据），永不自动绑。老卡里没有这一栏（读出是空），下一次
+    /// 写入自然补上；索引里也跟着有（索引存的就是这份身份）。
+    #[serde(default)]
+    pub parents: Vec<String>,
     /// 这台机器上这款游戏**用过的 exe 路径**。
     ///
     /// ⚠ **只作参考信息与搜索参数**（用户 2026-09-23："以前的不上云只是我们不根据目录来
@@ -140,6 +149,11 @@ impl GameIdentity {
                 for location in machine.locations {
                     if !known.locations.contains(&location) {
                         known.locations.push(location);
+                    }
+                }
+                for parent in machine.parents {
+                    if !known.parents.contains(&parent) {
+                        known.parents.push(parent);
                     }
                 }
                 // 用过的 exe 路径：与指纹同样**只追加**（换过 exe、装过别处都要记得住，
@@ -382,6 +396,7 @@ mod tests {
             label: format!("host-{machine_id}"),
             fingerprints: prints.iter().map(|p| p.to_string()).collect(),
             locations: vec!["rel-savedata".to_string()],
+            parents: Vec::new(),
             exe_paths: vec![format!("/games/{machine_id}/game.exe")],
         }
     }

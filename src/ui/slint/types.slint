@@ -128,32 +128,6 @@ export struct PathPick {
     value: string,
 }
 
-// 「配对」里一个可选的绑定：「云端的这一条 ⇄ 本机的《X》」。
-export struct PairingChoice {
-    local-id: string,
-    local-name: string,
-}
-
-// 「配对」里的一行：云端的一条身份，以及它在本机的处境。
-//
-// `state` 的取值与 `src/ui/model/sync.rs` 的 `PAIRING_*` 常量一一对应：
-//   0 = 已经绑着本机某一条（早先绑的）、1 = 这次扫描**自动绑上**的
-//   （界面必须写明依据并给一个「不是同一款」）、2 = 像但不确定、要用户点、
-//   3 = 本机没有对应的（点上传会新建一条）。
-export struct PairingItem {
-    cloud-key: string,
-    cloud-id: string,
-    cloud-short: string,
-    cloud-name: string,
-    machines: int,
-    state: int,
-    local-id: string,
-    local-name: string,
-    /// 这一行给用户看的那句话（措辞在 Rust 里定，见 `PairingRow::detail`）。
-    detail: string,
-    choices: [PairingChoice],
-}
-
 // 「云端存档」里的一款游戏。
 //
 // 名字是**云端记下的那个**（身份卡里的 `name`），不是云端落点 —— 落点只是我们认人的

@@ -258,11 +258,6 @@ impl Daemon {
                 }
                 Err(e) => rpc_err(id, -32602, e),
             },
-            // "改配对…"那个浮层要的那份清单。
-            "sync.identities" => match param_str(&req.params, "id") {
-                Ok(game_id) => respond(id, self.rpc_sync_identities(game_id).await),
-                Err(e) => rpc_err(id, -32602, e),
-            },
             "sync.pairing" => respond(id, self.rpc_sync_pairing().await),
             "sync.pair" => match (
                 param_str(&req.params, "id"),

@@ -4,7 +4,7 @@
 // 数据来自**一个桶一份的云端索引**（见 `src/sync/index.rs`）：平时刷新只读索引，
 // 「深度扫描云端」才去读每一张身份卡（那条路慢，所以由用户自己按）。
 //
-// 状态放在 `CloudBoard` 全局里（照 `PairingBoard` 的先例）：这一页只负责画，窗口不必
+// 状态放在 `CloudBoard` 全局里（照 `ProcessPickerState` 的先例）：这一页只负责画，窗口不必
 // 替它转发一串属性与回调。
 
 import { ScrollView } from "std-widgets.slint";

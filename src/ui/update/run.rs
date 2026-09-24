@@ -87,6 +87,7 @@ impl App {
         let Some(game_id) = self.sync_ask.take() else {
             return Task::none();
         };
+        self.sync_ask_hidden = false;
         self.launching = Some(game_id.clone());
         let socket = self.daemon_socket.clone();
         Task::perform(
@@ -102,6 +103,56 @@ impl App {
                 crate::rpc::call(&socket, "game.launch", Some(params)).await
             },
             Message::LaunchDone,
+        )
+    }
+
+    /// 启动前那一问里挑了云端已有的一条（`sync.resolve {choice:"pair"}` 带上云端身份），
+    /// 然后**再起一次** —— 与 [`Self::sync_ask_answered`] 同一条路，只是多带两个参数。
+    pub(super) fn sync_ask_paired(&mut self, row: CloudGameRow) -> Task<Message> {
+        let Some(game_id) = self.sync_ask.take() else {
+            return Task::none();
+        };
+        self.sync_ask_hidden = false;
+        self.launching = Some(game_id.clone());
+        let socket = self.daemon_socket.clone();
+        Task::perform(
+            async move {
+                let mut params = serde_json::Map::new();
+                params.insert("id".into(), Value::String(game_id.clone()));
+                params.insert("choice".into(), Value::String("pair".to_string()));
+                params.insert("cloud_id".into(), Value::String(row.cloud_id));
+                params.insert("cloud_key".into(), Value::String(row.cloud_key));
+                crate::rpc::call(&socket, "sync.resolve", Some(params)).await?;
+
+                let mut params = serde_json::Map::new();
+                params.insert("id".into(), Value::String(game_id));
+                params.insert("selfcheck".into(), Value::Bool(true));
+                crate::rpc::call(&socket, "game.launch", Some(params)).await
+            },
+            Message::LaunchDone,
+        )
+    }
+
+    /// 启动前那一问被关掉（点空白 / 关闭）：等于「关掉这一款的同步」，然后**照常启动**。
+    ///
+    /// 用户 2026-09-24 定的：关掉浮层不该变成"这一次不起游戏"，关掉这一款的同步就够 ——
+    /// 而且这一款以后还能在单游戏页里自己打开（那颗开关就是为这条出路做的）。
+    pub(super) fn sync_ask_declined(&mut self) -> Task<Message> {
+        self.sync_ask_answered("off".to_string())
+    }
+
+    /// 「改配对…」：收起那一问、打开云端清单（`sync_ask` 留着 —— 挑完要用它启动）。
+    ///
+    /// 清单读的是**本机缓存**；挑中与关闭分别落回 [`Self::sync_ask_paired`] 与
+    /// [`Self::sync_ask_declined`]（见 `update/add.rs` 的 `CloudPickChoose` /
+    /// `CloudPickDismiss`）。
+    pub(super) fn sync_ask_pair_requested(&mut self) -> Task<Message> {
+        self.sync_ask_hidden = true;
+        self.cloud_pick.open(CloudPickPurpose::Launch);
+        let socket = self.daemon_socket.clone();
+        Task::perform(
+            async move { cloud_list(&socket, false).await },
+            Message::CloudPickLoaded,
         )
     }
 

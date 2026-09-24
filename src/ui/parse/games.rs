@@ -57,6 +57,11 @@ pub(in crate::ui) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     .get("direct_launch")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false),
+                // 旧配置里没有这一栏（默认就是"参与"）。
+                sync_enabled: g
+                    .get("sync_enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
                 process_name: g
                     .get("process_name")
                     .and_then(|v| v.as_str())

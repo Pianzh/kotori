@@ -140,6 +140,7 @@ mod tests {
             label: format!("host-{id}"),
             fingerprints: vec![fingerprint.to_string()],
             locations: vec!["rel-savedata".to_string()],
+            parents: Vec::new(),
             exe_paths: vec![format!("/games/{id}/game.exe")],
         }
     }

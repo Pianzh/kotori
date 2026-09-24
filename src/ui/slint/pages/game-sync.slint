@@ -6,6 +6,18 @@ import { Tokens } from "../theme.slint";
 import { Divider } from "../widgets/base.slint";
 import { StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group } from "../widgets/card.slint";
+import { Switch } from "../widgets/controls.slint";
+
+// 这一款参不参与云同步（`GameConfig::sync_enabled`）。
+//
+// 用户 2026-09-24 要求补上这个入口：以前**只有**"启动前那一问"能关掉它，关了就再也
+// 打不开（那一问的语义是"关掉这一款、以后直接新建身份"）。开关走一个全局而不是页面
+// 属性：单游戏页那串属性是经 `app.slint` 一路转发下来的，而 `app.slint` 已经贴着
+// 500 行的硬线 —— 新增的东西走全局，窗口不必替它转发。
+export global GameSyncBoard {
+    in-out property <bool> participating: true;
+    callback toggled(bool);
+}
 
 export component GameSyncGroup inherits Rectangle {
     in property <string> sync-line: "";
@@ -56,6 +68,15 @@ export component GameSyncGroup inherits Rectangle {
                                     clicked => { root.sync-restore(); }
                                 }
                             }
+                        }
+                    }
+                    Divider { }
+                    CardRow {
+                        title: "参与云同步";
+                        description: "关掉之后这一款不再自动同步(启动前不取回、退出后不上传);「立即同步」这类手动动作不受它限制。";
+                        Switch {
+                            checked <=> GameSyncBoard.participating;
+                            toggled => { GameSyncBoard.toggled(GameSyncBoard.participating); }
                         }
                     }
                     Divider { }

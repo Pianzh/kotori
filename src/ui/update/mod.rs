@@ -282,7 +282,7 @@ impl App {
             | Message::MatchDecline
             | Message::MatchUndoDecline
             | Message::MatchClearPick
-            | Message::CloudPickOpen
+            | Message::CloudPickOpen(..)
             | Message::CloudPickLoaded(..)
             | Message::CloudPickSearch(..)
             | Message::CloudPickChoose(..)
@@ -305,12 +305,8 @@ impl App {
             | Message::SyncCredentialsCleared(..)
             | Message::SyncTest
             | Message::SyncTested(..)
-            | Message::SyncScanCloud
-            | Message::SyncPairingScanned(..)
-            | Message::SyncPair(..)
-            | Message::SyncPaired(..)
-            | Message::SyncRejectPairing(..)
-            | Message::SyncPairingRejected(..)
+            | Message::SyncParticipatingToggled(..)
+            | Message::SyncParticipatingSaved(..)
             | Message::SyncMasterPasswordChanged(..)
             | Message::SyncUnlock
             | Message::SyncUnlocked(..)
@@ -353,14 +349,9 @@ impl App {
                     Message::StatusLoaded,
                 )
             }
-            // 二次确认那一步里用户按了「取消」:什么都不做。
             Message::SyncAskAnswered(choice) => self.sync_ask_answered(choice),
-            Message::SyncAskDismissed => {
-                // 取消 = 这一次不启动（用户可能想去配对表看一眼再回来）。
-                self.sync_ask = None;
-                self.launching = None;
-                Task::none()
-            }
+            // 「改配对…」：收起这一问、打开云端清单（挑完接着启动，见 `update/run.rs`）。
+            Message::SyncAskPairRequested => self.sync_ask_pair_requested(),
             Message::StopCancelled => {
                 self.confirm_stop = false;
                 Task::none()

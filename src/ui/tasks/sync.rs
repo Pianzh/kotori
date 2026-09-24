@@ -149,13 +149,21 @@ pub(in crate::ui) async fn sync_test(socket: &Path) -> Result<String, String> {
     Ok(str_field(&value, "remote"))
 }
 
-/// 扫一遍云端，拿回配对表（`sync.pairing`）。
+/// 打开/关掉这一款的云同步（`game.update { sync_enabled }`）。
 ///
-/// ⚠ 这是**唯一**一条会读云端身份的路（kopia 那边读一次 = 一次 `restore`），所以它
-/// 只挂在「扫描云端」那个按钮上，不跟着状态刷新跑。
-pub(in crate::ui) async fn sync_scan_cloud(socket: &Path) -> Result<Vec<PairingRow>, String> {
-    let value = crate::rpc::call(socket, "sync.pairing", None).await?;
-    parse_pairing(&value)
+/// 用户 2026-09-24 要的界面入口：以前**只有**"启动前那一问"能关掉它，关了就再也打不开。
+/// 只发这一个字段 —— `game.update` 是按字段合并的，别的编辑一个都不会被带上。
+pub(in crate::ui) async fn set_game_sync_enabled(
+    socket: &Path,
+    id: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let params = crate::rpc::params([
+        ("id", Value::String(id)),
+        ("sync_enabled", Value::Bool(enabled)),
+    ]);
+    crate::rpc::call(socket, "game.update", Some(params)).await?;
+    Ok(())
 }
 
 /// 云端现在有哪些游戏 —— 读**本机缓存里那份索引**（一个桶一份），不遍历身份卡。
@@ -191,36 +199,6 @@ pub(in crate::ui) async fn cloud_versions(
     let params = crate::rpc::params([("key", Value::String(cloud_key))]);
     let value = crate::rpc::call(socket, "sync.cloud_versions", Some(params)).await?;
     parse_cloud_versions(&value)
-}
-
-/// 把本机这一款绑到云端那个身份上，然后重新扫一遍（表要反映刚做的决定）。
-pub(in crate::ui) async fn sync_pair(
-    socket: &Path,
-    local_id: String,
-    cloud_key: String,
-    cloud_id: String,
-) -> Result<Vec<PairingRow>, String> {
-    let params = crate::rpc::params([
-        ("id", Value::String(local_id)),
-        ("cloud_key", Value::String(cloud_key)),
-        ("cloud_id", Value::String(cloud_id)),
-    ]);
-    crate::rpc::call(socket, "sync.pair", Some(params)).await?;
-    sync_scan_cloud(socket).await
-}
-
-/// 「不是同一款」：撤掉绑定并记住，然后重新扫一遍。
-pub(in crate::ui) async fn sync_reject_pairing(
-    socket: &Path,
-    local_id: String,
-    cloud_id: String,
-) -> Result<Vec<PairingRow>, String> {
-    let params = crate::rpc::params([
-        ("id", Value::String(local_id)),
-        ("cloud_id", Value::String(cloud_id)),
-    ]);
-    crate::rpc::call(socket, "sync.reject", Some(params)).await?;
-    sync_scan_cloud(socket).await
 }
 
 /// **添加页**那一问（`sync.match`）：这个 exe 在云端是哪一款。

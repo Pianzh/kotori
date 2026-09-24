@@ -14,6 +14,7 @@ fn entry(cloud_id: &str, key: &str, name: &str, machine: &str, fingerprint: &str
         label: format!("host-{machine}"),
         fingerprints: vec![fingerprint.to_string()],
         locations: vec!["rel-savedata".to_string()],
+        parents: Vec::new(),
         exe_paths: vec![format!("/games/{key}/game.exe")],
     });
     IndexGame::from_identity(key, identity)

@@ -1,11 +1,14 @@
 // 启动前那一问:云同步自检认不出"云端哪一条是本机这一款"时,起游戏之前问一次。
 //
 // 用户 2026-09-22:"云同步(打开游戏)前**必须自检**",而自检里**只有这一种情况**会打断
-// 他。所以这个浮层只有一个职责:把问题说清楚,给三条出路。状态放在一个 **Slint 全局**里
+// 他。所以这个浮层只有一个职责:把问题说清楚,给四条出路。状态放在一个 **Slint 全局**里
 // (照 `ProcessPickerState` 的先例),窗口不必替它转发一串属性。
 //
-// ⚠ 三条出路里的"新建一条身份"就是"改配对…"浮层的第一项;完整的"挑云端已有的一条"
-// 归配对表那一块的浮层(见 `PLAN-cloud-identity.md` §12 提交 C)。
+// 用户 2026-09-24 定的两条:
+//   * **关掉浮层(点空白/关闭)= 关掉这一款的同步,然后照常启动游戏** —— 自检绝不拦启动;
+//   * 四条出路里的「改配对…」要真的能挑云端已有的一条(`CloudPickerState` 那个选择器),
+//     挑完接着启动;挑不出来也没关系,他之后能在单游戏页里把这一款重新打开
+//     (`sync_enabled` 的界面入口就是为这条出路做的)。
 
 import { Tokens } from "../theme.slint";
 import { AccentButton, StdButton } from "buttons.slint";
@@ -17,30 +20,31 @@ export global SyncAskState {
     /// 一句话解释:为什么问、云端有哪几条候选。空串 = 什么都别说。
     in-out property <string> message: "";
 
-    /// 用户的回答:`ok`(没问题) / `fresh`(新建一条身份) / `off`(关掉这一款的同步)。
+    /// 用户的回答:`ok`(没问题) / `pair`(新建一条身份) / `off`(关掉这一款的同步)。
+    /// 三个回答之后都会**接着启动游戏**。
     callback answered(string);
-    /// 取消:这一次不启动(用户可能想去配对表看一眼)。
-    callback dismissed();
+    /// 「改配对…」:收起这一问、打开云端清单,从云端已有的一条里挑。
+    callback pair-requested();
 }
 
 export component SyncAskDialog inherits Rectangle {
     width: 100%;
     height: 100%;
 
-    // 遮罩:点空白处等于取消。
+    // 遮罩:点空白处等于「关掉这一款的同步」,然后照常启动(不是"这次不启动")。
     Rectangle {
         width: 100%;
         height: 100%;
         background: #00000073;
         TouchArea {
             mouse-cursor: pointer;
-            clicked => { SyncAskState.dismissed(); }
+            clicked => { SyncAskState.answered("off"); }
         }
     }
 
     card := Rectangle {
-        width: 460px;
-        height: 330px;
+        width: 480px;
+        height: 396px;
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         border-radius: Tokens.radius-card;
@@ -52,7 +56,7 @@ export component SyncAskDialog inherits Rectangle {
             x: 24px;
             y: 24px;
             width: parent.width - 48px;
-            spacing: 12px;
+            spacing: 10px;
 
             Text {
                 text: "这一款在云端对不上号";
@@ -72,7 +76,7 @@ export component SyncAskDialog inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            // 三条出路,从"最省事"排到"最保守";每一行都写清后果 —— 猜错的代价是
+            // 四条出路,从"最省事"排到"最保守";每一行都写清后果 —— 猜错的代价是
             // 铺错存档,所以这里不能只有按钮名。
             AccentButton {
                 label: "没问题，就同步这一款";
@@ -80,19 +84,25 @@ export component SyncAskDialog inherits Rectangle {
                 clicked => { SyncAskState.answered("ok"); }
             }
             StdButton {
-                label: "新建一条身份（云端已有的话，稍后在配对表里挑）";
+                label: "改配对：绑到云端已有的那一条…";
                 button-width: parent.width;
-                clicked => { SyncAskState.answered("fresh"); }
+                clicked => { SyncAskState.pair_requested(); }
+            }
+            StdButton {
+                label: "新建一条身份（云端这一款是另一份，跟它分开存）";
+                button-width: parent.width;
+                clicked => { SyncAskState.answered("pair"); }
             }
             StdButton {
                 label: "关掉这一款的同步";
                 button-width: parent.width;
                 clicked => { SyncAskState.answered("off"); }
             }
-            StdButton {
-                label: "取消";
-                button-width: parent.width;
-                clicked => { SyncAskState.dismissed(); }
+            Text {
+                text: "选哪一条都会照常开始游戏；关掉之后想再打开，去这一款的设置页把「参与云同步」重新打开。";
+                font-size: 11px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
             }
         }
     }

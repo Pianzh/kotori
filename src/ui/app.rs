@@ -8,12 +8,6 @@ pub struct App {
     pub(super) games: Vec<UiGame>,
     /// 「云端存档」那一块（云端有哪几款、每款几版、点开的那一款有哪几版）。
     pub(super) cloud: CloudState,
-    /// 配对表（`sync.pairing` 扫出来的），以及这一块的几句话。
-    pub(super) pairing: Vec<PairingRow>,
-    pub(super) pairing_scanned: bool,
-    pub(super) scanning: bool,
-    pub(super) pairing_msg: Option<String>,
-    pub(super) pairing_ok: bool,
     pub(super) daemon_socket: PathBuf,
     pub(super) daemon_connected: Option<bool>,
     pub(super) loading: bool,
@@ -21,6 +15,9 @@ pub struct App {
     pub(super) launching: Option<String>,
     /// 启动前那一问正等着回答的那一款（`None` = 没在问）。
     pub(super) sync_ask: Option<String>,
+    /// 那一问被「改配对…」让位给云端清单时置起：`sync_ask` 还留着（挑完要用它启动），
+    /// 但浮层先收起来 —— 两块浮层叠在一起会互相挡住。
+    pub(super) sync_ask_hidden: bool,
     pub(super) selected: Option<String>,
     pub(super) draft: Option<Draft>,
     pub(super) saving: bool,
@@ -116,12 +113,8 @@ impl App {
                 tab: Tab::Games,
                 games: Vec::new(),
                 cloud: CloudState::default(),
-                pairing: Vec::new(),
-                pairing_scanned: false,
-                scanning: false,
-                pairing_msg: None,
                 sync_ask: None,
-                pairing_ok: true,
+                sync_ask_hidden: false,
                 daemon_socket: socket,
                 daemon_connected: None,
                 loading: false,

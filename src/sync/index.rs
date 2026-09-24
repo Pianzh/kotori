@@ -281,6 +281,7 @@ mod tests {
             label: format!("host-{id}"),
             fingerprints: prints.iter().map(|p| p.to_string()).collect(),
             locations: vec!["rel-savedata".to_string()],
+            parents: Vec::new(),
             exe_paths: paths.iter().map(|p| p.to_string()).collect(),
         }
     }

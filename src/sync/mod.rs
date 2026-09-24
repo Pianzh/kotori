@@ -53,6 +53,7 @@ pub mod executables;
 pub mod fingerprint;
 pub mod index;
 pub mod index_cache;
+pub mod matching;
 pub mod pairing;
 pub mod runner;
 pub mod selfcheck;
@@ -85,8 +86,8 @@ pub use rclone_args::list_json_args;
 pub use rclone_args::{cat_args, copyto_args, deletefile_args, list_dirs_args, list_files_args};
 pub use rclone_env::rclone_env;
 pub use remote_paths::{
-    game_remote, index_delta_path, index_log_path, index_main_path, package_remote, remote_root,
-    save_key,
+    game_remote, index_delta_path, index_log_path, index_main_path, package_remote, parent_dir,
+    remote_root, save_key,
 };
 pub use save_targets::{SaveTarget, targets};
 pub use snapshots::{describe_stamp, is_snapshot, prune_plan, version_stamp};

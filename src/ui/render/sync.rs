@@ -149,53 +149,6 @@ pub(super) fn push_sync(ui: &mut Ui) {
         |v| w.set_sync_master_hint(v),
     );
 }
-/// 配对表：一句话（扫描结果）+ 一张表。
-///
-/// 表本身由 [`Ui::pairing`] 持有（Slint 的数组属性不可变），这里只把模型推过去。
-pub(super) fn push_pairing(ui: &mut Ui) {
-    let app = &ui.app;
-    // 状态在一个 Slint 全局里（见 `widgets/pairing.slint`）：页面只管画，不转发。
-    let board = ui.window.global::<PairingBoard>();
-
-    push_bool(board.get_scanned(), app.pairing_scanned, |v| {
-        board.set_scanned(v)
-    });
-    push_bool(board.get_scanning(), app.scanning, |v| {
-        board.set_scanning(v)
-    });
-    push_str(
-        board.get_message(),
-        app.pairing_msg.as_deref().unwrap_or(""),
-        |v| board.set_message(v),
-    );
-    push_bool(board.get_ok(), app.pairing_ok, |v| board.set_ok(v));
-
-    let items: Vec<PairingItem> = app
-        .pairing
-        .iter()
-        .map(|row| PairingItem {
-            cloud_key: row.cloud_key.clone().into(),
-            cloud_id: row.cloud_id.clone().into(),
-            cloud_short: crate::sync::cloud::short_id(&row.cloud_id, 8).into(),
-            cloud_name: row.cloud_name.clone().into(),
-            machines: row.machines as i32,
-            state: row.state as i32,
-            local_id: row.local_id.clone().into(),
-            local_name: row.local_name.clone().into(),
-            detail: row.detail().into(),
-            choices: ModelRc::new(VecModel::from(
-                row.choices
-                    .iter()
-                    .map(|(id, name)| PairingChoice {
-                        local_id: id.clone().into(),
-                        local_name: name.clone().into(),
-                    })
-                    .collect::<Vec<_>>(),
-            )),
-        })
-        .collect();
-    push_model(&ui.pairing, items);
-}
 
 /// `sync.status` reports the credential store by name; the page wants a number
 /// (it decides which of the three blocks to draw). The mapping itself lives on
@@ -211,12 +164,15 @@ pub(super) fn push_sync_ask(ui: &mut Ui) {
         .sync_ask
         .as_ref()
         .and_then(|id| ui.app.games.iter().find(|game| &game.id == id));
-    push_bool(ask.get_open(), game.is_some(), |v| ask.set_open(v));
+    // 「改配对…」把它让位给云端清单时先收起来（`sync_ask` 还留着，挑完要用它启动）。
+    let open = game.is_some() && !ui.app.sync_ask_hidden;
+    push_bool(ask.get_open(), open, |v| ask.set_open(v));
     let name = game.map(|game| game.name.clone()).unwrap_or_default();
     push_str(ask.get_game_name(), &name, |v| ask.set_game_name(v));
     let message = if game.is_some() {
         "云端有这一款游戏，但认不出本机这一份是哪一条（exe 与云端记下的指纹不一致）。\
-         选「没问题」就按当前配对继续；选「新建」会给这一份建一条新身份，云端已有的那一条\n稍后能在配对表里挑；也可以干脆关掉这一款的同步。"
+         选「没问题」就按当前配对继续；选「改配对」能从云端已有的一条里挑一条绑上；\
+         选「新建」会给这一份建一条新身份。选完都照常开始游戏。"
     } else {
         ""
     };

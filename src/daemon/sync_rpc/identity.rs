@@ -89,7 +89,7 @@ impl Daemon {
         game_id: &str,
     ) -> Result<MachineIdentity, String> {
         let fingerprint = self.ensure_fingerprint(game_id).await?;
-        let (locations, exe_path) = {
+        let (locations, parents, exe_path) = {
             let config = self.config.read().await;
             let game = config
                 .games
@@ -102,7 +102,18 @@ impl Daemon {
                 .iter()
                 .map(crate::sync::save_key)
                 .collect::<Vec<String>>();
-            (locations, game.exe_path.to_string_lossy().to_string())
+            // 弱匹配那一栏（用户 2026-09-24）：位置的**父目录名**，由原始路径算 ——
+            // 整条 `save_key` 跨机器常常对不上（末段目录名各写各的）。
+            let parents = game
+                .save_paths
+                .iter()
+                .filter_map(|save| crate::sync::parent_dir(&save.path))
+                .collect::<Vec<String>>();
+            (
+                locations,
+                parents,
+                game.exe_path.to_string_lossy().to_string(),
+            )
         };
         Ok(MachineIdentity {
             machine_id: self.machine_id().await?,
@@ -110,6 +121,7 @@ impl Daemon {
             // 没有指纹就空着：**绝不编一个**（那会让两台机器认错人）。
             fingerprints: fingerprint.into_iter().collect(),
             locations,
+            parents,
             // 用过的 exe 路径：只是参考信息（见 `MachineIdentity::exe_paths`）。
             exe_paths: (!exe_path.is_empty())
                 .then_some(exe_path)

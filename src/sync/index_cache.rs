@@ -54,25 +54,6 @@ impl CachedIndex {
             index,
         }
     }
-
-    /// 这一份是不是已经旧了（比 `ttl` 更早拿到的）。
-    ///
-    /// 时间戳读不出来的，**算旧** —— 旧了只会多跑一趟网络（读路径会顺手刷一次），
-    /// 而"相信一个读不出时间的缓存"没有任何理由。
-    pub fn is_stale(&self, ttl: std::time::Duration) -> bool {
-        let Some(at) = parse_stamp(&self.cached_at) else {
-            return true;
-        };
-        let ttl = chrono::Duration::from_std(ttl).unwrap_or_else(|_| chrono::Duration::hours(1));
-        chrono::Utc::now().signed_duration_since(at) > ttl
-    }
-}
-
-/// 缓存里那个时间戳是哪一刻（UTC）。形状只有我们自己写的那一种，认不出就是 `None`。
-fn parse_stamp(stamp: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    chrono::NaiveDateTime::parse_from_str(stamp.get(..15)?, "%Y%m%dT%H%M%S")
-        .ok()
-        .map(|naive| naive.and_utc())
 }
 
 /// 缓存文件落在哪儿。签名里有 `:`、`/` 这些不能当文件名的字符，所以文件名取它的哈希
@@ -169,6 +150,7 @@ mod tests {
             label: "host".to_string(),
             fingerprints: vec!["v1:1:aa".to_string()],
             locations: Vec::new(),
+            parents: Vec::new(),
             exe_paths: Vec::new(),
         });
         let mut index = CloudIndex::new();
@@ -236,27 +218,5 @@ mod tests {
         cached.format = CACHE_FORMAT + 1;
         std::fs::write(&path, serde_json::to_vec(&cached).unwrap()).unwrap();
         assert!(read_at(&dir.0, signature).is_none(), "不认识的格式不许瞎读");
-    }
-
-    /// 新鲜度：刚拿到的算新，比 TTL 早的算旧，时间戳读不出来也**算旧**
-    /// （旧了只是多跑一趟网络，那比信一个读不出时间的缓存安全）。
-    #[test]
-    fn staleness_is_decided_by_the_timestamp_only() {
-        let mut cached = CachedIndex::new("v1:rclone:https://host:bucket:", None);
-        assert!(!cached.is_stale(CACHE_TTL), "刚写的该是新的");
-
-        cached.cached_at = "20200101T000000Z".to_string();
-        assert!(cached.is_stale(CACHE_TTL), "2020 年那份当然旧了");
-
-        cached.cached_at = "不是时间戳".to_string();
-        assert!(cached.is_stale(CACHE_TTL), "读不出时间就当旧");
-
-        // 一小时前差一点：正好在窗口里（`>` 而不是 `>=`）。
-        let almost = chrono::Utc::now() - chrono::Duration::minutes(59);
-        cached.cached_at = almost.format("%Y%m%dT%H%M%S%3fZ").to_string();
-        assert!(!cached.is_stale(CACHE_TTL));
-        let just_over = chrono::Utc::now() - chrono::Duration::minutes(61);
-        cached.cached_at = just_over.format("%Y%m%dT%H%M%S%3fZ").to_string();
-        assert!(cached.is_stale(CACHE_TTL));
     }
 }

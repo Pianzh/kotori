@@ -23,7 +23,7 @@ use super::{CHECK_TIMEOUT, Daemon, Runner};
 use crate::config::SyncConfig;
 use crate::sync::cloud::{CloudGame, GameIdentity};
 use crate::sync::index::{CloudIndex, IndexGame};
-use crate::sync::index_cache::{self, CACHE_TTL, CachedIndex};
+use crate::sync::index_cache::{self, CachedIndex};
 
 /// 读出来的一份索引 —— 以及它是不是本机缓存里的那一份。
 ///
@@ -71,7 +71,7 @@ impl Daemon {
 
     /// 真的去云端读一次索引，顺便更新缓存与"上次刷新失败"那笔账。
     ///
-    /// **只有这一处**碰网络：`refresh=true`、缓存过期、本地还没有缓存，三条路都汇到这里。
+    /// **只有这一处**碰网络：用户按的刷新、本地还没有缓存，两条路都汇到这里。
     async fn fetch_index(
         &self,
         signature: &str,
@@ -91,13 +91,14 @@ impl Daemon {
         Ok(index)
     }
 
-    /// 读云端索引：**默认读本机缓存**，`refresh`、缓存过期、或者本地还没有时才真的去云端。
+    /// 读云端索引：**只看本机缓存**；只有用户按刷新、或者本地**还没有**缓存时才去云端。
     ///
-    /// 这就是用户 2026-09-23 要的那件事：把那份 JSON 下载到本地，之后在本地查。
-    /// 过的三条规矩：
-    ///   * 缓存**在一小时以内**就直接给（零网络）；
-    ///   * 过了一小时（或者本地没有）就顺手刷一次 —— 用户要的"发现超一小时就刷"；
-    ///   * 刷失败时**若有旧缓存就照给**，并把失败原因带上去（页面照旧能用，只是写着"旧"）。
+    /// 这就是用户 2026-09-23 要的那件事（把那份 JSON 下载到本地，之后在本地查），
+    /// 加 2026-09-24 钉死的那条口径："只有按刷新键和每小时自动同步才会从云端更新本地
+    /// 索引，其他所有查询都只查本地索引，最大化减少网络请求次数"。所以：
+    ///   * 手上有缓存就直接给，**不看它多旧**（界面上写着它是几点的），零网络；
+    ///   * 本地还没有缓存 ⇒ 下载一次（否则这一页永远是空的）；
+    ///   * 下载失败时**若有旧缓存就照给**，并把原因带上去（页面照旧能用，只是写着"旧"）。
     pub(in crate::daemon) async fn cloud_index_view(
         &self,
         refresh: bool,
@@ -107,11 +108,8 @@ impl Daemon {
             .ok_or_else(|| "云同步还没配齐：先填 bucket".to_string())?;
         let cached = self.cached_index(&signature);
 
-        // 手上有够新的缓存，又不是用户按的刷新：直接给，一趟网络都不打。
-        if !refresh
-            && let Some(cached) = &cached
-            && !cached.is_stale(CACHE_TTL)
-        {
+        // 手上有缓存、又不是用户按的刷新：直接给 —— **过期也不联网**，要新内容请按刷新。
+        if !refresh && let Some(cached) = &cached {
             return Ok(IndexView {
                 index: cached.index.clone(),
                 from_cache: true,
@@ -159,7 +157,7 @@ impl Daemon {
 
     /// 联网读一次索引、只更新缓存。**不扫身份卡、不碰配对表**。
     ///
-    /// 三个调用点：上面那条读路径（缓存过期 / 本地没有）、每小时的循环、改完同步设置之后
+    /// 三个调用点：上面那条读路径（本地还没有缓存）、每小时的循环、改完同步设置之后
     /// （见 `crate::daemon::index_refresh`）。没配齐或拿不到凭据时安静跳过 —— 没配云同步的
     /// 人不该被这个循环刷屏。
     pub(in crate::daemon) async fn refresh_cached_index(&self, why: &str) {

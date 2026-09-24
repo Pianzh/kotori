@@ -8,9 +8,23 @@
 
 use super::cloud::{self, CloudGameRow, CloudListReply};
 
+/// 打开这个浮层是为了哪一件事（两处共用它，挑中之后干的不一样）。
+///
+/// ⚠ `pub`（不是 `pub(in crate::ui)`）：它出现在 `Message::CloudPickOpen` 这个公开枚举里
+/// —— 与 `CloudListReply` 当初同一个理由（私有类型不许出现在公开接口上）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CloudPickPurpose {
+    /// 添加游戏页：挑中的那条成为这一款的云端身份（`add_match.pick`）。
+    #[default]
+    Add,
+    /// 启动前那一问：挑中的那条就是"这一款在云端是谁"，挑完接着启动（`sync.resolve`）。
+    Launch,
+}
+
 /// 浮层的状态。
 #[derive(Debug, Default)]
 pub(in crate::ui) struct CloudPick {
+    purpose: CloudPickPurpose,
     open: bool,
     loading: bool,
     /// 桶里建过索引没有。`false` 时候选必然是空的 —— 那句话要说清"去深扫一次"。
@@ -29,7 +43,8 @@ pub(in crate::ui) struct CloudPick {
 
 impl CloudPick {
     /// 打开浮层并挂上"取候选"的那一次请求（调用方负责发它）。
-    pub(in crate::ui) fn open(&mut self) {
+    pub(in crate::ui) fn open(&mut self, purpose: CloudPickPurpose) {
+        self.purpose = purpose;
         self.open = true;
         self.loading = true;
         self.error = None;
@@ -83,6 +98,11 @@ impl CloudPick {
 
     pub(in crate::ui) fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// 这一次打开是为了什么（`CloudPickChoose` 按它分派）。
+    pub(in crate::ui) fn purpose(&self) -> CloudPickPurpose {
+        self.purpose
     }
 
     pub(in crate::ui) fn loading(&self) -> bool {
@@ -183,7 +203,7 @@ mod tests {
     #[test]
     fn the_query_filters_the_snapshot_and_says_what_it_hid() {
         let mut pick = CloudPick::default();
-        pick.open();
+        pick.open(CloudPickPurpose::Add);
         assert!(pick.loading(), "刚打开时是在读");
         assert!(pick.rows().is_empty());
 
@@ -223,7 +243,7 @@ mod tests {
     #[test]
     fn picking_goes_by_cloud_id_and_closes_the_sheet() {
         let mut pick = CloudPick::default();
-        pick.open();
+        pick.open(CloudPickPurpose::Add);
         pick.loaded(reply(true, vec![row("c1", "一号"), row("c2", "二号")]));
         pick.set_query("二号".into());
         assert_eq!(pick.rows().len(), 1);
@@ -238,12 +258,12 @@ mod tests {
     #[test]
     fn opening_again_starts_from_a_clean_slate() {
         let mut pick = CloudPick::default();
-        pick.open();
+        pick.open(CloudPickPurpose::Add);
         pick.loaded(reply(true, vec![row("c1", "一号")]));
         pick.set_query("一号".into());
         pick.close();
 
-        pick.open();
+        pick.open(CloudPickPurpose::Add);
         assert!(pick.rows().is_empty());
         assert_eq!(pick.query(), "");
         assert!(pick.loading());
@@ -253,7 +273,7 @@ mod tests {
     #[test]
     fn an_empty_list_never_looks_like_an_empty_cloud() {
         let mut pick = CloudPick::default();
-        pick.open();
+        pick.open(CloudPickPurpose::Add);
         pick.loaded(reply(false, Vec::new()));
         assert!(
             pick.message().contains("深度扫描云端"),
@@ -261,7 +281,7 @@ mod tests {
             pick.message()
         );
 
-        pick.open();
+        pick.open(CloudPickPurpose::Add);
         pick.loaded(reply(true, Vec::new()));
         assert!(
             pick.message().contains("云端还没有游戏"),
@@ -269,7 +289,7 @@ mod tests {
             pick.message()
         );
 
-        pick.open();
+        pick.open(CloudPickPurpose::Add);
         pick.failed("连不上桶".to_string());
         assert!(pick.message().contains("连不上桶"), "{}", pick.message());
         assert!(

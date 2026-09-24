@@ -343,6 +343,7 @@ async fn a_real_kopia_repository_keeps_the_identity_card_beside_the_saves() {
         label: "linux-box".to_string(),
         fingerprints: vec!["v1:10:aa".to_string()],
         locations: vec!["rel-savedata".to_string()],
+        parents: Vec::new(),
         exe_paths: vec!["D:\\Games\\Demo\\game.exe".to_string()],
     });
     let key = engine
@@ -380,6 +381,7 @@ async fn a_real_kopia_repository_keeps_the_identity_card_beside_the_saves() {
         label: "windows-box".to_string(),
         fingerprints: vec!["v1:20:bb".to_string()],
         locations: Vec::new(),
+        parents: Vec::new(),
         exe_paths: Vec::new(),
     });
     engine.write_identity("demo", &again, &work).await.unwrap();

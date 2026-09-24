@@ -42,6 +42,9 @@ pub struct UiGame {
     /// Launched **without** gamescope (user choice on Linux; the only kind of
     /// launch on Windows).
     pub direct_launch: bool,
+    /// 这一款参不参与云同步（`GameConfig::sync_enabled`，默认开）。关掉之后这一款不再
+    /// 自动同步（启动前不取回、退出后不上传），手动「立即同步」不受它限制。
+    pub sync_enabled: bool,
     pub process_name: String,
     /// Profile name as stored, so saving never silently renames it.
     pub profile_name: String,

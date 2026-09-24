@@ -78,6 +78,17 @@ pub(super) fn push_detail(ui: &mut Ui) {
         w.set_detail_sync_busy(v)
     });
 
+    // 「参与云同步」那颗开关（`GameConfig::sync_enabled`）。它走一个全局，不经
+    // `app.slint` 转发 —— 那一层已经贴着 500 行的硬线（见 `pages/game-sync.slint`）。
+    let board = ui.window.global::<GameSyncBoard>();
+    let participating = app
+        .selected_game()
+        .map(|game| game.sync_enabled)
+        .unwrap_or(false);
+    push_bool(board.get_participating(), participating, |v| {
+        board.set_participating(v)
+    });
+
     push_saves(ui);
 }
 /// 把「浏览…」选中的值推回页面(推完就丢掉:它只属于那一次点击)。

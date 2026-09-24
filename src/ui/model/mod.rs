@@ -22,11 +22,11 @@ pub use environment::{ConfigSource, WineStatus};
 pub use game::{SavePathDraft, UiGame};
 pub use picker::ProcessRow;
 pub use session::SessionInfo;
-pub use sync::{PairingRow, PairingState, SyncGameRow, SyncStatus};
+pub use sync::{SyncGameRow, SyncStatus};
 
 pub(super) use add::{AddMatch, MATCH_DEBOUNCE, MatchPhase};
 pub(super) use cloud::{CloudGameRow, CloudListReply, CloudState, CloudVersionRow};
-pub(super) use cloud_pick::CloudPick;
+pub(super) use cloud_pick::{CloudPick, CloudPickPurpose};
 pub(super) use environment::{EnvCheck, Environment};
 pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, SAVE_PATH_KINDS, SaveAttempt};
 pub(super) use picker::ProcessPicker;

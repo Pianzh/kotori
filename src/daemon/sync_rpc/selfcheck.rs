@@ -1,12 +1,13 @@
 //! 打开游戏前的自检：接线（纯决策在 [`crate::sync::selfcheck`]）。
 //!
-//! 这一层只做三件事：把配置读成"这一款现在是什么状态"、需要时才去云端读一次身份、
-//! 把结论落盘。**它绝不拦启动**：读云端失败就当作"未定"，用户照样能开始玩。
+//! 这一层只做三件事：把配置读成"这一款现在是什么状态"、需要时才读一次**云端索引**
+//! （本机缓存那份，不读身份卡）、把结论落盘。**它绝不拦启动**：读不到就当作"未定"，
+//! 用户照样能开始玩。
 
 use serde_json::{Value, json};
 
 use super::Daemon;
-use crate::sync::cloud;
+use crate::sync::index::IndexGame;
 use crate::sync::selfcheck::{Decision, Found};
 use crate::sync::signature::{self, Conclusion};
 
@@ -36,19 +37,31 @@ impl Daemon {
         crate::sync::selfcheck::decide(&game, signature.as_deref(), || found)
     }
 
-    /// 指纹在当前云目标上找到了什么（读不到云端就当作"没命中"，自检**绝不报错**）。
+    /// 指纹在当前云目标上找到了什么（拿不到索引就当作"没命中"，自检**绝不报错**）。
+    ///
+    /// ⚠ 读的是**本机缓存里那份索引**，不是所有身份卡 —— 用户 2026-09-24："其他所有查询
+    /// 都只查本地索引，最大化减少网络请求次数"。索引是身份卡的镜像，指纹这一栏本来就在
+    /// 里面；本地还没有缓存时那条读路径会下载一次（见 `Daemon::cloud_index_view`）。
     async fn fingerprint_hit(&self, game_id: &str, fingerprint: &str) -> Found {
-        let settings = self.config.read().await.sync.clone();
-        let Ok(runner) = self.sync_runner(&settings) else {
+        let view = match self.cloud_index_view(false).await {
+            Ok(view) => view,
+            Err(error) => {
+                tracing::warn!("{game_id}: 自检读不到云端索引，当作未配对: {error}");
+                return Found::None;
+            }
+        };
+        // 桶里还没有这份索引（第一次用）：与"云端没有这一款"一样，都是认不出。
+        let Some(index) = view.index else {
             return Found::None;
         };
-        let Ok(cards) = runner.read_identities().await else {
-            tracing::warn!("{game_id}: 自检读不到云端身份，当作未配对");
-            return Found::None;
-        };
-        let hits = cloud::GameIdentity::find_by_fingerprint(&cards, fingerprint);
+        // 指纹命中**任意一个**即算命中（用户 2026-09-24 的口径）；多条 = 云端自己就有重
+        // （同一款被两台机器各建了一次身份）⇒ 要问。
+        let hits: Vec<&IndexGame> = index
+            .games
+            .iter()
+            .filter(|game| !fingerprint.is_empty() && game.identity.has_fingerprint(fingerprint))
+            .collect();
         let [only] = hits.as_slice() else {
-            // 0 条 = 认不出；多条 = 云端自己就有重（同一条身份被两台机器各建了一次）。
             return if hits.is_empty() {
                 Found::None
             } else {
@@ -59,15 +72,15 @@ impl Daemon {
         let taken = {
             let config = self.config.read().await;
             config.games.iter().any(|(id, game)| {
-                id != game_id && game.cloud_id.as_deref() == Some(only.1.cloud_id.as_str())
+                id != game_id && game.cloud_id.as_deref() == Some(only.identity.cloud_id.as_str())
             })
         };
         if taken {
             return Found::Many;
         }
         Found::One {
-            cloud_id: only.1.cloud_id.clone(),
-            cloud_key: only.0.clone(),
+            cloud_id: only.identity.cloud_id.clone(),
+            cloud_key: only.cloud_key.clone(),
         }
     }
 
@@ -180,53 +193,5 @@ impl Daemon {
         }
         tracing::info!("{game_id}: 启动前自检的回答 {choice}");
         Ok(json!({ "ok": true }))
-    }
-
-    /// 云端有哪些身份（给"改配对…"那个浮层）。
-    pub(in crate::daemon) async fn rpc_sync_identities(
-        &self,
-        game_id: &str,
-    ) -> Result<Value, String> {
-        let settings = self.config.read().await.sync.clone();
-        let runner = self.sync_runner(&settings)?;
-        let local = self.config.read().await.games.get(game_id).cloned();
-        let cards = runner.read_identities().await.map_err(|e| e.to_string())?;
-        let locals = self.local_claims().await;
-        let identity: Vec<Value> = cards
-            .iter()
-            .map(|(key, card)| {
-                json!({
-                    "cloud_key": key,
-                    "cloud_id": card.cloud_id,
-                    "name": card.name,
-                    "machines": card.machines.len(),
-                    "mine": local
-                        .as_ref()
-                        .and_then(|game| game.cloud_id.as_deref())
-                        == Some(card.cloud_id.as_str()),
-                    // 已经被本机**别的**档案认领的那条要标出来：一条身份只归一款游戏。
-                    "taken_by": locals
-                        .iter()
-                        .find(|(_, cloud_id)| cloud_id == &card.cloud_id)
-                        .map(|(name, _)| name.clone()),
-                })
-            })
-            .collect();
-        Ok(json!({ "identities": identity }))
-    }
-
-    /// 本机哪一款认领了哪条身份：`(游戏名, cloud_id)`。
-    async fn local_claims(&self) -> Vec<(String, String)> {
-        self.config
-            .read()
-            .await
-            .games
-            .values()
-            .filter_map(|game| {
-                game.cloud_id
-                    .clone()
-                    .map(|cloud_id| (game.name.clone(), cloud_id))
-            })
-            .collect()
     }
 }

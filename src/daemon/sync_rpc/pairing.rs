@@ -118,8 +118,13 @@ impl Daemon {
                 name: game.name.clone(),
                 cloud_id: game.cloud_id.clone(),
                 fingerprint: game.exe_fingerprint.clone(),
-                // 用 `save_key` 而不是配置里那句人话：跨机器能对上的就是 key（§2.7）。
-                locations: game.save_paths.iter().map(crate::sync::save_key).collect(),
+                // 弱匹配只看**父目录名**（用户 2026-09-24）：整条 `save_key` 跨机器常常
+                // 对不上（末段目录名各写各的：`save` / `savedata`），父目录名才对得起来。
+                parents: game
+                    .save_paths
+                    .iter()
+                    .filter_map(|save| crate::sync::parent_dir(&save.path))
+                    .collect(),
                 rejected: game.cloud_rejected.clone(),
             })
             .collect();

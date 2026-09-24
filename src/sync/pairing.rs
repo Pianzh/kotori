@@ -1,21 +1,25 @@
 //! 配对：把**云端的身份**与**本机的档案**对上号。
 //!
-//! 判据的强弱是有顺序的（用户 2026-09-21 定）：
+//! 判据本身（强弱顺序、怎么算"像"）在 [`crate::sync::matching`] 里，本模块只管"拿这些
+//! 判据算出该绑什么、该问什么"：
 //!   1. **exe 指纹** —— 同一个可执行文件，这就是同一款。唯一强到可以自己动手的判据；
-//!   2. 名字相同、或者存档位置 key 有交集 —— 只能算"像"，**一律问用户**；
+//!   2. 名字相同、或者存档位置的**父目录名**有交集 —— 只能算"像"，**一律问用户**
+//!      （用户 2026-09-24："关于存档位置，我们暂时以父目录名称来规定"）；
 //!   3. 其余的一律不动。
 //!
-//! 自动绑定（第 1 条）只在"**恰好**一条本机档案命中、而且这条身份没被别人占用"时发生：
-//! 命中两个（复制过存档目录、建了两条档案）就交给用户 —— 猜错的代价是把别人的存档
-//! 铺进本机这一款，这条路上唯一不可逆的事。
+//! 自动绑定（第 1 条）只在"**恰好**一条本机档案命中、而且这个指纹在云端只属于**一条
+//! 身份**"时发生（数身份不数机器：同一条身份名下几台机器各记了一遍同一个指纹，仍然算
+//! 一条）。命中两个（复制过存档目录、建了两条档案）就交给用户 —— 猜错的代价是把别人的
+//! 存档铺进本机这一款，这条路上唯一不可逆的事。
 //!
 //! 本模块是**纯逻辑**：不碰配置、不碰网络。它拿"本机有哪些档案"和"云端有哪些身份"
 //! 算出该绑什么、该问什么，daemon 负责把结果落盘、界面负责把结果画出来。
 //!
-//! ⚠ 身份卡里**没有 exe 的名字与大小**（§3.1 只放指纹）：所以"像"只能靠名字与存档
-//! 位置，靠不上"exe 名 + 大小"那一档。
+//! ⚠ 身份卡里**没有 exe 的名字与大小**（§3.1 只放指纹）：所以"像"只能靠名字与存档位置
+//! 的父目录名，靠不上"exe 名 + 大小"那一档。
 
 use crate::sync::cloud::GameIdentity;
+use crate::sync::matching::{self, Likeness, LocalSide};
 
 /// 配对要看的那几栏本机档案信息。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,8 +29,9 @@ pub struct LocalGame {
     /// 已经认领的云端身份（`None` = 还没上过云）。
     pub cloud_id: Option<String>,
     pub fingerprint: Option<String>,
-    /// 这一款在本机的存档位置 key（用来算"像不像"）。
-    pub locations: Vec<String>,
+    /// 这一款的存档位置**父目录名**（用来算"像不像"，见
+    /// [`crate::sync::remote_paths::parent_dir`]）。
+    pub parents: Vec<String>,
     /// 用户点过「不是同一款」的云端身份：**别再自动绑**（见 [`super::cloud`] 的说明）。
     pub rejected: Vec<String>,
 }
@@ -38,23 +43,13 @@ pub struct CloudCard {
     pub identity: GameIdentity,
 }
 
-/// 这一行是靠什么对上的。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Evidence {
-    /// exe 指纹（唯一强判据）。
-    Fingerprint,
-    /// 名字一模一样。
-    Name,
-    /// 存档位置 key 有交集。
-    Location,
-}
-
 /// 已经对上的本机档案。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalRef {
     pub id: String,
     pub name: String,
-    pub evidence: Evidence,
+    /// 靠什么对上的（判据的强弱与含义都在 [`crate::sync::matching`]）。
+    pub evidence: Likeness,
 }
 
 /// 配对表上的一行：一条云端身份，以及它在本机的处境。
@@ -71,17 +66,6 @@ pub struct Row {
     pub auto: bool,
     /// 像、但不敢自动绑的本机档案 id（界面列出来让用户点）。
     pub candidates: Vec<String>,
-}
-
-impl Evidence {
-    /// 回包里的写法（界面按它选措辞，见 `ui/model/sync.rs` 的 `evidence_label`）。
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Evidence::Fingerprint => "fingerprint",
-            Evidence::Name => "name",
-            Evidence::Location => "location",
-        }
-    }
 }
 
 impl Row {
@@ -117,14 +101,9 @@ pub fn plan(locals: &[LocalGame], clouds: &[CloudCard]) -> Plan {
 
     // 一个指纹在云端**只属于一条身份**时才敢自动绑：两张卡都带着它（身份卡被复制、
     // 或者建了重复的身份）时，绑哪一条都是掷骰子 —— 那就交给用户。
-    let mut contenders: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
-    for card in clouds {
-        for machine in &card.identity.machines {
-            for fingerprint in &machine.fingerprints {
-                *contenders.entry(fingerprint.as_str()).or_default() += 1;
-            }
-        }
-    }
+    // ⚠ 数的是**身份**不是机器：同一条身份名下几台机器各记了一遍同一个指纹，那仍然是
+    // "一条身份"（用户 2026-09-24 的口径，见 `matching::fingerprint_owners`）。
+    let owners = matching::fingerprint_owners(clouds.iter().map(|card| &card.identity));
 
     for card in clouds {
         let cloud_id = &card.identity.cloud_id;
@@ -157,7 +136,7 @@ pub fn plan(locals: &[LocalGame], clouds: &[CloudCard]) -> Plan {
                     && !local.rejected.iter().any(|id| id == cloud_id)
                     && local.fingerprint.as_ref().is_some_and(|fingerprint| {
                         card.identity.has_fingerprint(fingerprint)
-                            && contenders.get(fingerprint.as_str()) == Some(&1)
+                            && owners.get(fingerprint.as_str()) == Some(&1)
                     })
             })
             .collect();
@@ -173,7 +152,7 @@ pub fn plan(locals: &[LocalGame], clouds: &[CloudCard]) -> Plan {
                 Some(LocalRef {
                     id: hit.id.clone(),
                     name: hit.name.clone(),
-                    evidence: Evidence::Fingerprint,
+                    evidence: Likeness::Fingerprint,
                 }),
                 true,
                 Vec::new(),
@@ -181,9 +160,10 @@ pub fn plan(locals: &[LocalGame], clouds: &[CloudCard]) -> Plan {
             continue;
         }
 
-        // 3. 剩下的：命中多个、指纹在云端有歧义、或者只靠名字/位置"像" —— 一律列出来
-        //    问。候选按判据强弱排：指纹 > 位置对上的多 > 名字。
-        let mut alike: Vec<(&LocalGame, u8, usize)> = locals
+        // 3. 剩下的：命中多个、指纹在云端有歧义、或者只靠名字/父目录名"像" —— 一律
+        //    列出来问。候选按判据强弱排（指纹 > 名字 > 父目录名），同一档里父目录名对上
+        //    得多的在前。判据本身在 `crate::sync::matching` 里。
+        let mut alike: Vec<(&LocalGame, Likeness, usize)> = locals
             .iter()
             .filter(|local| {
                 local.cloud_id.is_none()
@@ -191,29 +171,16 @@ pub fn plan(locals: &[LocalGame], clouds: &[CloudCard]) -> Plan {
                     && !local.rejected.iter().any(|id| id == cloud_id)
             })
             .filter_map(|local| {
-                let shared = local
-                    .locations
-                    .iter()
-                    .filter(|key| {
-                        card.identity
-                            .machines
-                            .iter()
-                            .any(|machine| machine.locations.contains(key))
-                    })
-                    .count();
-                let fingerprint_hit = local
-                    .fingerprint
-                    .as_ref()
-                    .is_some_and(|fingerprint| card.identity.has_fingerprint(fingerprint));
-                if fingerprint_hit {
-                    Some((local, 0u8, shared))
-                } else if local.name == card.identity.name {
-                    Some((local, 1, shared))
-                } else if shared > 0 {
-                    Some((local, 2, shared))
-                } else {
-                    None
-                }
+                let prints = local.fingerprint.as_slice();
+                let side = LocalSide {
+                    name: &local.name,
+                    fingerprints: prints,
+                    parents: &local.parents,
+                };
+                matching::likeness(&side, &card.identity).map(|strength| {
+                    let shared = matching::shared_parents(&local.parents, &card.identity);
+                    (local, strength, shared)
+                })
             })
             .collect();
         alike.sort_by(|a, b| {
@@ -255,11 +222,11 @@ fn local_ref(local: &LocalGame, card: &CloudCard) -> LocalRef {
         .as_ref()
         .is_some_and(|fingerprint| card.identity.has_fingerprint(fingerprint))
     {
-        Evidence::Fingerprint
+        Likeness::Fingerprint
     } else if local.name == card.identity.name {
-        Evidence::Name
+        Likeness::Name
     } else {
-        Evidence::Location
+        Likeness::ParentDir
     };
     LocalRef {
         id: local.id.clone(),
@@ -278,14 +245,15 @@ mod tests {
         cloud_id: &str,
         name: &str,
         fingerprints: &[&str],
-        locations: &[&str],
+        parents: &[&str],
     ) -> CloudCard {
         let mut identity = GameIdentity::new(cloud_id, name);
         identity.merge_machine(MachineIdentity {
             machine_id: format!("machine-{cloud_id}"),
             label: "somewhere".to_string(),
             fingerprints: fingerprints.iter().map(|p| p.to_string()).collect(),
-            locations: locations.iter().map(|l| l.to_string()).collect(),
+            locations: Vec::new(),
+            parents: parents.iter().map(|p| p.to_string()).collect(),
             exe_paths: Vec::new(),
         });
         CloudCard {
@@ -300,20 +268,15 @@ mod tests {
             name: name.to_string(),
             cloud_id: None,
             fingerprint: fingerprint.map(str::to_string),
-            locations: vec!["rel-savedata".to_string()],
+            // 父目录名对得上 = "像"（弱判据，见 `crate::sync::matching`）。
+            parents: vec!["demo".to_string()],
             rejected: Vec::new(),
         }
     }
 
     #[test]
     fn one_fingerprint_hit_binds_itself_and_two_ask() {
-        let clouds = vec![card(
-            "games/demo",
-            "c1",
-            "Demo",
-            &["v1:10:aa"],
-            &["rel-savedata"],
-        )];
+        let clouds = vec![card("games/demo", "c1", "Demo", &["v1:10:aa"], &["demo"])];
 
         // 恰好一个命中：自动绑，并标明依据是指纹。
         let planned = plan(&[local("demo", "Demo", Some("v1:10:aa"))], &clouds);
@@ -328,7 +291,7 @@ mod tests {
         assert!(planned.rows[0].auto, "自动绑的那一行要说得出来");
         assert_eq!(
             planned.rows[0].local.as_ref().unwrap().evidence,
-            Evidence::Fingerprint
+            Likeness::Fingerprint
         );
         assert!(planned.rows[0].candidates.is_empty());
 
@@ -346,18 +309,12 @@ mod tests {
     #[test]
     fn a_likeness_that_is_not_a_fingerprint_always_asks() {
         // 名字一样但指纹不同（改过游戏、或者名字撞车）：只能问。
-        let clouds = vec![card(
-            "games/demo",
-            "c1",
-            "Demo",
-            &["v1:10:aa"],
-            &["rel-savedata"],
-        )];
+        let clouds = vec![card("games/demo", "c1", "Demo", &["v1:10:aa"], &["demo"])];
         let planned = plan(&[local("demo", "Demo", Some("v1:99:zz"))], &clouds);
         assert!(planned.bindings.is_empty());
         assert_eq!(planned.rows[0].candidates, vec!["demo"]);
 
-        // 指纹对不上、名字也不一样，但存档位置有交集：也算"像"（问）。
+        // 指纹对不上、名字也不一样，但存档位置的**父目录名**一样：也算"像"（问）。
         let other = LocalGame {
             name: "别的名字".to_string(),
             ..local("other", "别的名字", Some("v1:99:zz"))
@@ -368,7 +325,7 @@ mod tests {
         // 什么都不像：一条候选都没有，界面只把它列出来。
         let stranger = LocalGame {
             name: "完全无关".to_string(),
-            locations: vec!["abs-elsewhere".to_string()],
+            parents: vec!["elsewhere".to_string()],
             ..local("stranger", "完全无关", Some("v1:99:zz"))
         };
         let planned = plan(&[stranger], &clouds);
@@ -389,20 +346,14 @@ mod tests {
         assert_eq!(planned.rows[0].local.as_ref().unwrap().id, "demo");
         assert_eq!(
             planned.rows[0].local.as_ref().unwrap().evidence,
-            Evidence::Fingerprint
+            Likeness::Fingerprint
         );
         assert!(planned.rows[0].candidates.is_empty());
     }
 
     #[test]
     fn a_rejected_pairing_is_never_suggested_again() {
-        let clouds = vec![card(
-            "games/demo",
-            "c1",
-            "Demo",
-            &["v1:10:aa"],
-            &["rel-savedata"],
-        )];
+        let clouds = vec![card("games/demo", "c1", "Demo", &["v1:10:aa"], &["demo"])];
         let rejected = LocalGame {
             rejected: vec!["c1".to_string()],
             ..local("demo", "Demo", Some("v1:10:aa"))
@@ -427,6 +378,37 @@ mod tests {
                 .rows
                 .iter()
                 .all(|row| row.candidates == vec!["demo"])
+        );
+    }
+
+    /// 同一条身份名下几台机器各记了一遍同一个指纹：那仍然是**一条**身份，照样自动绑
+    /// （用户 2026-09-24："假设指纹 b 命中，那么直接判断命中"）。
+    #[test]
+    fn one_identity_seen_by_two_machines_is_still_one_identity() {
+        let mut identity = GameIdentity::new("c1", "Demo");
+        for (machine, print) in [("a", "v1:10:aa"), ("b", "v1:10:aa")] {
+            identity.merge_machine(MachineIdentity {
+                machine_id: machine.to_string(),
+                label: format!("host-{machine}"),
+                fingerprints: vec![print.to_string()],
+                locations: Vec::new(),
+                parents: Vec::new(),
+                exe_paths: Vec::new(),
+            });
+        }
+        let clouds = vec![CloudCard {
+            key: "games/demo".to_string(),
+            identity,
+        }];
+        let planned = plan(&[local("demo", "Demo", Some("v1:10:aa"))], &clouds);
+        assert_eq!(
+            planned.bindings,
+            vec![(
+                "demo".to_string(),
+                "games/demo".to_string(),
+                "c1".to_string()
+            )],
+            "同一个指纹落在同一条身份的两台机器上，不算歧义"
         );
     }
 }

@@ -62,11 +62,14 @@ pub enum Message {
     /// 「停止」的二次确认里用户按了取消(那颗按钮会真的把游戏结束掉,所以问一次)。
     StopCancelled,
     LaunchDone(Result<Value, String>),
-    /// 启动前那一问的回答：`ok`（没问题）/ `fresh`（新建一条身份）/ `off`（关掉
-    /// 这一款的同步）。见 `widgets/sync-ask.slint`。
+    /// 启动前那一问的回答：`ok`（没问题）/ `pair`（新建一条身份）/ `off`（关掉这一款的
+    /// 同步）。三个回答之后都会照常启动，见 `widgets/sync-ask.slint`。
     SyncAskAnswered(String),
-    /// 那一问被取消了：这一次不启动（用户可能想去配对表看一眼）。
-    SyncAskDismissed,
+    /// 「改配对…」：收起那一问、打开云端清单，从云端已有的一条里挑（见 `model::cloud_pick`）。
+    SyncAskPairRequested,
+    /// 单游戏页那颗「参与云同步」开关（`sync_enabled`，用户 2026-09-24 要的界面入口）。
+    SyncParticipatingToggled(bool),
+    SyncParticipatingSaved(bool, Result<(), String>),
     GameSelected(String),
     BackToList,
     SearchChanged(String),
@@ -133,7 +136,10 @@ pub enum Message {
     MatchUndoDecline,
     /// 「自己选…」那个浮层:打开(顺带读一次云端清单)、回包、搜索、挑一条、收起、
     /// 以及「改回自动」(见 `model::cloud_pick`)。
-    CloudPickOpen,
+    ///
+    /// 打开时带上**用途**：添加页挑中的是"这一款就绑它"，启动前那一问挑中的是
+    /// "这一次就用它启动" —— 同一个选择器，落点不同。
+    CloudPickOpen(CloudPickPurpose),
     CloudPickLoaded(Result<CloudListReply, String>),
     CloudPickSearch(String),
     CloudPickChoose(String),
@@ -199,15 +205,6 @@ pub enum Message {
     SyncCredentialsCleared(Result<(), String>),
     SyncTest,
     SyncTested(Result<String, String>),
-    /// 扫一遍云端，算出配对表（并把指纹唯一命中的那些直接绑上）。
-    SyncScanCloud,
-    SyncPairingScanned(Result<Vec<PairingRow>, String>),
-    /// 用户点了一条候选：`(本机 id, 云端键, 云端身份)`。
-    SyncPair(String, String, String),
-    SyncPaired(Result<Vec<PairingRow>, String>),
-    /// 「不是同一款」：`(本机 id, 云端身份)` —— 撤掉绑定，并记住别再自动绑。
-    SyncRejectPairing(String, String),
-    SyncPairingRejected(Result<Vec<PairingRow>, String>),
     /// 「云端存档」页：读**索引**列云端有哪些游戏（用户按刷新才走，一次读）。
     CloudRefresh,
     CloudLoaded(Result<CloudListReply, String>),

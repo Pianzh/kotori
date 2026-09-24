@@ -268,39 +268,6 @@ impl SyncForm {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn every_pairing_state_says_something_useful() {
-        let row = |state: PairingState| PairingRow {
-            cloud_key: "k".to_string(),
-            cloud_id: "8f2c1234-5678".to_string(),
-            cloud_name: "云端那款".to_string(),
-            machines: 2,
-            state,
-            local_id: "mine".to_string(),
-            local_name: "我的这款".to_string(),
-            evidence: "fingerprint".to_string(),
-            choices: Vec::new(),
-        };
-
-        // 自动绑上的那一行必须说清"绑到哪一条、靠什么绑的"——用户得知道我们动过手。
-        let auto = row(PairingState::AutoBound).detail();
-        assert!(auto.contains("我的这款"), "{auto}");
-        assert!(auto.contains("8f2c1234"), "{auto}");
-        assert!(auto.contains("指纹"), "{auto}");
-        let bound = row(PairingState::Bound).detail();
-        assert!(bound.contains("已绑定"), "{bound}");
-        assert!(
-            row(PairingState::Ask).detail().contains("点一下"),
-            "{:?}",
-            row(PairingState::Ask)
-        );
-        assert!(
-            row(PairingState::Missing).detail().contains("新建"),
-            "{:?}",
-            row(PairingState::Missing)
-        );
-    }
-
     use super::*;
     use crate::ui::test_support::{sync_payload, sync_status_fixture};
 
@@ -377,70 +344,5 @@ mod tests {
         // 认不出来的值按 rclone 算 —— 与 `engine_field` 同一条规矩（老配置没有这个键）,
         // 不能在这里玩出第三种说法。
         assert_eq!(engine_switched_note("???"), to_rclone);
-    }
-}
-
-/// 配对表里的一行（`sync.pairing` 的产物）。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PairingRow {
-    pub cloud_key: String,
-    pub cloud_id: String,
-    pub cloud_name: String,
-    pub machines: u64,
-    pub state: PairingState,
-    /// 已经对上的本机档案（`state` 是「绑好了」或「这次自动绑上」时才有）。
-    pub local_id: String,
-    pub local_name: String,
-    /// 靠什么对上的：「指纹」/「名字」/「存档位置」。
-    pub evidence: String,
-    /// `state == 像` 时候选的本机档案。
-    pub choices: Vec<(String, String)>,
-}
-
-/// 一条云端身份在本机的处境。数值与 `types.slint` 里 `PairingItem.state` 一致。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PairingState {
-    /// 早就绑好了。
-    Bound = 0,
-    /// 这次扫描自动绑的 —— 界面要写明依据，并给一个「不是同一款」。
-    AutoBound = 1,
-    /// 像，但不敢自己动手。
-    Ask = 2,
-    /// 本机没有对应的。
-    Missing = 3,
-}
-
-impl PairingRow {
-    /// 这一行给用户看的那句话。
-    ///
-    /// 措辞在这一层定（与 `credentials_label` 同一条规矩）：`.slint` 里只做布局，
-    /// 不做文案。它必须说清"绑没绑、靠什么绑的、要不要你点"。
-    pub(in crate::ui) fn detail(&self) -> String {
-        match self.state {
-            PairingState::Bound => format!(
-                "已绑定：本机《{}》（{}）",
-                self.local_name,
-                self.evidence_label()
-            ),
-            PairingState::AutoBound => format!(
-                "已自动绑定：本机《{}》↔ 云端 {}（{}）",
-                self.local_name,
-                crate::sync::cloud::short_id(&self.cloud_id, 8),
-                self.evidence_label()
-            ),
-            PairingState::Ask => "像本机的哪一条？点一下才对上号。".to_string(),
-            PairingState::Missing => {
-                "本机没有与它对应的档案：上传本机那一款时会新建一条身份。".to_string()
-            }
-        }
-    }
-
-    fn evidence_label(&self) -> String {
-        match self.evidence.as_str() {
-            "fingerprint" => "指纹".to_string(),
-            "name" => "名字".to_string(),
-            "location" => "存档位置".to_string(),
-            other => other.to_string(),
-        }
     }
 }

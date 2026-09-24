@@ -64,7 +64,6 @@ fn a_click_lands_on_the_control_under_the_pointer() {
         runtime: runtime.handle().clone(),
         games,
         saves,
-        pairing: Rc::new(VecModel::default()),
         cloud_rows: Rc::new(VecModel::default()),
         cloud_versions: Rc::new(VecModel::default()),
         add_match_rows: Rc::new(VecModel::default()),

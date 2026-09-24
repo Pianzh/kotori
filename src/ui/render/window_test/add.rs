@@ -202,7 +202,7 @@ pub(super) fn cloud_pick_states(ui: &mut Ui) {
     };
 
     // 打开：先是在读（这时候列表是空的，不许画成"云端没有游戏"）。
-    ui.app.cloud_pick.open();
+    ui.app.cloud_pick.open(CloudPickPurpose::Add);
     render(ui);
     let board = ui.window.global::<CloudPickerState>();
     assert!(board.get_open(), "浮层该开着");
@@ -267,7 +267,7 @@ pub(super) fn cloud_pick_states(ui: &mut Ui) {
     );
 
     // 桶里还没建索引 / 读不成：两句不同的话，都不许画成"云端没有游戏"。
-    ui.app.cloud_pick.open();
+    ui.app.cloud_pick.open(CloudPickPurpose::Add);
     ui.app.cloud_pick.loaded(reply(false, Vec::new()));
     render(ui);
     let board = ui.window.global::<CloudPickerState>();
@@ -278,7 +278,7 @@ pub(super) fn cloud_pick_states(ui: &mut Ui) {
     );
     fits(ui, &["CloudPickerDialog"]);
 
-    ui.app.cloud_pick.open();
+    ui.app.cloud_pick.open(CloudPickPurpose::Add);
     ui.app.cloud_pick.failed("连不上桶".to_string());
     render(ui);
     let board = ui.window.global::<CloudPickerState>();

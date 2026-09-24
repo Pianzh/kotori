@@ -52,7 +52,6 @@ fn ui() -> Ui {
         runtime: runtime.handle().clone(),
         games,
         saves,
-        pairing: Rc::new(VecModel::default()),
         cloud_rows: Rc::new(VecModel::default()),
         cloud_versions: Rc::new(VecModel::default()),
         add_match_rows,
@@ -278,39 +277,6 @@ fn library_and_sync_pages_render_without_a_display() {
     render(&mut ui);
     ui.app.sync_restore_pending = None;
 
-    // 配对那一块:一条自动绑上的 + 一条要问的（两种最宽的形态：候选按钮最多）。
-    ui.app.pairing = vec![
-        PairingRow {
-            cloud_key: "original-name".into(),
-            cloud_id: "8f2c1234-0000-0000-0000-000000000000".into(),
-            cloud_name: "Original Name".into(),
-            machines: 2,
-            state: PairingState::AutoBound,
-            local_id: "renamed".into(),
-            local_name: "Renamed".into(),
-            evidence: "fingerprint".into(),
-            choices: Vec::new(),
-        },
-        PairingRow {
-            cloud_key: "other".into(),
-            cloud_id: "1111".into(),
-            cloud_name: "另一个名字很长的游戏（云端那一条）".into(),
-            machines: 1,
-            state: PairingState::Ask,
-            local_id: String::new(),
-            local_name: String::new(),
-            evidence: String::new(),
-            choices: vec![
-                ("a".into(), "甲".into()),
-                ("b".into(), "乙".into()),
-                ("c".into(), "丙".into()),
-            ],
-        },
-    ];
-    ui.app.pairing_scanned = true;
-    ui.app.pairing_msg = Some("云端 2 条身份，其中 1 条按 exe 指纹自动绑上了。".into());
-    render(&mut ui);
-
     // 「云端存档」那一页在 `window_test::cloud` 里（它自己就够长了）。
     cloud::cloud_page(&mut ui);
 
@@ -318,7 +284,7 @@ fn library_and_sync_pages_render_without_a_display() {
     // (卡片被切、说明文字挤成一列竖字,见 UI_GUIDE §7.14)。凭据组是这一页最宽的一行
     // (说明 + 输入框 + 最多三个按钮),所以每个状态都量一次它。
     // ⚠ 这条只能在整页测试里做:测试后端才拿得到元素几何。
-    let sync_states = ["SyncCredentialsGroup", "SyncPairingSection", "CardRow"];
+    let sync_states = ["SyncCredentialsGroup", "CardRow"];
 
     ui.app.sync_status = Some(SyncStatus {
         store_kind: "encrypted-file".into(),

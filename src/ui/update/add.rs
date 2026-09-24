@@ -59,10 +59,11 @@ impl App {
                 self.add_match.undo_decline();
                 Task::none()
             }
-            // 「自己选…」:打开浮层,读一次云端清单 —— 读的是**本机缓存**(不打网络;
-            // 缓存过了一小时或者本地还没有时 daemon 自己会去云端,见 `cloud_index_view`)。
-            Message::CloudPickOpen => {
-                self.cloud_pick.open();
+            // 「自己选…」:打开浮层,读一次云端清单 —— 只读**本机缓存**(用户 2026-09-24:
+            // "其他所有查询都只查本地索引";本地还没有缓存时 daemon 会下载一次,
+            // 见 `cloud_index_view`)。
+            Message::CloudPickOpen(purpose) => {
+                self.cloud_pick.open(purpose);
                 let socket = self.daemon_socket.clone();
                 Task::perform(
                     async move { cloud_list(&socket, false).await },
@@ -83,13 +84,26 @@ impl App {
             }
             Message::CloudPickChoose(cloud_id) => {
                 // 按 `cloud_id` 从**全量**里取(见 `CloudPick::pick`):搜索词怎么变都不会认错人。
-                if let Some(row) = self.cloud_pick.pick(&cloud_id) {
-                    self.add_match.pick(row);
+                let purpose = self.cloud_pick.purpose();
+                let Some(row) = self.cloud_pick.pick(&cloud_id) else {
+                    return Task::none();
+                };
+                match purpose {
+                    // 添加页:挑中的那条成为这一款的云端身份(建完之后 `sync.pair`)。
+                    CloudPickPurpose::Add => self.add_match.pick(row),
+                    // 启动前那一问:挑中的就是"这一款在云端是谁",挑完接着启动。
+                    CloudPickPurpose::Launch => return self.sync_ask_paired(row),
                 }
                 Task::none()
             }
             Message::CloudPickDismiss => {
+                let purpose = self.cloud_pick.purpose();
                 self.cloud_pick.close();
+                // 启动前那一问被关掉(点空白/关闭)= 关掉这一款并**照常启动**
+                // (用户 2026-09-24:"被关掉就直接关掉云同步即可,不妨碍游戏正常启动")。
+                if purpose == CloudPickPurpose::Launch {
+                    return self.sync_ask_declined();
+                }
                 Task::none()
             }
             Message::MatchClearPick => {

@@ -99,6 +99,31 @@ pub fn save_key(save: &crate::config::SavePath) -> String {
     format!("{kind}-{short}")
 }
 
+/// 原始存档路径的**父目录名**：弱匹配用的那一栏（用户 2026-09-24 定）。
+///
+/// 取倒数第二段：`%APPDATA%\Game\save` → `game`。为什么不整条比：两台机器给同一款
+/// 游戏建的末段目录名常常不一样（`save` / `savedata` / `SaveData`），而游戏或厂商
+/// 那一层通常是一致的。⚠ 它**只用来列候选**，永不自动绑（见 [`crate::sync::matching`]）。
+///
+/// 不比的情况：只有一段的（`savedata`）、倒数第二段是令牌（`%APPDATA%`）或盘符（`C:`）
+/// 的 —— 那都是公共目录，不是"这一款自己的目录"。
+pub fn parent_dir(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path
+        .split(['\\', '/'])
+        .map(str::trim)
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    let parent = parts.get(parts.len().checked_sub(2)?)?;
+    // 令牌与盘符都不是目录名。
+    if parent.starts_with('%') && parent.ends_with('%') {
+        return None;
+    }
+    if parent.chars().count() == 2 && parent.ends_with(':') {
+        return None;
+    }
+    Some(parent.to_ascii_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,6 +153,21 @@ mod tests {
         let mut bucketless = config;
         bucketless.bucket = String::new();
         assert_eq!(remote_root(&bucketless), "kotori:prefix");
+    }
+
+    /// 父目录名：取倒数第二段；令牌、盘符、只有一段的都不比。
+    #[test]
+    fn a_parent_dir_is_the_second_to_last_segment() {
+        assert_eq!(parent_dir("%APPDATA%\\Game\\save").as_deref(), Some("game"));
+        assert_eq!(
+            parent_dir(r"C:\Games\Hoshi\savedata").as_deref(),
+            Some("hoshi")
+        );
+        assert_eq!(parent_dir("savedata/sub").as_deref(), Some("savedata"));
+        assert_eq!(parent_dir("savedata"), None, "只有一段，不比");
+        assert_eq!(parent_dir("%APPDATA%\\save"), None, "令牌不是目录名");
+        assert_eq!(parent_dir("C:\\save"), None, "盘符不是目录名");
+        assert_eq!(parent_dir(""), None);
     }
 
     #[test]

@@ -32,6 +32,8 @@ export global CloudPickerState {
     callback closed();
     /// 添加页那颗「自己选…」直接喊这里。
     callback open-for-add();
+    /// 启动前那一问的「改配对…」喊这里（同一个选择器，挑中之后落点不同）。
+    callback open-for-launch();
 }
 
 export component CloudPickerDialog inherits Rectangle {

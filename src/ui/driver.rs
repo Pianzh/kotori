@@ -30,9 +30,6 @@ pub(super) struct Ui {
     /// to be held here and handed over as a model.
     pub(super) games: Rc<VecModel<GameItem>>,
     pub(super) saves: Rc<VecModel<SaveItem>>,
-    /// 配对表（`sync.pairing` 的结果）。同 `games`/`saves`：Slint 的数组属性不可变，
-    /// 所以表由这边持有、整份推过去。
-    pub(super) pairing: Rc<VecModel<PairingItem>>,
     /// 「云端存档」那一块的两张表：云端有哪几款、点开那一款有哪几版。
     pub(super) cloud_rows: Rc<VecModel<CloudGameItem>>,
     pub(super) cloud_versions: Rc<VecModel<CloudVersionItem>>,
@@ -122,7 +119,6 @@ pub(super) fn run() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Handle::current();
     let games = Rc::new(VecModel::<GameItem>::default());
     let saves = Rc::new(VecModel::<SaveItem>::default());
-    let pairing = Rc::new(VecModel::<PairingItem>::default());
     let cloud_rows = Rc::new(VecModel::<CloudGameItem>::default());
     let cloud_versions = Rc::new(VecModel::<CloudVersionItem>::default());
     let add_match_rows = Rc::new(VecModel::<AddMatchItem>::default());
@@ -130,9 +126,6 @@ pub(super) fn run() -> anyhow::Result<()> {
     let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
     window.set_games(games.clone().into());
     window.set_saves(saves.clone().into());
-    window
-        .global::<PairingBoard>()
-        .set_rows(pairing.clone().into());
     window
         .global::<CloudBoard>()
         .set_rows(cloud_rows.clone().into());
@@ -156,7 +149,6 @@ pub(super) fn run() -> anyhow::Result<()> {
         runtime,
         games,
         saves,
-        pairing,
         cloud_rows,
         cloud_versions,
         add_match_rows,

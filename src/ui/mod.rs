@@ -46,8 +46,7 @@ mod wire;
 pub use app::App;
 pub use message::{Message, PathTarget, SyncField, Tab};
 pub use model::{
-    ConfigSource, PairingRow, PairingState, SavePathDraft, SessionInfo, SyncGameRow, SyncStatus,
-    UiGame, WineStatus,
+    ConfigSource, SavePathDraft, SessionInfo, SyncGameRow, SyncStatus, UiGame, WineStatus,
 };
 
 /// 界面跑在哪个平台上。
@@ -157,6 +156,7 @@ mod test_support {
             save_paths: Vec::new(),
             auto_watch: false,
             direct_launch: false,
+            sync_enabled: true,
             process_name: String::new(),
             profile_name: "默认".into(),
             algo: "Fsr".into(),

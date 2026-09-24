@@ -125,6 +125,11 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_output_h_changed(|text| dispatch(Message::OutputHChanged(one_line(&text))));
     window.on_direct_launch_toggled(|value| dispatch(Message::DirectLaunchToggled(value)));
     window.on_auto_watch_toggled(|value| dispatch(Message::AutoWatchToggled(value)));
+    // 单游戏页那颗「参与云同步」开关：状态在一个全局里（见 `pages/game-sync.slint`），
+    // 回调也从那儿接（照 `CloudBoard`）。
+    window
+        .global::<GameSyncBoard>()
+        .on_toggled(|value| dispatch(Message::SyncParticipatingToggled(value)));
     window
         .on_process_name_changed(|value| dispatch(Message::ProcessNameChanged(value.to_string())));
     window.on_stop_cancelled(|| dispatch(Message::StopCancelled));
@@ -209,26 +214,10 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_sync_browse_rclone_binary(|| dispatch(Message::PickPath(PathTarget::RcloneBinary)));
     window.on_sync_browse_kopia_binary(|| dispatch(Message::PickPath(PathTarget::KopiaBinary)));
     window.on_sync_test(|| dispatch(Message::SyncTest));
-    // 配对那一块的状态在一个 Slint 全局里，回调也从那儿接（照 `ProcessPickerState`）。
-    let pairing = window.global::<PairingBoard>();
-    pairing.on_scan(|| dispatch(Message::SyncScanCloud));
-    pairing.on_pair(|local_id, cloud_key, cloud_id| {
-        dispatch(Message::SyncPair(
-            local_id.to_string(),
-            cloud_key.to_string(),
-            cloud_id.to_string(),
-        ));
-    });
-    pairing.on_reject(|local_id, cloud_id| {
-        dispatch(Message::SyncRejectPairing(
-            local_id.to_string(),
-            cloud_id.to_string(),
-        ));
-    });
-    // 启动前那一问：回答与取消都从一个 Slint 全局来（照 `PairingBoard`）。
+    // 启动前那一问：回答与取消都从一个 Slint 全局来（照 `CloudBoard`）。
     let ask = window.global::<SyncAskState>();
     ask.on_answered(|choice| dispatch(Message::SyncAskAnswered(choice.to_string())));
-    ask.on_dismissed(|| dispatch(Message::SyncAskDismissed));
+    ask.on_pair_requested(|| dispatch(Message::SyncAskPairRequested));
     // 「云端存档」页：刷新读索引、深度扫描读所有卡、点开一款再问一次版本、搜索是本地过滤。
     let cloud = window.global::<CloudBoard>();
     cloud.on_refresh(|| dispatch(Message::CloudRefresh));
@@ -244,7 +233,8 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     add_match.on_clear_pick(|| dispatch(Message::MatchClearPick));
     // 它旁边那颗「自己选…」：从云端清单里挑一条绑上（状态在一个全局里，回调也从那儿接）。
     let cloud_pick = window.global::<CloudPickerState>();
-    cloud_pick.on_open_for_add(|| dispatch(Message::CloudPickOpen));
+    cloud_pick.on_open_for_add(|| dispatch(Message::CloudPickOpen(CloudPickPurpose::Add)));
+    cloud_pick.on_open_for_launch(|| dispatch(Message::CloudPickOpen(CloudPickPurpose::Launch)));
     cloud_pick.on_query_changed(|text| dispatch(Message::CloudPickSearch(one_line(&text))));
     cloud_pick.on_chosen(|cloud_id| dispatch(Message::CloudPickChoose(cloud_id.to_string())));
     cloud_pick.on_closed(|| dispatch(Message::CloudPickDismiss));

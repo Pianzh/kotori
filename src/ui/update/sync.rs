@@ -208,91 +208,41 @@ impl App {
                 let socket = self.daemon_socket.clone();
                 Task::perform(async move { sync_test(&socket).await }, Message::SyncTested)
             }
-            Message::SyncScanCloud => {
-                self.scanning = true;
-                self.pairing_msg = Some("正在扫描云端…".to_string());
-                self.pairing_ok = true;
+            // 单游戏页那颗「参与云同步」开关：立即存（它只发 `game.update` 的一个字段，
+            // 不走那条自动保存的草稿路 —— 别的编辑一个都不会被带上）。
+            Message::SyncParticipatingToggled(enabled) => {
+                let Some(id) = self.selected.clone() else {
+                    return Task::none();
+                };
+                // 先在界面上生效（开关自己已经翻过去了）；存不成再翻回来。
+                if let Some(game) = self.games.iter_mut().find(|game| game.id == id) {
+                    game.sync_enabled = enabled;
+                }
                 let socket = self.daemon_socket.clone();
                 Task::perform(
-                    async move { sync_scan_cloud(&socket).await },
-                    Message::SyncPairingScanned,
+                    async move { set_game_sync_enabled(&socket, id, enabled).await },
+                    move |result| Message::SyncParticipatingSaved(enabled, result),
                 )
             }
-            Message::SyncPairingScanned(result) => {
-                self.scanning = false;
+            Message::SyncParticipatingSaved(enabled, result) => {
                 match result {
-                    Ok(rows) => {
-                        // 自动绑上的那几条要留一句账：用户得知道我们**动过**手，
-                        // 而且有一个「不是同一款」可以撤销。
-                        let auto = rows
-                            .iter()
-                            .filter(|row| row.state == PairingState::AutoBound)
-                            .count();
-                        self.pairing_msg = Some(if rows.is_empty() {
-                            "云端还没有游戏。".to_string()
-                        } else if auto > 0 {
-                            format!(
-                                "云端 {} 条身份，其中 {auto} 条按 exe 指纹自动绑上了（不对的话点「不是同一款」）。",
-                                rows.len()
-                            )
+                    Ok(()) => {
+                        self.saved_ok = true;
+                        self.saved_msg = Some(if enabled {
+                            "这一款已参与云同步。".to_string()
                         } else {
-                            format!("云端 {} 条身份，没有可以自动绑的。", rows.len())
+                            "这一款已停止云同步（手动「立即同步」仍然可用）。".to_string()
                         });
-                        self.pairing_ok = true;
-                        self.pairing = rows;
-                        self.pairing_scanned = true;
                     }
                     Err(e) => {
-                        self.pairing_ok = false;
-                        self.pairing_msg = Some(format!("扫描云端失败: {e}"));
-                    }
-                }
-                Task::none()
-            }
-            Message::SyncPair(local_id, cloud_key, cloud_id) => {
-                self.scanning = true;
-                self.pairing_msg = Some("正在绑定…".to_string());
-                let socket = self.daemon_socket.clone();
-                Task::perform(
-                    async move { sync_pair(&socket, local_id, cloud_key, cloud_id).await },
-                    Message::SyncPaired,
-                )
-            }
-            Message::SyncPaired(result) => {
-                self.scanning = false;
-                match result {
-                    Ok(rows) => {
-                        self.pairing = rows;
-                        self.pairing_ok = true;
-                        self.pairing_msg = Some("已绑定。".to_string());
-                    }
-                    Err(e) => {
-                        self.pairing_ok = false;
-                        self.pairing_msg = Some(format!("绑定失败: {e}"));
-                    }
-                }
-                Task::none()
-            }
-            Message::SyncRejectPairing(local_id, cloud_id) => {
-                self.scanning = true;
-                self.pairing_msg = Some("正在取消绑定…".to_string());
-                let socket = self.daemon_socket.clone();
-                Task::perform(
-                    async move { sync_reject_pairing(&socket, local_id, cloud_id).await },
-                    Message::SyncPairingRejected,
-                )
-            }
-            Message::SyncPairingRejected(result) => {
-                self.scanning = false;
-                match result {
-                    Ok(rows) => {
-                        self.pairing = rows;
-                        self.pairing_ok = true;
-                        self.pairing_msg = Some("已取消绑定，并且不会再自动绑它。".to_string());
-                    }
-                    Err(e) => {
-                        self.pairing_ok = false;
-                        self.pairing_msg = Some(format!("取消绑定失败: {e}"));
+                        // 存不成 ⇒ 把界面上那个值翻回去，别让人以为已经生效。
+                        if let Some(id) = self.selected.clone()
+                            && let Some(game) = self.games.iter_mut().find(|game| game.id == id)
+                        {
+                            game.sync_enabled = !enabled;
+                        }
+                        self.saved_ok = false;
+                        self.saved_msg = Some(format!("改这一款的云同步失败: {e}"));
                     }
                 }
                 Task::none()
