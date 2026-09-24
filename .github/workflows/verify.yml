@@ -1,0 +1,163 @@
+# 可复用验证:fmt / clippy / 全部测试 / 固定版本 kopia 的四个 ignored 本地仓库测试。
+#
+# 为什么单独成文件并且用 workflow_call:ci.yml 与 release.yml 都要"这一套验证"。
+# 此前全量测试只在 ci.yml 里跑,发布是一条纯构建流水线 —— 发出去的东西没有
+# "同 SHA 测过"的证据。现在验证只有这一份,谁要就先 call 它:
+#   * ci.yml 每次 push/PR 都 call(日常守门);
+#   * release.yml 打 tag 时 call,且 release 汇总 job needs 它 —— 发布必须依赖
+#     同 SHA 的 Linux/Windows 验证。workflow_call 的 job 与构建 job 在同一个 ref
+#     上 checkout,天然同 SHA。
+# 构建与验证解耦:构建 job 与这里并行,互不等待。
+#
+# ⚠ 只有 Linux/Windows 两臂。ARM 验证仍由 ci.yml 的 test-arm 手动/tag 触发
+#   (任务边界:ARM 可继续仅手动/tag,现有 CI Linux/ARM 打包保留)。
+#
+# 四个 `#[ignore]` 的 kopia 测试(src/sync/engine/tests.rs)需要真 kopia,这里
+# 下载**固定版本**的官方二进制并校验官方 checksums,用 KOTORI_KOPIA 指过去。
+# ci.yml 与 release.yml 都显式传 0.23.1(release 侧必须与 KOPIA_VERSION 一致),
+# 不传则吃默认值。版本必须同一份:verify 测的那个 kopia 就是 Windows 发布包
+# 内置的那个。
+#
+# 失败现场:测试会把失败夹具放进 $KOTORI_TEST_ARTIFACTS(job env),下面两个
+# `if: failure()` 的 upload-artifact 把它收上来,artifact 名带平台,避免同一个
+# workflow 里两个 job 上传同名 artifact 互相冲突。
+
+name: Verify (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      kopia-version:
+        description: 固定的 kopia 版本,与 release.yml 的 KOPIA_VERSION 对齐
+        required: false
+        type: string
+        default: "0.23.1"
+
+env:
+  CARGO_TERM_COLOR: always
+  # 放顶层 env:CI 与 Release 两条调用链的两个 job 都拿到同一份。
+  KOTORI_TEST_ARTIFACTS: ${{ github.workspace }}/test-artifacts
+
+jobs:
+  # ── Linux x86_64:格式、lint、全部测试、四个真 kopia 测试 ─────────────────
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      # Slint 的 Linux 依赖(libxcb-shape0-dev 等)。缺了会在链接期才炸,别省。
+      # 这里不打包,不需要 zstd(那是 build-linux / test-arm 的事)。
+      - name: 系统依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev \
+            libfontconfig-dev libssl-dev rclone
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: 格式
+        run: cargo fmt --all --check
+
+      - name: Clippy(零告警是硬规矩)
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: 测试
+        run: scripts/test.sh
+
+      - name: 取固定版本 kopia 并校验 sha256
+        env:
+          KOPIA_VERSION: ${{ inputs.kopia-version }}
+        run: bash scripts/install-kopia.sh "$KOPIA_VERSION"
+
+      # 用块标量避免 tests:: 后的空格被 YAML 当成键值分隔符。
+      - name: 四个真 kopia 仓库的端到端测试(本地仓库,固定版本)
+        run: |
+          cargo test --locked --bin kotori sync::engine::tests:: -- --ignored
+
+      - name: 真实双引擎 RPC 契约
+        run: |
+          export KOTORI_REAL_RCLONE="$(command -v rclone)"
+          rclone version
+          cargo test --locked --test portable_ipc engines:: -- --ignored
+
+      - name: 收集失败现场(Linux)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-linux-x86_64
+          path: ${{ github.workspace }}/test-artifacts
+          if-no-files-found: warn
+
+  # ── Windows:编得过、零告警、测得过,外加四个真 kopia 测试 ────────────────
+  # windows-latest 是原生 Windows,自带 Rust 与 MSVC,不需要装任何系统依赖。
+  # 测试直接 `cargo test --all-targets`(不走 `scripts/test.sh`:那个脚本是 bash +
+  # `env -u DISPLAY` 的 Linux 形状,而这里没有 DISPLAY 可清)。e2e 那一套整条
+  # `#![cfg(unix)]`(它建立在 Unix socket 上),在 Windows 上编成空 target,这是
+  # **设计如此**。
+  #
+  # ⚠ 为什么是 clippy 而不是 `cargo check`:`#[cfg(windows)]` 那些分支在 Linux 上
+  #   **根本不参与编译**,所以"零告警"这条硬规矩在那边一直是空转的 —— Windows
+  #   侧写出来的死代码、没用上的导入、写错了的 clippy 风格,只有原生这一遍才看得见。
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # 还编不过的那些轮,每一轮都要从零下载+编译。默认失败不存缓存,而这个
+          # job 存在的意义恰恰是"失败也要有产出",所以打开它(与迁走前的 ci.yml
+          # test-windows 同一个配置)。
+          cache-on-failure: true
+
+      - name: 编译 + lint(未使用的导入/变量、类型错误、clippy 风格一律不许过)
+        # ⚠ `-A dead_code` 是**刻意**留的一个口子:Windows 上有一整块 unix-only
+        #   (`scale::args` 的阶梯算术、wineserver 收尾、`process::is_plumbing`……)
+        #   在那边没有任何调用者,逐条 `#[cfg(unix)]` 是另一件事(PLATFORMS.md
+        #   待办 12)。这一条 lint 挡住的只是那些噪音,而**真正会被漏掉的东西**
+        #   ——`#[cfg(windows)]` 里写错的类型、没人用的导入、clippy 的风格规则
+        #   ——照样全部拦下。
+        run: cargo clippy --all-targets --locked -- -D warnings -A dead_code
+
+      - name: 测试
+        # 单元测试里有一大堆平台相关的代码(进程表、exe 路径、kill_tree、空设备名、
+        # 路径分隔符)只有在这边跑才算数 —— 2026-09-21 在 VM 的 Windows 10 LTSC
+        # 上实测 263 passed / 0 failed,这里盯的是 runner 上有没有环境差异。
+        run: cargo test --all-targets --locked
+
+      - name: 取固定版本 kopia 并校验 sha256
+        shell: pwsh
+        env:
+          KOPIA_VERSION: ${{ inputs.kopia-version }}
+        run: ./scripts/install-kopia.ps1 "$env:KOPIA_VERSION"
+
+      # ⚠ 必须用块标量,理由见 Linux 臂同一步骤的注释。
+      - name: 四个真 kopia 仓库的端到端测试(本地仓库,固定版本)
+        run: |
+          cargo test --locked --bin kotori sync::engine::tests:: -- --ignored
+
+      - name: 真实双引擎 RPC 契约
+        shell: pwsh
+        run: |
+          choco install rclone --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw "rclone install failed" }
+          $env:KOTORI_REAL_RCLONE = (Get-Command rclone).Source
+          & $env:KOTORI_REAL_RCLONE version
+          cargo test --locked --test portable_ipc engines:: -- --ignored
+
+      - name: 收集失败现场(Windows)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-artifacts-windows-x64
+          path: ${{ github.workspace }}/test-artifacts
+          if-no-files-found: warn
