@@ -118,6 +118,8 @@ fn scan_is_read_only_and_repeated_add_preserves_game_settings() {
         before
     );
     assert!(run(&fixture, &["add", directory.to_str().unwrap()]).ok);
+    // add 直接更新磁盘配置；用公开 reload 命令让 daemon 重新读取。
+    assert!(run(&fixture, &["reload"]).ok);
     let response = fixture.rpc("game.list", json!({}));
     let games = response["result"]["games"].as_array().unwrap();
     assert_eq!(games.len(), 1, "{response}");
@@ -130,6 +132,7 @@ fn scan_is_read_only_and_repeated_add_preserves_game_settings() {
         true
     );
     assert!(run(&fixture, &["add", directory.to_str().unwrap()]).ok);
+    assert!(run(&fixture, &["reload"]).ok);
     let response = fixture.rpc("game.list", json!({}));
     let games = response["result"]["games"].as_array().unwrap();
     assert_eq!(games.len(), 1, "duplicate created: {response}");
