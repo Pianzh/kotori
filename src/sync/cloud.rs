@@ -295,4 +295,8 @@ pub fn parse_dirs(output: &str) -> Vec<String> {
 }
 
 #[cfg(test)]
+// ⚠ 这是**文件模块**(`index.rs` 这种),它的子模块默认要放在同名目录下
+// (`index/`);测试就住在同一个目录里,用 `#[path]` 指过去 —— 比为了一个
+// 测试文件专门建目录清楚。
+#[path = "cloud_tests.rs"]
 mod cloud_tests;
