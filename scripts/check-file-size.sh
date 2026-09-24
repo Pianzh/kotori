@@ -11,8 +11,12 @@
 # ⚠ `--update` 会拒绝"让基线变长"：新超标文件必须由人拆掉，不能靠更新基线洗白
 #   （确实要放行时用 `--force`，并且应该知道自己在干什么）。
 #
-# ⚠ **暂时不接 CI**（用户 2026-09-16 决定）：等基线清零、所有文件都拆完，再把
-#   `bash scripts/check-file-size.sh` 加进 `.github/workflows/ci.yml` 的 x86_64 job。
+# ✅ **已接 CI**（2026-09-25）：基线在同一天清零（最后一个 713 行的
+#   `scale/gamescope.rs` 拆成 490 + 248），用户 2026-09-16 那条决定的前置条件
+#   （"基线清零、所有文件都拆完"）因此满足，这一步进了
+#   `.github/workflows/verify.yml` 的 linux job（就是 x86_64 那一份，CI 与
+#   Release 共用）。从这以后**任何**新的超标文件都会让 CI 红 —— 那一天我自己
+#   就因为还没接这一步，一口气顶过四个文件（见 PLATFORMS.md）。
 #
 # 用法：
 #   bash scripts/check-file-size.sh            # 检查（有新超标就退出码 1）

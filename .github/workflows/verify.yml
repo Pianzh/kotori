@@ -63,6 +63,13 @@ jobs:
       - name: 格式
         run: cargo fmt --all --check
 
+      # 行数红线（AGENTS.md：单文件 500 行是硬线，600 是底线）。基线已经清零，
+      # 所以这一步现在的意思是"**任何**新的超标文件都会让 CI 红"。2026-09-25
+      # 之前它只在人手跑的时候才起作用 —— 那一夜就因为少了这一步，一口气顶过
+      # 四个文件（`index`/`cloud`/`kopia`/`update`）。
+      - name: 文件大小红线
+        run: bash scripts/check-file-size.sh
+
       - name: Clippy(零告警是硬规矩)
         run: cargo clippy --all-targets --locked -- -D warnings
 
