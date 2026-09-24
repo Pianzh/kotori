@@ -58,7 +58,7 @@ fn daemon_ipc_end_to_end() {
         response["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("session not found"),
+            .contains("找不到会话"),
         "{response}"
     );
 
