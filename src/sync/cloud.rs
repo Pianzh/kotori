@@ -55,8 +55,11 @@ pub const KIND_INDEX: &str = "index";
 /// 一条**只装着这个 json** 的快照。它回答的是本机档案回答不了的那个问题：**两台机器
 /// 上哪两条档案是同一款游戏**。
 ///
-/// **绝不放**绝对路径、密钥、存档内容：`locations` 是 `save_key` 的产物（`rel-savedata`
-/// 这种），指纹是 exe 的哈希，仅此而已。
+/// **这一层不放**绝对路径、密钥、存档内容：`locations` 是 `save_key` 的产物
+/// （`rel-savedata` 这种），指纹是 exe 的哈希。⚠ 唯一的例外在机器那一层
+/// （[`MachineIdentity::exe_paths`]）：那台机器**用过的 exe 路径**会上云 —— 用户
+/// 2026-09-23 点头，只作搜索参考、绝不参与判断。所以桶里可能出现用户名与盘符，
+/// 这条口径要与界面上的说法一致（BUG-29）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameIdentity {
     /// 格式版本（[`IDENTITY_FORMAT`]）。

@@ -113,8 +113,15 @@ pub(super) fn install_capture(window: &slint::Weak<AppWindow>) {
 /// does nothing there (by design — this module is debug-only, see the module
 /// header), because `install_capture` is only implemented under
 /// `#[cfg(debug_assertions)]`.
+///
+/// ⚠ 但**静默**是最坏的一种：设了变量却什么都不发生，外部无头验证会得出"UI 起来了
+/// 但没截图"这种错结论（BUG-4）。release 刻意不留这条后门，那就把话说明白。
 #[cfg(not(debug_assertions))]
-pub(super) fn install_capture(_window: &slint::Weak<AppWindow>) {}
+pub(super) fn install_capture(_window: &slint::Weak<AppWindow>) {
+    if target().is_some() {
+        eprintln!("KOTORI_UI_SNAPSHOT 只在 debug 构建里生效：这一版是 release，没有快照能力。");
+    }
+}
 
 #[cfg(debug_assertions)]
 fn write_ppm(
