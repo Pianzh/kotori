@@ -92,7 +92,9 @@ impl App {
                     // 添加页:挑中的那条成为这一款的云端身份(建完之后 `sync.pair`)。
                     CloudPickPurpose::Add => self.add_match.pick(row),
                     // 启动前那一问:挑中的就是"这一款在云端是谁",挑完接着启动。
-                    CloudPickPurpose::Launch => return self.sync_ask_paired(row),
+                    CloudPickPurpose::Launch => {
+                        return self.sync_ask_pair_with(row.cloud_id, row.cloud_key);
+                    }
                     // 单游戏页换绑:挑中的那条成为新的绑定,**不**启动游戏。
                     CloudPickPurpose::Rebind => {
                         return self.change_binding(Some((row.cloud_id, row.cloud_key)));

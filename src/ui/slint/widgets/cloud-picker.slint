@@ -106,6 +106,40 @@ export component CloudPickerDialog inherits Rectangle {
                 vertical-stretch: 1;
                 VerticalLayout {
                     spacing: 2px;
+                    // **置顶第一条**：新建一条云端身份（用户 2026-09-24："没有绑定不应该直接
+                    // 新建，应该是绑定，在绑定里置顶的第一条是新建"）。只有单游戏页那条路会
+                    // 给它 —— 添加页里"什么都不挑"本身就是新建。
+                    if CloudPickerState.can-create-identity : Rectangle {
+                        height: 46px;
+                        border-radius: 4px;
+                        background: create-ta.has-hover ? #ffffff0f : #00000000;
+                        animate background { duration: 90ms; }
+
+                        VerticalLayout {
+                            padding-left: 12px;
+                            padding-right: 12px;
+                            padding-top: 5px;
+                            padding-bottom: 5px;
+                            spacing: 1px;
+                            Text {
+                                text: "新建一条云端身份";
+                                font-size: 13px;
+                                color: Tokens.accent;
+                                overflow: elide;
+                            }
+                            Text {
+                                text: "这一款在云端还没有位置时选这个";
+                                font-size: 11px;
+                                color: Tokens.text-3;
+                                overflow: elide;
+                            }
+                        }
+
+                        create-ta := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { CloudPickerState.new-identity(); }
+                        }
+                    }
                     for row[index] in CloudPickerState.rows : Rectangle {
                         height: 46px;
                         border-radius: 4px;
@@ -142,17 +176,6 @@ export component CloudPickerDialog inherits Rectangle {
             }
 
             Divider { }
-            // 单游戏页的「更改绑定…」进到这里时，还有一条出路：**新建**一条云端身份
-            // （用户 2026-09-24："按更改绑定按钮之后可以新建身份"）。添加页没有这一项
-            // —— 那边"什么都不挑"就等于新建。
-            if CloudPickerState.can-create-identity : VerticalLayout {
-                spacing: 8px;
-                StdButton {
-                    label: "这一款要新建一条云端身份";
-                    button-width: parent.width;
-                    clicked => { CloudPickerState.new-identity(); }
-                }
-            }
             Text {
                 text: CloudPickerState.can-create-identity
                     ? "挑一条就会改成绑它，以后这一款往那条上传。不确定就别挑。"

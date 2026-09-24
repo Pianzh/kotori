@@ -67,13 +67,14 @@ pub enum Message {
     SyncAskAnswered(String),
     /// 「改配对…」：收起那一问、打开云端清单，从云端已有的一条里挑（见 `model::cloud_pick`）。
     SyncAskPairRequested,
+    /// 启动那一问里那颗「就绑这一条」：直接绑上弹窗里显示的那一条，然后启动。
+    SyncAskBindFound,
     /// 单游戏页那颗「参与云同步」开关（`sync_enabled`，用户 2026-09-24 要的界面入口）。
     SyncParticipatingToggled(bool),
     SyncParticipatingSaved(bool, Result<(), String>),
     /// 单游戏页「更改绑定…」：打开云端清单，挑中的那条成为新的绑定（不启动游戏）。
     SyncRebindRequested,
-    /// 单游戏页「新建云端身份…」：**先要一次确认**（用户 2026-09-24：确认之后才正式新建）。
-    SyncNewIdentityRequested,
+    /// 新建一条云端身份的最后一步确认（入口是绑定清单里置顶的那一条）。
     SyncNewIdentityConfirmed,
     SyncNewIdentityCancelled,
     /// 「更改绑定…」那个浮层底部那颗「新建一条云端身份」：收起浮层、进入确认。

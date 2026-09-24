@@ -148,18 +148,18 @@ impl Daemon {
             return Err("云同步还没配好目标（bucket）".to_string());
         };
         match choice {
-            // "没问题"：就在这个目标上确认下来，下次不再问。
-            "ok" => {
-                self.stamp_conclusion(game_id, Conclusion::confirmed(&signature))
-                    .await?;
-            }
-            // "改配对…"：用户挑了一条云端身份（浮层第一项"新建"就是不给 cloud_id）。
+            // ⚠ **没有"没问题"这一项**（用户 2026-09-24："不允许没问题出现，我们要么处理好
+            // 存档问题，要么就直接关掉存档，不允许模糊的存在"）。三条回答各自都有确定的结果：
+            // 绑上某一条 / 新建一条 / 关掉这一款的同步。
+            //
+            // "改配对…"：用户挑了一条云端身份（浮层里"新建"那一项就是不给 cloud_id）。
             "pair" => {
-                match (cloud_id, cloud_key) {
+                let stamped = match (cloud_id, cloud_key) {
                     (Some(cloud_id), Some(cloud_key)) => {
-                        self.remember_identity(game_id, cloud_id, cloud_key).await?
+                        self.remember_identity(game_id, cloud_id, cloud_key).await?;
+                        Conclusion::confirmed(&signature)
                     }
-                    // 新建：清掉本机身份，上传时新建一条。
+                    // 新建：清掉本机身份，上传时新建一条 —— 结论记成"以后新建一条"。
                     _ => {
                         let owner = game_id.to_string();
                         self.mutate_config(move |config| {
@@ -170,10 +170,10 @@ impl Daemon {
                             Ok(Value::Null)
                         })
                         .await?;
+                        Conclusion::fresh(&signature)
                     }
-                }
-                self.stamp_conclusion(game_id, Conclusion::confirmed(&signature))
-                    .await?;
+                };
+                self.stamp_conclusion(game_id, stamped).await?;
             }
             // "关掉这一款的同步"：只关这一款，而且**记住问过了** —— 他自己再打开时
             // 直接新建身份、不再问（见 `sync::selfcheck`）。

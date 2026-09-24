@@ -258,11 +258,6 @@ impl App {
                     Message::CloudPickLoaded,
                 )
             }
-            // 「新建云端身份…」：**先要一次确认**，确认才真的新建。
-            Message::SyncNewIdentityRequested => {
-                self.sync_new_pending = true;
-                Task::none()
-            }
             Message::SyncNewIdentityCancelled => {
                 self.sync_new_pending = false;
                 Task::none()

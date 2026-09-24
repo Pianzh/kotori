@@ -318,7 +318,6 @@ impl App {
             | Message::SyncParticipatingToggled(..)
             | Message::SyncParticipatingSaved(..)
             | Message::SyncRebindRequested
-            | Message::SyncNewIdentityRequested
             | Message::SyncNewIdentityConfirmed
             | Message::SyncNewIdentityCancelled
             | Message::SyncBindingChanged(..)
@@ -367,6 +366,8 @@ impl App {
             Message::SyncAskAnswered(choice) => self.sync_ask_answered(choice),
             // 「改配对…」：收起这一问、打开云端清单（挑完接着启动，见 `update/run.rs`）。
             Message::SyncAskPairRequested => self.sync_ask_pair_requested(),
+            // 「就绑这一条」：绑上弹窗里显示的那一条，然后启动。
+            Message::SyncAskBindFound => self.sync_ask_bind_found(),
             Message::StopCancelled => {
                 self.confirm_stop = false;
                 Task::none()

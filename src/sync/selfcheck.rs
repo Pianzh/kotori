@@ -64,13 +64,25 @@ pub fn needs_cloud(game: &GameConfig, signature: Option<&str>) -> bool {
     let (Some(signature), true) = (signature, game.sync_enabled) else {
         return false;
     };
-    let conclusion = game.cloud_conclusion.as_deref().and_then(Conclusion::parse);
-    if matches!(conclusion, Some(Conclusion::Confirmed(known)) if known == signature) {
+    if confirmed_on(game, signature) {
         return false;
     }
     game.exe_fingerprint
         .as_deref()
         .is_some_and(|f| !f.is_empty())
+}
+
+/// 这一款在当前目标上**真的**确认过没有？
+///
+/// ⚠ 除了签名要对得上，**还必须绑着一条身份**。用户 2026-09-24 报过"没有存档，云同步
+/// 点开，但是没有弹出未命中窗口" —— 那正是"结论说确认过、其实没绑"的那一款：没绑的确认
+/// 没有落到实处，点启动还是要自检一次（认得出就自动绑上，认不出就问）。
+fn confirmed_on(game: &GameConfig, signature: &str) -> bool {
+    game.cloud_id.is_some()
+        && matches!(
+            game.cloud_conclusion.as_deref().and_then(Conclusion::parse),
+            Some(Conclusion::Confirmed(known)) if known == signature
+        )
 }
 
 /// 自检。`lookup` 只在真的需要看云端时被调用一次。
@@ -85,8 +97,8 @@ where
     };
     let conclusion = game.cloud_conclusion.as_deref().and_then(Conclusion::parse);
 
-    // 2. 在当前目标上已经确认过：不重扫、不问。
-    if matches!(conclusion, Some(Conclusion::Confirmed(known)) if known == signature) {
+    // 2. 在当前目标上**真的**确认过（签名对得上，而且绑着一条身份）：不重扫、不问。
+    if confirmed_on(game, signature) {
         return Decision::Pull;
     }
 
@@ -122,10 +134,11 @@ where
 /// 2026-09-24："直接把找到像的和没找到像的打包成函数或者条件，分别显示疑似找到和完全
 /// 没找到两个 ui"。
 fn ask_or_fresh(conclusion: Option<&Conclusion>, found: Option<CloudPeek>) -> Decision {
-    if matches!(conclusion, Some(Conclusion::Declined(_))) {
-        return Decision::Fresh;
+    match conclusion {
+        // 问过一次、答案是"关掉这一款"或者"以后新建一条"：都不再问，直接新建身份。
+        Some(Conclusion::Declined(_)) | Some(Conclusion::New(_)) => Decision::Fresh,
+        _ => Decision::Ask { found },
     }
-    Decision::Ask { found }
 }
 
 #[cfg(test)]
@@ -165,15 +178,41 @@ mod tests {
         assert_eq!(decide(&game, None, || Found::None), Decision::Skip);
     }
 
+    /// ⚠ "确认过"必须**绑着一条身份**才算数（用户 2026-09-24 报的场景：结论说确认过、
+    /// 其实没绑 ⇒ 点启动什么都不问）。没绑的那种见下一条测试。
     #[test]
     fn a_confirmed_game_is_not_scanned_again() {
         let mut game = game();
+        game.cloud_id = Some("cloud-1".into());
         game.cloud_conclusion = Some(Conclusion::confirmed(SIG));
         game.exe_fingerprint = Some("v1:1:aa".into());
         // `lookup` 一被调用就炸：已确认那条路上一个字都不许读云端。
         assert_eq!(
             decide(&game, Some(SIG), || panic!("不该去看云端")),
             Decision::Pull
+        );
+    }
+
+    /// "确认过、但没绑"不算数：点启动还是要自检 —— 认得出就自动绑上，认不出就问。
+    #[test]
+    fn a_confirmation_without_an_identity_does_not_count() {
+        let mut game = game();
+        game.cloud_conclusion = Some(Conclusion::confirmed(SIG));
+        game.exe_fingerprint = Some("v1:1:aa".into());
+        assert!(
+            needs_cloud(&game, Some(SIG)),
+            "没绑的确认没有落到实处，该去看一眼"
+        );
+        assert_eq!(
+            decide(&game, Some(SIG), || hit("cloud-1", "demo")),
+            Decision::Adopt {
+                cloud_id: "cloud-1".into(),
+                cloud_key: "demo".into()
+            }
+        );
+        assert_eq!(
+            decide(&game, Some(SIG), || Found::None),
+            Decision::Ask { found: None }
         );
     }
 

@@ -25,10 +25,10 @@ export global GameSyncBoard {
     in-out property <bool> new-pending: false;
 
     callback toggled(bool);
-    /// 已绑时那颗「更改绑定…」：打开云端清单挑一条（选择器里也能改成新建）。
+    /// 「绑定云端存档…」/「更改绑定…」：打开云端清单挑一条 —— 清单里**置顶第一条**就是
+    /// 新建一条云端身份，挑它才会走到下面的确认。
     callback rebind-requested();
-    /// 还没绑时那颗「新建云端身份…」：先要一次确认。
-    callback new-identity-requested();
+    /// 新建那一步的确认（两段式：先点、再确认才真的新建）。
     callback new-identity-confirmed();
     callback new-identity-cancelled();
 }
@@ -115,15 +115,13 @@ export component GameSyncGroup inherits Rectangle {
                                     clicked => { GameSyncBoard.new-identity-cancelled(); }
                                 }
                             }
-                            if !GameSyncBoard.new-pending && GameSyncBoard.bound : StdButton {
-                                label: "更改绑定…";
-                                button-width: 104px;
-                                clicked => { GameSyncBoard.rebind-requested(); }
-                            }
-                            if !GameSyncBoard.new-pending && !GameSyncBoard.bound : StdButton {
-                                label: "新建云端身份…";
+                            // 绑定与换绑是同一件事：打开云端清单挑一条。**新建是那张清单里
+                            // 置顶的第一条**（用户 2026-09-24："没有绑定不应该直接新建，应该
+                            // 是绑定，在绑定里置顶的第一条是新建"）。
+                            if !GameSyncBoard.new-pending : StdButton {
+                                label: GameSyncBoard.bound ? "更改绑定…" : "绑定云端存档…";
                                 button-width: 128px;
-                                clicked => { GameSyncBoard.new-identity-requested(); }
+                                clicked => { GameSyncBoard.rebind-requested(); }
                             }
                         }
                     }

@@ -254,17 +254,23 @@ async fn the_pre_launch_self_check_asks_once_and_remembers_the_answer() {
         Decision::Ask { found: None }
     );
 
-    // "没问题"：就在这个目标上确认下来。
-    let value = call(&daemon, "sync.resolve", r#"{"id":"demo","choice":"ok"}"#).await;
+    // "自己挑一条绑上"：绑上云端那一条 ⇒ 结论是"已确认"，而且**真的绑着**。
+    let value = call(
+        &daemon,
+        "sync.resolve",
+        r#"{"id":"demo","choice":"pair","cloud_id":"cloud-1","cloud_key":"demo"}"#,
+    )
+    .await;
     assert_eq!(value["result"]["ok"], true, "{value}");
     {
         let config = daemon.config.read().await;
+        assert_eq!(config.games["demo"].cloud_id.as_deref(), Some("cloud-1"));
         assert_eq!(
             config.games["demo"].cloud_conclusion.as_deref(),
             Some(format!("ok:{signature}").as_str())
         );
     }
-    // 已确认 ⇒ 下次不问、也不重扫（`Pull` 那条路一个字节都不读云端）。
+    // 真的绑上了 ⇒ 下次不问、也不重扫（`Pull` 那条路一个字节都不读云端）。
     assert_eq!(daemon.sync_selfcheck("demo").await, Decision::Pull);
 
     // 换了目标（桶）：结论作废，回到"未定"。没有指纹时照样是"问一次"。

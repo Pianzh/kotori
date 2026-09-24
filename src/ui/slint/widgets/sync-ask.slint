@@ -24,9 +24,14 @@ export global SyncAskState {
     in-out property <string> cloud-name: "";
     in-out property <string> cloud-summary: "";
 
-    /// 用户的回答:`ok`(就这样) / `pair`(新建一条) / `off`(关掉这一款的同步)。
-    /// 三个回答之后都会**接着启动游戏**。
+    /// 用户的回答:`pair`(新建一条) / `off`(关掉这一款的同步)。两个回答之后都会接着启动。
+    ///
+    /// ⚠ **没有"没问题"这一项**（用户 2026-09-24："不允许没问题出现，我们要么处理好存档
+    /// 问题，要么就直接关掉存档，不允许模糊的存在"）。所以这里不是"确认现状"，而是几条
+    /// 确定的出路：绑上显示的那一条、自己挑一条、给这一款新建一条、或者关掉它。
     callback answered(string);
+    /// 就绑显示出来的那一条（只有"疑似找到"时才有这颗按钮）。
+    callback bind-found();
     /// 自己挑一条绑上:打开云端清单。
     callback pair-requested();
 }
@@ -106,10 +111,13 @@ export component SyncAskDialog inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            AccentButton {
-                label: "就按现在这样同步";
+            // "疑似找到"时第一颗是**确定**的动作：就绑这一条 —— 没有模糊的"没问题"
+            // （用户 2026-09-24："不允许没问题出现，我们要么处理好存档问题，要么就直接
+            // 关掉存档"）。
+            if SyncAskState.cloud-found : AccentButton {
+                label: "就绑这一条";
                 button-width: parent.width;
-                clicked => { SyncAskState.answered("ok"); }
+                clicked => { SyncAskState.bind-found(); }
             }
             StdButton {
                 label: "自己挑一条绑上…";

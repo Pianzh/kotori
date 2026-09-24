@@ -130,7 +130,6 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     let game_sync = window.global::<GameSyncBoard>();
     game_sync.on_toggled(|value| dispatch(Message::SyncParticipatingToggled(value)));
     game_sync.on_rebind_requested(|| dispatch(Message::SyncRebindRequested));
-    game_sync.on_new_identity_requested(|| dispatch(Message::SyncNewIdentityRequested));
     game_sync.on_new_identity_confirmed(|| dispatch(Message::SyncNewIdentityConfirmed));
     game_sync.on_new_identity_cancelled(|| dispatch(Message::SyncNewIdentityCancelled));
     window
@@ -221,6 +220,7 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     let ask = window.global::<SyncAskState>();
     ask.on_answered(|choice| dispatch(Message::SyncAskAnswered(choice.to_string())));
     ask.on_pair_requested(|| dispatch(Message::SyncAskPairRequested));
+    ask.on_bind_found(|| dispatch(Message::SyncAskBindFound));
     // 「云端存档」页：刷新读索引、深度扫描读所有卡、点开一款再问一次版本、搜索是本地过滤。
     let cloud = window.global::<CloudBoard>();
     cloud.on_refresh(|| dispatch(Message::CloudRefresh));

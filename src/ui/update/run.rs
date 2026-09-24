@@ -108,9 +108,16 @@ impl App {
         )
     }
 
-    /// 启动前那一问里挑了云端已有的一条（`sync.resolve {choice:"pair"}` 带上云端身份），
-    /// 然后**再起一次** —— 与 [`Self::sync_ask_answered`] 同一条路，只是多带两个参数。
-    pub(super) fn sync_ask_paired(&mut self, row: CloudGameRow) -> Task<Message> {
+    /// 启动那一问里挑定了云端的一条：交给 daemon（`sync.resolve { choice:"pair" }` 带上
+    /// 身份），然后**再起一次** —— 这一次自检就能定下来，于是才真的拉存档、起游戏。
+    ///
+    /// 两个入口共用：弹窗里那颗「就绑这一条」（绑显示出来的那一条），以及「自己挑一条
+    /// 绑上…」之后从云端清单里选中的那一条。
+    pub(super) fn sync_ask_pair_with(
+        &mut self,
+        cloud_id: String,
+        cloud_key: String,
+    ) -> Task<Message> {
         let Some(game_id) = self.sync_ask.take() else {
             return Task::none();
         };
@@ -124,8 +131,8 @@ impl App {
                 let mut params = serde_json::Map::new();
                 params.insert("id".into(), Value::String(game_id.clone()));
                 params.insert("choice".into(), Value::String("pair".to_string()));
-                params.insert("cloud_id".into(), Value::String(row.cloud_id));
-                params.insert("cloud_key".into(), Value::String(row.cloud_key));
+                params.insert("cloud_id".into(), Value::String(cloud_id));
+                params.insert("cloud_key".into(), Value::String(cloud_key));
                 crate::rpc::call(&socket, "sync.resolve", Some(params)).await?;
 
                 let mut params = serde_json::Map::new();
@@ -135,6 +142,14 @@ impl App {
             },
             Message::LaunchDone,
         )
+    }
+
+    /// 弹窗里那颗「就绑这一条」：绑上弹窗里显示的那一条（"疑似找到"时才有这颗按钮）。
+    pub(super) fn sync_ask_bind_found(&mut self) -> Task<Message> {
+        let Some(cloud) = self.sync_ask_cloud.clone() else {
+            return Task::none();
+        };
+        self.sync_ask_pair_with(cloud.cloud_id, cloud.cloud_key)
     }
 
     /// 启动前那一问被关掉（点空白 / 关闭）：等于「关掉这一款的同步」，然后**照常启动**。
