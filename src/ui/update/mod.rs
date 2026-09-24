@@ -143,9 +143,15 @@ impl App {
                 // 换款之前把上一款那笔编辑交出去：防抖窗口里挂着的那一次会被这一笔
                 // 取代（世代 +1），而 `begin_auto_save` 拿的是**当前**草稿 —— 也就是
                 // 上一款的。`self.draft` 下面就被换成新款了，不先发这一笔，上一款的
-                // 编辑就只留在内存里（BUG-18）。
-                let flush = self.begin_auto_save();
-                self.cancel_auto_save();
+                // 编辑就只留在内存里（BUG-18）。手里没有草稿时什么都别动：世代空转一次
+                // 会让"这一笔是第几代"这种断言失去参照。
+                let flush = if self.draft.is_some() {
+                    let task = self.begin_auto_save();
+                    self.cancel_auto_save();
+                    task
+                } else {
+                    Task::none()
+                };
                 let mut load_sync = false;
                 if let Some(g) = self.games.iter().find(|g| g.id == id) {
                     self.selected = Some(g.id.clone());
@@ -174,9 +180,15 @@ impl App {
             }
             Message::BackToList => {
                 // 离开这一页之前先把草稿交出去：`draft` 下面就被清掉了，不先发这一笔，
-                // 防抖窗口里那次编辑就只留在内存里（BUG-18 的另一半）。
-                let flush = self.begin_auto_save();
-                self.cancel_auto_save();
+                // 防抖窗口里那次编辑就只留在内存里（BUG-18 的另一半）。没有草稿时什么都
+                // 别动（理由同上：世代不要空转）。
+                let flush = if self.draft.is_some() {
+                    let task = self.begin_auto_save();
+                    self.cancel_auto_save();
+                    task
+                } else {
+                    Task::none()
+                };
                 self.selected = None;
                 self.draft = None;
                 self.saved_msg = None;

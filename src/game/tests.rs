@@ -142,7 +142,7 @@ fn directories_whose_ids_collide_are_all_added_not_swallowed() {
 }
 
 #[test]
-fn an_exe_already_used_by_another_entry_warns_but_stays_allowed() {
+fn an_exe_already_used_by_another_entry_is_reported_by_name() {
     let dir = TempDir::new("duplicate-exe");
     dir.with(&["game.exe"]);
     let exe = dir.path().join("game.exe");
@@ -156,9 +156,11 @@ fn an_exe_already_used_by_another_entry_warns_but_stays_allowed() {
     let awkward = dir.path().join("./game.exe");
     let warning = duplicate_exe_warning(&config, &awkward, None).expect("same exe must warn");
     assert!(warning.contains("原型"), "warning names the other entry");
+    // 文案要说清**现在的**规矩：一个 exe 只许有一条档案（BUG-31）。从前这里断言
+    // 的是"不许暗示拒绝"，那套结论在 `game.create` 硬拒之后就已经作废了。
     assert!(
-        warning.contains("允许"),
-        "the warning must not imply a refusal"
+        warning.contains("只许有一条档案"),
+        "文案要跟上现在的规矩: {warning}"
     );
 
     // The entry itself is not a duplicate of itself.
