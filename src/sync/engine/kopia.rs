@@ -33,6 +33,13 @@ use crate::config::SyncConfig;
 use crate::secrets::{Keyring, SecretKey};
 use crate::util::exec::Quiet;
 
+/// 「连仓库 / 建仓库」这一步在进程内**串行**：daemon 启动时的索引刷新与用户那次
+/// 上传会同时进来，两个 `kopia repository create` 撞在一起时后一个会失败
+/// （PLATFORMS 2026-09-24 记过这个现象：两个 create 进程重叠）。每次同步都会新建
+/// 一个引擎对象，所以这把锁必须是**跨实例**的进程级静态量。
+static REPOSITORY_INIT: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 use super::super::SyncError;
 use super::super::archive::{self, Manifest, PackReport};
 use super::super::cloud::{CloudGame, PackIdentity};
@@ -250,15 +257,16 @@ impl Kopia {
 
     /// 需要"已经连上仓库"的每一步都先过这里。
     pub(super) async fn ensure_connected(&self) -> Result<(), SyncError> {
-        let marker = self.target_marker();
-        let target = self.current_target();
-        let connected = self.config_path().exists()
-            && std::fs::read_to_string(&marker)
-                .map(|seen| seen.trim() == target)
-                .unwrap_or(false);
-        if connected {
+        if self.connected_to_current_target() {
             return Ok(());
         }
+        // 建仓库这一段串行（理由见 `REPOSITORY_INIT`）。
+        let _guard = REPOSITORY_INIT.lock().await;
+        // 拿到锁之后再确认一次：并发的另一条路可能刚把它建好。
+        if self.connected_to_current_target() {
+            return Ok(());
+        }
+        let target = self.current_target();
 
         // 本地目录仓库不需要 B2 凭据；B2 仓库要（而且那两个值只能进 argv，
         // 见 `kopia_args` 的说明）。
@@ -287,16 +295,30 @@ impl Kopia {
             }
             Err(error) => error,
         };
-        // 桶里还没有仓库：建一个。**建也失败就报"连"的那个错**——桶里没有仓库时
-        // create 才是对的，而它若还是失败（凭据错、桶不存在），create 的报错通常
-        // 是"already exists"之类的误导。
+        // 桶里还没有仓库：建一个。
+        //
+        // ⚠ 建也失败时**两个错都要说**：从前这里只回 connect 那句（"repository not
+        // initialized in the provided storage"），而那本来就是"还没有仓库"的正常
+        // 回答 —— 真正的原因（磁盘满、没权限、路径不可写）全被吞掉了，现场只剩一句
+        // 让人误以为"连不上"。2026-09-25 在 CI 上就是这么被噎住的。
         match self.run(&create, COMMAND_TIMEOUT).await {
             Ok(_) => {
                 self.remember_target(&target)?;
                 Ok(())
             }
-            Err(_) => Err(connect_error),
+            Err(create_error) => Err(SyncError::Command(format!(
+                "{connect_error}；建仓库也失败：{create_error}"
+            ))),
         }
+    }
+
+    /// 当前这份连接记录还作数吗（marker 对得上，且那份 `repository.config` 还在）。
+    fn connected_to_current_target(&self) -> bool {
+        let target = self.current_target();
+        self.config_path().exists()
+            && std::fs::read_to_string(self.target_marker())
+                .map(|seen| seen.trim() == target)
+                .unwrap_or(false)
     }
 
     fn remember_target(&self, target: &str) -> Result<(), SyncError> {
