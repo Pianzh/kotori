@@ -284,6 +284,25 @@ impl Daemon {
                 (Ok(local), Ok(cloud)) => respond(id, self.rpc_sync_reject(local, cloud).await),
                 (Err(e), _) | (_, Err(e)) => rpc_err(id, -32602, e),
             },
+            // 删云端某一版 / 这一款的所有存档 / 整条词条。三者都按**云端落点**收参数：
+            // 云端有、本机没有的游戏也要能清（与 `sync.cloud_versions` 同一把尺子）。
+            "sync.delete_version" => match (
+                param_str(&req.params, "key"),
+                param_str(&req.params, "version"),
+            ) {
+                (Ok(key), Ok(version)) => {
+                    respond(id, self.rpc_sync_delete_version(key, version).await)
+                }
+                (Err(e), _) | (_, Err(e)) => rpc_err(id, -32602, e),
+            },
+            "sync.delete_versions" => match param_str(&req.params, "key") {
+                Ok(key) => respond(id, self.rpc_sync_delete_versions(key).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
+            "sync.delete_identity" => match param_str(&req.params, "key") {
+                Ok(key) => respond(id, self.rpc_sync_delete_identity(key).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
             "sync.restore" => match param_str(&req.params, "id") {
                 Ok(game_id) => {
                     let version = req

@@ -65,6 +65,43 @@ fn round_trip(engine: &str) {
         2,
         "versions lost after restart: {response}"
     );
+    // ── 删一版：别的版本和**词条**都不动 ──────────────────────────────────
+    let response = fixture.rpc(
+        "sync.delete_version",
+        json!({"key":"contract", "version":first}),
+    );
+    assert_eq!(response["result"]["ok"], true, "{engine}: {response}");
+    assert_eq!(response["result"]["left"], 1, "{engine}: {response}");
+    let response = fixture.rpc("sync.versions", json!({"id":"contract"}));
+    assert_eq!(
+        response["result"]["versions"].as_array().unwrap().len(),
+        1,
+        "{engine}: {response}"
+    );
+
+    // ── 删词条：连存档一起，云端从此不认得这一款 ─────────────────────────
+    let response = fixture.rpc("sync.delete_identity", json!({"key":"contract"}));
+    assert_eq!(response["result"]["ok"], true, "{engine}: {response}");
+    assert_eq!(response["result"]["removed"], 1, "{engine}: {response}");
+    assert_eq!(
+        fixture.rpc("sync.cloud_games", json!({}))["result"]["games"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0,
+        "{engine}: 词条删掉之后云端不该还列得出这一款"
+    );
+    // 重启再看一次：不是"内存里没清干净"。
+    fixture.shutdown();
+    fixture.start();
+    assert_eq!(
+        fixture.rpc("sync.cloud_games", json!({}))["result"]["games"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0,
+        "{engine}: 重启之后云端仍然不该有它"
+    );
     fixture.shutdown();
 }
 

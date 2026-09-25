@@ -20,6 +20,7 @@ mod helpers;
 #[path = "../support/native.rs"]
 mod native;
 
+mod cloud_delete;
 mod daemon;
 mod library;
 mod pairing;

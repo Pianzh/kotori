@@ -346,10 +346,15 @@ impl Kopia {
         })
     }
 
-    async fn snapshots(&self, game_id: &str) -> Result<Vec<parse::Snapshot>, SyncError> {
+    /// 这一款的存档快照（**不含**身份快照：那族靠 `kind=identity` 标签认，见
+    /// `kopia_identity`）。`cloud_key` 在 kopia 那边就是 `game:` 标签的值。
+    pub(super) async fn snapshots(
+        &self,
+        cloud_key: &str,
+    ) -> Result<Vec<parse::Snapshot>, SyncError> {
         self.ensure_connected().await?;
         let listed = self
-            .run(&args::snapshot_list_args(game_id), COMMAND_TIMEOUT)
+            .run(&args::snapshot_list_args(cloud_key), COMMAND_TIMEOUT)
             .await?;
         parse::parse_snapshots(&listed).map_err(SyncError::Command)
     }
@@ -445,20 +450,6 @@ impl Kopia {
         .await?;
         archive::read_dir_manifest(into)
             .map_err(|e| SyncError::Command(format!("云端存档 {stamp} 读不出来: {e}")))
-    }
-
-    pub(super) async fn remove(&self, game_id: &str, stamp: &str) -> Result<(), SyncError> {
-        let snapshots = self.snapshots(game_id).await?;
-        let Some(snapshot) = snapshots
-            .iter()
-            .find(|snapshot| snapshot.description == stamp)
-        else {
-            // 已经不在了：保留窗口是 best-effort，不需要为此报错。
-            return Ok(());
-        };
-        self.run(&args::snapshot_delete_args(&snapshot.id), COMMAND_TIMEOUT)
-            .await
-            .map(|_| ())
     }
 }
 

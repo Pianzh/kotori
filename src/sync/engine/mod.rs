@@ -33,6 +33,7 @@ use super::save_targets::SaveTarget;
 mod diagnostics;
 mod kopia;
 mod kopia_args;
+mod kopia_delete;
 mod kopia_identity;
 mod kopia_index;
 mod kopia_index_args;
@@ -244,11 +245,39 @@ impl Backend {
         }
     }
 
-    /// 删掉某一版（保留窗口用）。
-    pub async fn remove(&self, game_id: &str, stamp: &str) -> Result<(), SyncError> {
+    /// 删掉某一版（原本只给"保留窗口"用，现在用户的显式删除也走它）。
+    ///
+    /// ⚠ 参数是**云端落点**（`cloud_key`）：rclone 那边它是目录名、kopia 那边是 `game:`
+    /// 标签值 —— 两个引擎都不收本机 id（云端有、本机没有的游戏也要能删它的版本）。
+    /// 这个参数早先叫 `game_id`，太容易让人把本机 id 递进来，改名了。
+    pub async fn remove(&self, cloud_key: &str, stamp: &str) -> Result<(), SyncError> {
         match &self.inner {
-            Inner::Rclone(engine) => engine.remove(game_id, stamp).await,
-            Inner::Kopia(engine) => engine.remove(game_id, stamp).await,
+            Inner::Rclone(engine) => engine.remove(cloud_key, stamp).await,
+            Inner::Kopia(engine) => engine.remove(cloud_key, stamp).await,
+        }
+    }
+
+    /// 删掉这一款在云端的**所有**存档（身份卡留着）。返回删了几版。
+    ///
+    /// 逐个删、不引入批量命令：两个引擎共用一套上层逻辑，测试夹具也不用加新动词
+    /// （rclone 的 `purge`、kopia 的批量删都不碰）。中途失败就停在那里 —— 已经删掉的
+    /// 不回来，调用方照实说自己走到哪一步。
+    pub async fn remove_all(&self, cloud_key: &str) -> Result<usize, SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.remove_all(cloud_key).await,
+            Inner::Kopia(engine) => engine.remove_all(cloud_key).await,
+        }
+    }
+
+    /// 删掉这一款的**身份卡**（用户嘴里的"词条"）。
+    ///
+    /// ⚠ 两个引擎要的不是同一个东西：rclone 的卡是桶里一个 json，认**目录名**
+    /// （`cloud_key`）；kopia 的卡是一条快照，认 `game:` 标签值（`cloud_id`）。
+    /// 所以两个都收，各取所需。
+    pub async fn remove_identity(&self, cloud_key: &str, cloud_id: &str) -> Result<(), SyncError> {
+        match &self.inner {
+            Inner::Rclone(engine) => engine.remove_identity(cloud_key).await,
+            Inner::Kopia(engine) => engine.remove_identity(cloud_id).await,
         }
     }
 }

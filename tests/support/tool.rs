@@ -111,6 +111,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         ["deletefile", path] => {
             fs::remove_file(resolve(path)?)?;
         }
+        // 真 rclone 的 `rmdir` 只删**空**目录，非空时报错 —— 那正说明不该删
+        // （云存档那里删掉词条之后收空壳目录就靠它）。
+        ["rmdir", path] => {
+            fs::remove_dir(resolve(path)?)?;
+        }
         [
             command @ ("lsf" | "lsjson"),
             mode @ ("--files-only" | "--dirs-only"),

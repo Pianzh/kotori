@@ -226,10 +226,40 @@ impl RcloneZip {
             .map_err(|e| SyncError::Command(format!("云端存档 {stamp} 读不出来: {e}")))
     }
 
-    pub(super) async fn remove(&self, game_id: &str, stamp: &str) -> Result<(), SyncError> {
-        let remote = package_remote(&self.settings, game_id, stamp);
+    pub(super) async fn remove(&self, cloud_key: &str, stamp: &str) -> Result<(), SyncError> {
+        let remote = package_remote(&self.settings, cloud_key, stamp);
         let args = deletefile_args(&remote);
         self.run(&args, COMMAND_TIMEOUT).await.map(|_| ())
+    }
+
+    /// 删掉这一款在云端的**所有**包（身份卡留着）。
+    ///
+    /// 一次列出、逐个删：`versions()` 只认包名，所以卡不会被误当成一版（§5.8）。
+    pub(super) async fn remove_all(&self, cloud_key: &str) -> Result<usize, SyncError> {
+        let mut removed = 0;
+        for stamp in self.versions(cloud_key).await? {
+            self.remove(cloud_key, &stamp).await?;
+            removed += 1;
+        }
+        Ok(removed)
+    }
+
+    /// 删掉这一款的**身份卡**（"词条"）。
+    ///
+    /// `cloud_key` 就是卡所在的那个目录：认领之后落点是唯一的（见 `identity_dir`）。
+    /// 卡不在也算成功 —— 用户要的是"云端不再有这个词条"，本来就没了正是他要的。
+    pub(super) async fn remove_identity(&self, cloud_key: &str) -> Result<(), SyncError> {
+        let dir = game_remote(&self.settings, cloud_key);
+        let remote = format!("{dir}/{}", cloud::IDENTITY_FILE);
+        self.run(&deletefile_args(&remote), COMMAND_TIMEOUT)
+            .await
+            .map(|_| ())?;
+        // 卡和包都没了之后，那个目录就是个空壳。留着它，`cloud_games`（实时列目录那条路）
+        // 会把它当成"一款 0 版的游戏"报上去 —— 而用户要的是"这一款从云端彻底消失"。
+        //
+        // 删空目录是 best-effort：里头还有别的东西时 `rmdir` 会失败，那正说明**不该删**。
+        let _ = self.run(&["rmdir".to_string(), dir], COMMAND_TIMEOUT).await;
+        Ok(())
     }
 
     // ── 身份卡 ──────────────────────────────────────────────────────────────

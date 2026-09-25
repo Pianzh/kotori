@@ -213,6 +213,9 @@ impl Runner {
                     // 落点以这一次为准：认领之后它才是"该往哪儿放"。
                     existing.cloud_key = change.cloud_key.clone();
                     existing.set_summary(change.versions, change.latest.clone(), change.size);
+                    // "词条被删过"这件事也要跟着走：重新上传时传进来的 `change` 是
+                    // `gone: false`，正好把它清掉（见 `IndexGame::gone`）。
+                    existing.gone = change.gone;
                     touched.push(existing.clone());
                 }
                 None => {
@@ -282,12 +285,21 @@ impl Runner {
         self.backend.fetch(cloud_key, stamp, into, timeout).await
     }
 
-    /// Delete one version package.
-    pub(super) async fn remove_version(
-        &self,
-        cloud_key: &str,
-        stamp: &str,
-    ) -> Result<(), SyncError> {
+    /// 删掉某一版。
+    ///
+    /// ⚠ 收的是**云端落点**：云端有、本机没有的游戏也要能删它的版本，所以这条路不收
+    /// 本机 id（与 `sync.delete_version` 的约定一致）。
+    pub async fn remove_version(&self, cloud_key: &str, stamp: &str) -> Result<(), SyncError> {
         self.backend.remove(cloud_key, stamp).await
+    }
+
+    /// 删掉这一款在云端的**所有**存档（身份卡留着）。返回删了几版。
+    pub async fn remove_all_versions(&self, cloud_key: &str) -> Result<usize, SyncError> {
+        self.backend.remove_all(cloud_key).await
+    }
+
+    /// 删掉这一款的**身份卡**（"词条"）。两个引擎各取自己要的那个参数。
+    pub async fn remove_identity(&self, cloud_key: &str, cloud_id: &str) -> Result<(), SyncError> {
+        self.backend.remove_identity(cloud_key, cloud_id).await
     }
 }

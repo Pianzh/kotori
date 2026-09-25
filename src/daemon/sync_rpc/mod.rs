@@ -457,6 +457,7 @@ fn clean_prefix(value: &str) -> Result<String, String> {
 
 mod actions;
 mod credentials;
+mod delete;
 mod identity;
 mod index;
 mod matching;

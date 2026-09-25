@@ -53,6 +53,13 @@ pub struct IndexGame {
     /// 最近一版多大（字节；不知道就是 0）。
     #[serde(default)]
     pub size: u64,
+    /// 这一款在云端的**词条已经被删掉**（用户按的 `sync.delete_identity`）。
+    ///
+    /// ⚠ 它和 `versions == 0` 是两件事：版数为 0 是"这一款还在云端、只是没有存档"，
+    /// 而这个说的是"云端已经不认识它了"。列表那边靠它把整条跳过 —— 索引只会增/改、
+    /// 不会减，没有这个标志就删不掉一条。重新上传会清掉它（见 `Backend::update_index`）。
+    #[serde(default)]
+    pub gone: bool,
     /// 这一条最后一次被写是什么时候 —— 合并时**比它**（RFC3339，UTC，等宽，字典序即时间序）。
     pub updated: String,
 }
@@ -66,6 +73,7 @@ impl IndexGame {
             versions: 0,
             latest: None,
             size: 0,
+            gone: false,
             updated: now(),
         }
     }

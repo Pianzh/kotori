@@ -163,6 +163,66 @@ impl Daemon {
         }
     }
 
+    /// 云端那一款的版本**变了**（删了一版 / 清空了 / 整条词条被删）：把索引改对。
+    ///
+    /// 与 [`Self::refresh_index_for`] 的区别：那条路要**本机 id**，它从头造一条 entry
+    /// （得读配置里的 `cloud_id` / `name`）。而删除是按**云端落点**做的 —— 云端有、本机
+    /// 没有的游戏也要能删，那种款配置里压根没有对应条目，但索引里本来就有它，所以直接
+    /// 改那一行。`gone = true` 是"词条已经没了"，那一整条要从列表里消失。
+    ///
+    /// 索引里没有它（还没建过索引）就什么都不做：深扫时自然会看到现在的样子。
+    pub(super) async fn note_versions(
+        &self,
+        runner: &Runner,
+        cloud_key: &str,
+        versions: usize,
+        latest: Option<String>,
+        size: u64,
+        gone: bool,
+    ) {
+        let index = match runner.read_index().await {
+            Ok(Some(index)) => index,
+            Ok(None) => return,
+            Err(error) => {
+                tracing::warn!("{cloud_key}: 索引没读上: {error}");
+                return;
+            }
+        };
+        let Some(existing) = index.games.iter().find(|game| game.cloud_key == cloud_key) else {
+            return;
+        };
+        let mut entry = existing.clone();
+        entry.set_summary(versions, latest, size);
+        entry.gone = gone;
+        let machine_id = match self.machine_id().await {
+            Ok(id) => id,
+            Err(error) => {
+                tracing::warn!("{cloud_key}: 索引没记上（拿不到机器 id）: {error}");
+                return;
+            }
+        };
+        match runner.update_index(&machine_id, vec![entry]).await {
+            // ⚠ 桶里那份索引写好了还不够：本机这份**缓存**才是「云端存档」页真正读的东西
+            //（一小时内不联网，见 `cloud_index_view`）。不顺手换掉它，删完退回列表看到的
+            // 还是旧版数，得等缓存过期才变 —— 用户会以为根本没删掉。
+            Ok(index) => self.remember_index_for_current_target(&index).await,
+            Err(error) => tracing::warn!("{cloud_key}: 索引没记上: {error}"),
+        }
+    }
+
+    /// 索引里这一款的身份 id（按**云端落点**查）。
+    ///
+    /// 删词条要用它：kopia 那边删卡认的是 `cloud_id`，而调用方手上只有落点。
+    /// 索引里没有就是没有 —— 那种情况该先去刷新一次云端清单。
+    pub(super) async fn cloud_id_of_key(&self, runner: &Runner, cloud_key: &str) -> Option<String> {
+        let index = runner.read_index().await.ok()??;
+        index
+            .games
+            .iter()
+            .find(|game| game.cloud_key == cloud_key && !game.gone)
+            .map(|game| game.identity.cloud_id.clone())
+    }
+
     /// 联网读一次索引、只更新缓存。**不扫身份卡、不碰配对表**。
     ///
     /// 三个调用点：上面那条读路径（本地还没有缓存）、每小时的循环、改完同步设置之后
@@ -350,6 +410,9 @@ impl Daemon {
             .unwrap_or_else(CloudIndex::new)
             .games
             .iter()
+            // 词条被删掉的整条跳过（见 `IndexGame::gone`）：不跳的话，删完那一款会以
+            // "还没有存档"的空壳留在列表里，看着像没删干净。
+            .filter(|game| !game.gone)
             .map(|game| {
                 let cloud_id = game.identity.cloud_id.clone();
                 // 本机明确否过这一条（配对表那笔账）：界面上要能说"你之前说了不是它"。
