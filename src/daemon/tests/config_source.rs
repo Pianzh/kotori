@@ -175,13 +175,10 @@ async fn a_failed_credential_move_leaves_the_config_source_unchanged() {
     store
         .set(crate::secrets::SecretKey::B2KeyId, "key-id")
         .unwrap();
-    let daemon = Daemon::with_keyring_at(
-        Config::default(),
-        store,
-        default_dir.join("secrets.json"),
-    )
-    .with_config_path(default.clone())
-    .with_config_sources(Some(portable.clone()), default.clone());
+    let daemon =
+        Daemon::with_keyring_at(Config::default(), store, default_dir.join("secrets.json"))
+            .with_config_path(default.clone())
+            .with_config_sources(Some(portable.clone()), default.clone());
     let before = std::fs::read_to_string(&default).unwrap();
 
     let reply = daemon
@@ -197,7 +194,7 @@ async fn a_failed_credential_move_leaves_the_config_source_unchanged() {
             .contains("切换配置来源失败"),
         "{value}"
     );
-    assert_eq!(daemon.config_path.read().await, default);
+    assert_eq!(*daemon.config_path.read().await, default);
     assert_eq!(std::fs::read_to_string(&default).unwrap(), before);
     assert!(!portable.exists());
     assert!(daemon.sync.secrets_path().starts_with(&default_dir));

@@ -386,10 +386,7 @@ async fn resolve_rejects_an_unknown_choice_without_mutating_the_binding() {
     );
 
     let after = crate::config::load_from(&path).unwrap();
-    assert_eq!(
-        after.games["demo"].cloud_id,
-        before.games["demo"].cloud_id
-    );
+    assert_eq!(after.games["demo"].cloud_id, before.games["demo"].cloud_id);
     assert_eq!(
         after.games["demo"].cloud_dir,
         before.games["demo"].cloud_dir

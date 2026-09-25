@@ -336,13 +336,9 @@ fn changing_the_sync_target_refreshes_but_retention_does_not() {
     assert_eq!(first["result"]["from_cache"], false, "{first}");
     let before = rclone_calls(&machine).len();
 
-    let retention = machine.rpc(
-        "sync.set_settings",
-        json!({ "keep_versions": 7 }),
-    );
+    let retention = machine.rpc("sync.set_settings", json!({ "keep_versions": 7 }));
     assert_eq!(
-        retention["result"]["settings"]["keep_versions"],
-        7,
+        retention["result"]["settings"]["keep_versions"], 7,
         "{retention}"
     );
     std::thread::sleep(Duration::from_millis(500));
@@ -353,10 +349,7 @@ fn changing_the_sync_target_refreshes_but_retention_does_not() {
         rclone_calls(&machine)
     );
 
-    let target = machine.rpc(
-        "sync.set_settings",
-        json!({ "bucket": "another-bucket" }),
-    );
+    let target = machine.rpc("sync.set_settings", json!({ "bucket": "another-bucket" }));
     assert_eq!(
         target["result"]["settings"]["bucket"], "another-bucket",
         "{target}"
