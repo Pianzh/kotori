@@ -95,6 +95,13 @@ impl Daemon {
             }));
         }
 
+        // 凭据先搬,再切配置。顺序是有理由的:搬凭据更容易失败(磁盘、权限),
+        // 而它失败时**配置还没动** —— 宁可什么都不切,也不要留下"配置去了便携
+        // 目录、凭据还在老地方"这种半截状态,那正是 BUG-27 的样子。
+        self.sync
+            .relocate_credentials(&target, portable)
+            .map_err(|e| format!("切换配置来源失败: {e}"))?;
+
         let config = self.config.read().await.clone();
         // 离开便携地点时,那份旧文件必须让路(改名,不删)。
         let disable_current = !portable;

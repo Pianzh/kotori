@@ -156,6 +156,36 @@ impl Keyring {
         Self::open_default_with(Self::system(), encrypted_path, plain_path)
     }
 
+    /// 按**地点**挑存储。
+    ///
+    /// 便携目录只有一个选择:文件。密钥环是**这台机器**的、带不走 —— 而便携的
+    /// 全部意义就是"整个目录拷走就能用"(用户 2026-09-25 定的目标,BUG-27)。
+    /// 别的地点还是 [`Self::open_default`] 那套顺序(加密文件 → 密钥环 → 明文)。
+    pub fn open_at(encrypted_path: &Path, plain_path: &Path, portable: bool) -> Self {
+        if portable {
+            Self::open_portable(encrypted_path, plain_path)
+        } else {
+            Self::open_default(encrypted_path, plain_path)
+        }
+    }
+
+    /// 便携落点:**只看文件**,绝不碰系统密钥环。
+    ///
+    /// 顺序仍是"主密码文件优先,否则明文 0600"。这里**不**做
+    /// [`adopt_plain_entries`] 那件事(把明文搬进密钥环)—— 那恰好是把凭据搬出
+    /// 便携目录,用户拷走整个目录之后打开会说"凭据怎么没了"。
+    pub fn open_portable(encrypted_path: &Path, plain_path: &Path) -> Self {
+        let encrypted = EncryptedFile::new(encrypted_path);
+        if encrypted.exists() {
+            return Self::from_encrypted(encrypted);
+        }
+        tracing::info!(
+            "便携配置：凭据存到 {}（权限 0600，不碰系统密钥环）",
+            plain_path.display()
+        );
+        Self::plain_file(plain_path)
+    }
+
     /// [`open_default`] with the keyring probe passed in.
     ///
     /// Split out so the *policy* — which store wins — can be tested without the
@@ -192,6 +222,83 @@ impl Keyring {
             Backend::EncryptedFile(file) => Some(file),
             _ => None,
         }
+    }
+
+    /// 把凭据搬到新的配置目录旁边 —— 「切到便携 / 切到默认」要连凭据一起搬
+    /// (BUG-27:配置去了新目录、凭据还留在旧目录,状态页显示的路径跟当前配置
+    /// 对不上,便携那份也就带不走)。
+    ///
+    /// 先把当前这一份**落到目标地点的一个文件**里,再按目标是不是便携决定用哪
+    /// 一级打开。三种来源各有各的走法:
+    ///
+    /// * **主密码文件** —— 复制文件,内存里那把解开的钥匙跟着过去,用户不必重输
+    ///   密码(见 [`EncryptedFile::relocate`]);
+    /// * **明文文件** —— 复制,权限 0600 一起带过去;
+    /// * **系统密钥环** —— **目标是便携时**导出成明文文件:密钥环跟机器走、不跟
+    ///   目录走,带不走。目标不是便携时什么都不用做,它照样管用(见
+    ///   [`adopt_plain_entries`] 与 [`Self::open_at`])。
+    ///
+    /// 旧地点那一份**不动**:用户切回去还要用,而"删掉别人的凭据"不该是一次
+    /// 目录切换的副作用。
+    pub fn relocate(
+        &self,
+        target_secrets: &Path,
+        target_plain: &Path,
+        portable: bool,
+    ) -> Result<Self, SecretError> {
+        match &self.backend {
+            Backend::EncryptedFile(file) => {
+                if file.exists() {
+                    file.relocate(target_secrets)?;
+                }
+            }
+            Backend::PlainFile(file) => {
+                // 还没存过凭据(文件不存在)就没什么可搬的:目标地点第一次存凭据时
+                // 自己会建。这里报错会把一次正常的目录切换变成失败。
+                if file.exists() {
+                    if let Some(dir) = target_plain.parent() {
+                        std::fs::create_dir_all(dir).map_err(|e| {
+                            SecretError::Io(format!("创建 {} 失败: {e}", dir.display()))
+                        })?;
+                    }
+                    std::fs::copy(file.path(), target_plain).map_err(|e| {
+                        SecretError::Io(format!(
+                            "把凭据复制到 {} 失败: {e}",
+                            target_plain.display()
+                        ))
+                    })?;
+                }
+            }
+            Backend::Tool(_) => {
+                // 密钥环跟机器走、不跟目录走:目标还是普通配置目录时它照样管用,
+                // 不必把凭据抄出来一趟 —— 抄出来还会让明文在磁盘上存在一瞬间。
+                if portable {
+                    let entries = self.all_entries()?;
+                    if !entries.is_empty() {
+                        PlainFile::new(target_plain).store(&entries)?;
+                    }
+                }
+            }
+            Backend::Memory(_) => {
+                let entries = self.all_entries()?;
+                if !entries.is_empty() {
+                    PlainFile::new(target_plain).store(&entries)?;
+                }
+            }
+        }
+        Ok(Self::open_at(target_secrets, target_plain, portable))
+    }
+
+    /// 现在存着的每一条。缺的那些不算 —— 凭据本来就是一条条独立设的,没配过的
+    /// 那条不该在搬家时变成一条空记录。
+    fn all_entries(&self) -> Result<Vec<(SecretKey, String)>, SecretError> {
+        let mut entries = Vec::new();
+        for key in SecretKey::ALL {
+            if let Some(value) = self.get(key)? {
+                entries.push((key, value));
+            }
+        }
+        Ok(entries)
     }
 
     /// Which store is in use, for the settings page.

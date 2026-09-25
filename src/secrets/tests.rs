@@ -311,6 +311,47 @@ fn an_encrypted_file_wins_over_a_running_keyring() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// 便携配置**绝不碰系统密钥环**:密钥环是这台机器的、带不走,而便携的全部意义
+/// 就是"整个目录拷走就能用"。同一台机器上,非便携时密钥环会赢;便携时必须落到
+/// 文件 —— 否则用户拷走目录、换台机器打开,凭据就"没了"(BUG-27)。
+/// (Unix 限定:借假密钥环当"在跑的那一级"用。)
+#[cfg(unix)]
+#[test]
+fn a_portable_config_never_reaches_for_the_system_keyring() {
+    let fake = FakeTool::new("portable-files-only");
+    let dir = std::env::temp_dir().join(format!(
+        "kotori-portable-{}-{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let encrypted = dir.join("secrets.json");
+    let plain = dir.join("credentials.json");
+
+    // 对照:同一台机器上,非便携时密钥环会赢。
+    let normal = Keyring::open_default_with(Ok(fake.keyring()), &encrypted, &plain);
+    assert!(
+        matches!(normal.kind(), StoreKind::System { .. }),
+        "{:?}",
+        normal.kind()
+    );
+
+    // 便携:必须落到便携目录里的文件上。
+    let portable = Keyring::open_portable(&encrypted, &plain);
+    assert!(
+        matches!(portable.kind(), StoreKind::PlainFile { .. }),
+        "{:?}",
+        portable.kind()
+    );
+    portable.set(SecretKey::B2KeyId, "portable-key").unwrap();
+    assert!(plain.is_file(), "凭据该落在便携目录里");
+    assert_eq!(
+        PlainFile::new(&plain).load().unwrap(),
+        vec![(SecretKey::B2KeyId, "portable-key".to_string())]
+    );
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 #[test]
 fn a_machine_without_a_keyring_keeps_secrets_in_memory_only() {
     let keyring = Keyring::memory();

@@ -103,6 +103,27 @@ impl EncryptedFile {
         self.path.is_file()
     }
 
+    /// 带着**已经解开的那把钥匙**把文件复制到新路径。
+    ///
+    /// 切换配置来源时凭据要跟着走(BUG-27),而 [`Self::create`] 要的是主密码 ——
+    /// 那正是这个格式**故意不留**的东西(见文件头的规则)。文件原样复制:salt、
+    /// KDF 参数、钥匙都不变,用户什么都不用重输。旧文件不动(切回去还要用它)。
+    pub fn relocate(&self, new_path: impl Into<PathBuf>) -> Result<Self, SecretError> {
+        let target = new_path.into();
+        if let Some(dir) = target.parent() {
+            std::fs::create_dir_all(dir)
+                .map_err(|e| SecretError::Io(format!("创建 {} 失败: {e}", dir.display())))?;
+        }
+        let bytes = std::fs::read(&self.path)
+            .map_err(|e| SecretError::Io(format!("读取 {} 失败: {e}", self.path.display())))?;
+        write_private(&target, &bytes)?;
+        // 共享解锁状态:目标那一份就是同一把钥匙封出来的,没理由让用户再解一次。
+        Ok(Self {
+            path: target,
+            key: self.key.clone(),
+        })
+    }
+
     pub fn is_unlocked(&self) -> bool {
         self.key.lock().map(|key| key.is_some()).unwrap_or(false)
     }

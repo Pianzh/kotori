@@ -42,21 +42,29 @@ fn plain_sibling(secrets_path: &std::path::Path) -> std::path::PathBuf {
 /// Keyring handle plus the last result per game, for the settings page.
 pub(super) struct SyncState {
     keyring: Mutex<Keyring>,
-    /// Where the master-password file lives. Held here (instead of being
-    /// re-resolved) so a test can point it at a throw-away directory.
-    secrets_path: std::path::PathBuf,
-    /// Where the **plaintext** credential file lives (the default store).
-    plain_path: std::path::PathBuf,
+    /// 凭据落点。**会变**:设置页那只「切到便携 / 切到默认」一按下去,配置去了
+    /// 新目录,凭据也得跟过去(见 [`Self::relocate_credentials`],BUG-27)。
+    paths: Mutex<CredentialPaths>,
     records: Mutex<HashMap<String, SyncRecord>>,
+}
+
+/// 两个凭据文件的位置:主密码加密的那份,与默认的明文那份。它们永远是同一目录
+/// 的邻居(见 `config::secrets_path` / `config::plain_secrets_path`)。
+struct CredentialPaths {
+    secrets: std::path::PathBuf,
+    plain: std::path::PathBuf,
 }
 
 impl SyncState {
     /// The best store this machine can offer (明文文件 → 密钥环 → 主密码文件,见
     /// `Keyring::open_default` 的顺序说明)。
+    ///
+    /// **便携配置是例外**:那时候只看文件、不碰系统密钥环 —— 密钥环里的东西带
+    /// 不走(见 [`Keyring::open_portable`],BUG-27)。
     pub(super) fn system() -> Self {
         let path = crate::config::secrets_path();
         let plain = crate::config::plain_secrets_path();
-        let keyring = Keyring::open_default(&path, &plain);
+        let keyring = Keyring::open_at(&path, &plain, crate::config::is_portable_config());
         Self::new(keyring, path, plain)
     }
 
@@ -67,19 +75,71 @@ impl SyncState {
     ) -> Self {
         Self {
             keyring: Mutex::new(keyring),
-            secrets_path,
-            plain_path,
+            paths: Mutex::new(CredentialPaths {
+                secrets: secrets_path,
+                plain: plain_path,
+            }),
             records: Mutex::new(HashMap::new()),
         }
     }
 
-    pub(super) fn secrets_path(&self) -> &std::path::Path {
-        &self.secrets_path
+    pub(super) fn secrets_path(&self) -> std::path::PathBuf {
+        self.paths
+            .lock()
+            .map(|paths| paths.secrets.clone())
+            .unwrap_or_else(|_| crate::config::secrets_path())
     }
 
     /// 明文凭据文件的路径(默认落点)。
-    pub(super) fn plain_path(&self) -> &std::path::Path {
-        &self.plain_path
+    pub(super) fn plain_path(&self) -> std::path::PathBuf {
+        self.paths
+            .lock()
+            .map(|paths| paths.plain.clone())
+            .unwrap_or_else(|_| crate::config::plain_secrets_path())
+    }
+
+    /// 配置换了目录,凭据跟着走(BUG-27)。
+    ///
+    /// `target` 是**新配置文件的路径** —— 凭据落在它旁边,与
+    /// `config::secrets_path()` 的定义一致("凭据是配置形状的,一台机器一份")。
+    /// `KOTORI_SECRETS_FILE` 钉死时什么也不做:那种情况下下次启动还是它赢。
+    ///
+    /// 失败时**不改**记下来的路径,调用方(切来源那条 RPC)因此会在切配置**之前**
+    /// 报错 —— 宁可什么都不切,也不要留下"配置去了便携目录、凭据还在老地方"这种
+    /// 半截状态,那正是这条 bug 的样子。
+    pub(super) fn relocate_credentials(
+        &self,
+        target: &std::path::Path,
+        portable: bool,
+    ) -> Result<(), String> {
+        if crate::config::secrets_path_is_pinned() {
+            return Ok(());
+        }
+        let dir = target.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let secrets = dir.join("secrets.json");
+        let plain = dir.join("credentials.json");
+        {
+            let paths = self
+                .paths
+                .lock()
+                .map_err(|_| "凭据路径记录坏了".to_string())?;
+            if paths.secrets == secrets && paths.plain == plain {
+                return Ok(());
+            }
+        }
+        let moved = self
+            .keyring()
+            .relocate(&secrets, &plain, portable)
+            .map_err(|e| format!("把凭据搬到 {} 失败: {e}", dir.display()))?;
+        self.adopt(moved);
+        let mut paths = self
+            .paths
+            .lock()
+            .map_err(|_| "凭据路径记录坏了".to_string())?;
+        paths.secrets = secrets;
+        paths.plain = plain;
+        tracing::info!("凭据已跟随配置搬到 {}", dir.display());
+        Ok(())
     }
 
     /// Use one specific store, and never second-guess it (tests do this).

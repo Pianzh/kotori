@@ -12,9 +12,10 @@ pub use lock::ConfigLock;
 // through `config::profile` / `config::paths` — a re-export nobody uses is a
 // warning, and a re-export list that lies about the surface is worse.
 pub use paths::{
-    config_path, config_path_is_pinned, data_dir, default_config_path, default_socket_path, load,
-    load_at, log_dir, plain_secrets_path, portable_config_path, relocate_config, resolve_socket,
-    save, save_to, secrets_path, socket_path,
+    config_path, config_path_is_pinned, data_dir, default_config_path, default_socket_path,
+    is_portable_config, load, load_at, log_dir, plain_secrets_path, portable_config_path,
+    relocate_config, resolve_socket, save, save_to, secrets_path, secrets_path_is_pinned,
+    socket_path,
 };
 #[cfg(test)]
 pub(crate) use paths::{load_from, test_scratch};

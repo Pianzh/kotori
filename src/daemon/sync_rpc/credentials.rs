@@ -33,7 +33,7 @@ impl Daemon {
         &self,
         password: Password,
     ) -> Result<Value, String> {
-        let path = self.sync.secrets_path().to_path_buf();
+        let path = self.sync.secrets_path();
         let existing = EncryptedFile::new(&path);
         if existing.exists() && !password.force {
             return Err(
@@ -74,14 +74,17 @@ impl Daemon {
     /// The credentials in it go with it; on a machine with no keyring that
     /// means they are gone. The UI asks twice.
     pub(in crate::daemon) fn rpc_sync_clear_master_password(&self) -> Result<Value, String> {
-        let path = self.sync.secrets_path().to_path_buf();
+        let path = self.sync.secrets_path();
         let file = EncryptedFile::new(&path);
         if !file.exists() {
             return Err("没有主密码凭据文件".to_string());
         }
         file.remove().map_err(|e| e.to_string())?;
 
-        let fresh = Keyring::open_default(&path, self.sync.plain_path());
+        // 重挑一次存储:删掉主密码文件之后该轮到下一级了 —— 便携目录里是明文
+        // 文件,别的地方是密钥环(在跑的话)/明文,见 `Keyring::open_at`。
+        let plain = self.sync.plain_path();
+        let fresh = Keyring::open_at(&path, &plain, crate::config::is_portable_config());
         self.sync.adopt(fresh);
         tracing::warn!("主密码凭据文件已删除: {}", path.display());
         Ok(json!({ "removed": true }))

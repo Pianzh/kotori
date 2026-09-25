@@ -4,6 +4,9 @@
 
 use super::*;
 
+/// 「切到便携 / 切到默认」那一族（配置与凭据一起搬）单独一个文件。
+mod config_source;
+
 fn daemon() -> Daemon {
     Daemon::new(Config::default())
 }
@@ -53,92 +56,6 @@ async fn shutdown_reply_is_flagged() {
     assert!(reply.shutdown);
     let value: Value = serde_json::from_str(&reply.body).unwrap();
     assert_eq!(value["result"]["success"], true);
-}
-
-/// 「切到默认配置」必须把便携那份**改名让路**:启动时"二进制同目录优先"是搜索
-/// 规则,不让路的话下次启动仍然是它赢 —— 用户看到的是"切换成功但一切照旧"。
-///
-/// 反过来切到便携时默认那份**不许动**:它本来就排在后面,动了就是白丢一份配置。
-#[tokio::test]
-async fn switching_the_config_source_moves_it_and_makes_the_portable_one_step_aside() {
-    let dir = crate::config::test_scratch("daemon-switch");
-    let portable = dir.join("exe_dir").join("config.toml");
-    let default = dir.join("config_dir").join("config.toml");
-    std::fs::create_dir_all(portable.parent().unwrap()).unwrap();
-
-    // daemon 站在"默认目录"这一份上,内存里有一条游戏(它就是被搬过去的内容)。
-    let config: Config = toml::from_str(
-        r#"
-[games.probe]
-name = "探针"
-exe_path = "/games/probe/game.exe"
-"#,
-    )
-    .unwrap();
-    crate::config::save_to(&default, &config).unwrap();
-    let daemon = Daemon::new(config)
-        .with_config_path(default.clone())
-        .with_config_sources(Some(portable.clone()), default.clone());
-
-    let reply = daemon
-        .handle_request(
-            r#"{"jsonrpc":"2.0","id":1,"method":"config.set_source","params":{"portable":true}}"#,
-        )
-        .await;
-    let value: Value = serde_json::from_str(&reply.body).unwrap();
-    assert_eq!(value["result"]["changed"], true, "{value}");
-    assert!(portable.is_file(), "便携那份应当被写出来:{value}");
-    assert!(default.is_file(), "切到便携时默认那份不许动");
-    let moved = crate::config::load_from(&portable).unwrap();
-    assert!(moved.games.contains_key("probe"), "搬过去的是内存里那一份");
-
-    // 再切回默认:便携那份必须让路(改名),否则下次启动还是它赢。
-    let reply = daemon
-        .handle_request(
-            r#"{"jsonrpc":"2.0","id":2,"method":"config.set_source","params":{"portable":false}}"#,
-        )
-        .await;
-    let value: Value = serde_json::from_str(&reply.body).unwrap();
-    assert_eq!(value["result"]["changed"], true, "{value}");
-    assert!(!portable.is_file(), "便携那份应当让路:{value}");
-    assert!(portable.with_extension("toml.portable-bak").is_file());
-    assert_eq!(
-        value["result"]["config_path"],
-        default.display().to_string(),
-        "{value}"
-    );
-
-    // daemon 记住的就是新路径:下一次写配置落在默认那份上(唯一写者换了地方)。
-    daemon
-        .handle_request(
-            r#"{"jsonrpc":"2.0","id":3,"method":"game.update","params":{"id":"probe","name":"改过名"}}"#,
-        )
-        .await;
-    assert!(crate::config::load_from(&default).unwrap().games["probe"].name == "改过名");
-    assert!(!portable.is_file(), "写回去也不许悄悄重建便携那份");
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-/// 两个地点一样(或已经在那儿)时不写文件、不报错 —— 按钮那时本来就是灰的,而
-/// RPC 也得自己站得住。
-#[tokio::test]
-async fn switching_to_the_source_already_in_use_changes_nothing() {
-    let dir = crate::config::test_scratch("daemon-switch-same");
-    let default = dir.join("config.toml");
-    crate::config::save_to(&default, &Config::default()).unwrap();
-    let daemon = Daemon::new(Config::default())
-        .with_config_path(default.clone())
-        .with_config_sources(Some(default.clone()), default.clone());
-
-    let reply = daemon
-        .handle_request(
-            r#"{"jsonrpc":"2.0","id":1,"method":"config.set_source","params":{"portable":true}}"#,
-        )
-        .await;
-    let value: Value = serde_json::from_str(&reply.body).unwrap();
-    assert_eq!(value["result"]["changed"], false, "{value}");
-    assert!(default.is_file());
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[tokio::test]
