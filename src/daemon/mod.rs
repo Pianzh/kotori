@@ -13,6 +13,7 @@ use crate::scale::{LaunchSpec, PlatformEngine, ScaleEngine, ScaleSession, Sessio
 
 mod dispatch;
 mod game_rpc;
+mod game_write;
 mod index_refresh;
 mod ipc;
 mod protocol;
@@ -353,7 +354,10 @@ impl Daemon {
             }
         };
         let value = mutate(&mut candidate)?;
-        candidate.capture_mounts();
+        // ⚠ 这里**不再**自动补挂载引用（用户 2026-09-25 定的口径：捕获只发生在
+        // "用户把路径交上来"的这一刻，见 `game_write.rs`。从前每次写配置都重扫一遍，
+        // 会让用户在界面上清空的引用下一次保存时又冒回来）。
+        // candidate.capture_mounts();
         crate::config::save_to(&path, &candidate).map_err(|e| format!("保存配置失败: {e}"))?;
         *guard = candidate;
         Ok(value)
@@ -362,16 +366,7 @@ impl Daemon {
 
 pub async fn run() -> anyhow::Result<()> {
     let path = crate::config::config_path();
-    let config = {
-        let _lock = crate::config::ConfigLock::acquire(&path)?;
-        let mut config = crate::config::load_at(&path)?;
-        let before = serde_json::to_value(&config)?;
-        config.capture_mounts();
-        if serde_json::to_value(&config)? != before {
-            crate::config::save_to(&path, &config)?;
-        }
-        config
-    };
+    let config = crate::config::load_at(&path)?;
     let daemon = Daemon::new(config).with_config_path(path);
     daemon.run().await
 }

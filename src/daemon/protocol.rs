@@ -78,6 +78,13 @@ pub(super) struct GamePatch {
     pub(super) direct_launch: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     pub(super) process_name: Option<Option<String>>,
+    /// 挂载引用（盘号 + 磁盘内相对目录）。用户 2026-09-25 定的口径：
+    /// **键不出现 = 别动这一栏；`null` = 不再用引用**（回到绝对路径）；给了值 =
+    /// 按它定位。"用不用引用"这个开关就在这里，别的一律不动这一栏。
+    #[serde(default, deserialize_with = "double_option")]
+    pub(super) game_dir_mount: Option<Option<crate::mount::MountPath>>,
+    #[serde(default, deserialize_with = "double_option")]
+    pub(super) exe_mount: Option<Option<crate::mount::MountPath>>,
     pub(super) profile: Option<crate::config::ScaleProfile>,
 }
 
@@ -88,6 +95,12 @@ pub(super) struct NewGame {
     pub(super) exe_path: PathBuf,
     #[serde(default)]
     pub(super) game_dir: Option<PathBuf>,
+    /// 建条目时直接带上挂载引用：有引用就**不要求路径此刻存在**（盘可能插在别的
+    /// 机器上、也可能还没插）—— 用户 2026-09-25："大不了就是报错打不开，这是正常的"。
+    #[serde(default)]
+    pub(super) game_dir_mount: Option<crate::mount::MountPath>,
+    #[serde(default)]
+    pub(super) exe_mount: Option<crate::mount::MountPath>,
 }
 
 /// Tell `null` apart from "key absent" for `Option<Option<T>>` fields.

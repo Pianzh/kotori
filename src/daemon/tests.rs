@@ -7,6 +7,9 @@ use super::*;
 /// 「切到便携 / 切到默认」那一族（配置与凭据一起搬）单独一个文件。
 mod config_source;
 
+/// 挂载引用（盘号 + 相对目录）在写接口上的语义。
+mod mounts;
+
 fn daemon() -> Daemon {
     Daemon::new(Config::default())
 }
