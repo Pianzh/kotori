@@ -177,4 +177,15 @@ mod tests {
             "响应缺少 result"
         );
     }
+
+    #[tokio::test]
+    async fn a_missing_endpoint_is_reported_as_a_connection_error() {
+        let path = std::env::temp_dir().join(format!(
+            "kotori-rpc-missing-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let error = call(&path, "daemon.status", None).await.unwrap_err();
+        assert!(error.contains("无法连接守护进程"), "{error}");
+    }
 }

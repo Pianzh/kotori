@@ -365,3 +365,62 @@ async fn resolve_pair_without_an_identity_creates_a_new_binding_decision() {
 
     std::fs::remove_dir_all(path.parent().unwrap()).ok();
 }
+
+#[tokio::test]
+async fn resolve_rejects_an_unknown_choice_without_mutating_the_binding() {
+    let (daemon, path) = daemon_at(Keyring::memory());
+    let before = crate::config::load_from(&path).unwrap();
+
+    let value = call(
+        &daemon,
+        "sync.resolve",
+        r#"{"id":"demo","choice":"unknown"}"#,
+    )
+    .await;
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("不认识的回答"),
+        "{value}"
+    );
+
+    let after = crate::config::load_from(&path).unwrap();
+    assert_eq!(
+        after.games["demo"].cloud_id,
+        before.games["demo"].cloud_id
+    );
+    assert_eq!(
+        after.games["demo"].cloud_dir,
+        before.games["demo"].cloud_dir
+    );
+    assert_eq!(
+        after.games["demo"].cloud_conclusion,
+        before.games["demo"].cloud_conclusion
+    );
+
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}
+
+#[tokio::test]
+async fn repeating_the_same_pair_is_idempotent() {
+    let (daemon, path) = daemon_at(Keyring::memory());
+    let body = r#"{"id":"demo","choice":"pair","cloud_id":"cloud-1","cloud_key":"remote/demo"}"#;
+
+    let first = call(&daemon, "sync.resolve", body).await;
+    let second = call(&daemon, "sync.resolve", body).await;
+    assert_eq!(first["result"]["ok"], true, "{first}");
+    assert_eq!(second["result"]["ok"], true, "{second}");
+
+    let config = crate::config::load_from(&path).unwrap();
+    let game = &config.games["demo"];
+    assert_eq!(game.cloud_id.as_deref(), Some("cloud-1"));
+    assert_eq!(game.cloud_dir.as_deref(), Some("remote/demo"));
+    assert!(
+        game.cloud_conclusion
+            .as_deref()
+            .is_some_and(|value| value.starts_with("ok:"))
+    );
+
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}

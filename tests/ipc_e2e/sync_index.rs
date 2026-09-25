@@ -7,10 +7,12 @@
 //! 索引是**镜像**：身份卡才是真相（丢了/坏了能照它重建）。所以这两条都在盯"读索引
 //! 就够，一张身份卡都不用读"这件事。
 
+use std::time::Duration;
+
 use serde_json::json;
 
 use crate::fixture::Fixture;
-use crate::helpers::rclone_calls;
+use crate::helpers::{rclone_calls, wait_until};
 
 /// 「云端存档」页的数据来自**一个桶一份的索引**，不是遍历身份卡。
 ///
@@ -317,5 +319,53 @@ fn a_failed_refresh_keeps_the_old_cache_and_reports_the_error() {
     assert!(
         recovered["result"]["refresh_error"].is_null(),
         "{recovered}"
+    );
+}
+
+#[test]
+fn changing_the_sync_target_refreshes_but_retention_does_not() {
+    let mut machine = Fixture::new("index-settings-refresh");
+    machine.enable_fake_sync(true);
+    machine.start();
+    machine.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+
+    let first = machine.rpc("sync.cloud_list", json!({}));
+    assert_eq!(first["result"]["from_cache"], false, "{first}");
+    let before = rclone_calls(&machine).len();
+
+    let retention = machine.rpc(
+        "sync.set_settings",
+        json!({ "keep_versions": 7 }),
+    );
+    assert_eq!(
+        retention["result"]["settings"]["keep_versions"],
+        7,
+        "{retention}"
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        rclone_calls(&machine).len(),
+        before,
+        "只改保留版本数不该刷新索引: {:?}",
+        rclone_calls(&machine)
+    );
+
+    let target = machine.rpc(
+        "sync.set_settings",
+        json!({ "bucket": "another-bucket" }),
+    );
+    assert_eq!(
+        target["result"]["settings"]["bucket"], "another-bucket",
+        "{target}"
+    );
+    assert!(
+        wait_until(Duration::from_secs(5), || {
+            rclone_calls(&machine).len() > before
+        }),
+        "改目标后应后台刷新索引: {:?}",
+        rclone_calls(&machine)
     );
 }
