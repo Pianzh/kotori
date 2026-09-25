@@ -70,6 +70,16 @@ impl MountTable {
     }
 
     fn infer_canonical(&self, path: &Path) -> Option<MountPath> {
+        let reference = self.reference_of(path)?;
+        // 同一文件系统可能挂在多处（root 相同或不同）：解析结果未必还是原
+        // 字符串，但无论落到哪个挂载点，反解出来必须还是同一个引用 —— 证明它
+        // 指的就是这一份数据，而不是猜错盘。
+        let resolved = self.resolve(&reference).ok()?;
+        (self.reference_of(&resolved) == Some(reference.clone())).then_some(reference)
+    }
+
+    /// 把路径归到覆盖它的最长挂载点，生成盘引用（不校验往返一致性）。
+    fn reference_of(&self, path: &Path) -> Option<MountPath> {
         // 未识别 UUID 的嵌套挂载也必须参与最长匹配，不能误归到父分区。
         let entry = self
             .entries
@@ -86,7 +96,7 @@ impl MountTable {
             relative,
         };
         reference.validate().ok()?;
-        (self.resolve(&reference).ok()?.as_path() == path).then_some(reference)
+        Some(reference)
     }
 
     pub fn resolve(&self, reference: &MountPath) -> Result<PathBuf, String> {
