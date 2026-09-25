@@ -70,3 +70,4 @@ credentials*.json
 
 # opencode 的数据目录（沙箱里 ~/.local/share 不可写，重定向到工作区）
 .opencode-data/
+scripts/notes-sync.sh
