@@ -183,6 +183,10 @@ export component GameVersionsPage inherits Rectangle {
                     }
                 }
             }
+            // ⚠ 吃掉剩余的高度：没有它，`ScrollView` 里的多余空间会被摊到别的元素之间，
+            // 那几行存档就被推到窗口最下面去了（`games.slint` / `sync.slint` / `settings.slint`
+            // 的末尾都有这一条，这一页漏了 —— 用户看截图时一眼就是这个）。
+            Rectangle { vertical-stretch: 1; background: #00000000; }
         }
     }
 
