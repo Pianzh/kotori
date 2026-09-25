@@ -276,12 +276,7 @@ async fn kopia_password_can_be_stored_and_cleared() {
         Some("custom-repository-password")
     );
 
-    let cleared = call(
-        &daemon,
-        "sync.set_kopia_password",
-        r#"{"password":""}"#,
-    )
-    .await;
+    let cleared = call(&daemon, "sync.set_kopia_password", r#"{"password":""}"#).await;
     assert_eq!(cleared["result"]["cleared"], true, "{cleared}");
     assert_eq!(cleared["result"]["using_default"], true, "{cleared}");
     assert_eq!(keyring.get(SecretKey::KopiaPassword).unwrap(), None);

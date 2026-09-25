@@ -314,5 +314,8 @@ fn a_failed_refresh_keeps_the_old_cache_and_reports_the_error() {
     std::fs::remove_file(machine.dir.join("fail")).unwrap();
     let recovered = machine.rpc("sync.cloud_list", json!({ "refresh": true }));
     assert_eq!(recovered["result"]["from_cache"], false, "{recovered}");
-    assert!(recovered["result"]["refresh_error"].is_null(), "{recovered}");
+    assert!(
+        recovered["result"]["refresh_error"].is_null(),
+        "{recovered}"
+    );
 }

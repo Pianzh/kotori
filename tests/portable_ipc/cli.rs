@@ -87,12 +87,7 @@ fn status_and_reload_report_missing_daemon_without_starting_one() {
 fn sync_status_starts_a_missing_daemon() {
     let fixture = Fixture::new("cli-autostart");
     let status = run(&fixture, &["sync", "status"]);
-    assert!(
-        status.ok,
-        "stdout={} stderr={}",
-        status.out,
-        status.err
-    );
+    assert!(status.ok, "stdout={} stderr={}", status.out, status.err);
 
     let shutdown = fixture.rpc("daemon.shutdown", json!({}));
     assert!(shutdown.get("error").is_none(), "{shutdown}");
