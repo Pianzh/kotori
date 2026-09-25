@@ -14,8 +14,6 @@ Thumbs.db
 # 本地 / 面向 agent 的工作文档:刻意不入 git(见 HANDOVER.md 开头)
 AGENTS.md
 HANDOVER.md
-# Linux 挂载盘改造的交接文档(2026-09-25):含设计决策、master 合并状态、UI 待办
-MOUNT-PATHS.md
 /GOALS.md
 UI_GUIDE.md
 # 精确到每个文件的架构地图:和 HANDOVER 同性质(给 agent 看的),不是项目产物
