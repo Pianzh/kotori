@@ -70,7 +70,10 @@ pub fn resolve_save_path(
         }
         // Absolute paths are device-local by definition; `~` only means
         // something on Linux, so on Windows it is passed through untouched.
-        SavePathKind::Absolute => Ok(expand_home(save.path.trim())),
+        SavePathKind::Absolute => match &save.mount {
+            Some(reference) => reference.resolve(),
+            None => Ok(expand_home(save.path.trim())),
+        },
         SavePathKind::Windows => resolve_windows_path(root, &save.path),
     }
 }
@@ -394,7 +397,7 @@ pub fn windows_user_dir(prefix: &Path) -> PathBuf {
 }
 
 /// Expand a leading `~`.
-fn expand_home(path: &str) -> PathBuf {
+pub(crate) fn expand_home(path: &str) -> PathBuf {
     if let Some(rest) = path.strip_prefix("~/") {
         home_dir().join(rest)
     } else if path == "~" {

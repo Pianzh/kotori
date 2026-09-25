@@ -353,6 +353,7 @@ impl Daemon {
             }
         };
         let value = mutate(&mut candidate)?;
+        candidate.capture_mounts();
         crate::config::save_to(&path, &candidate).map_err(|e| format!("保存配置失败: {e}"))?;
         *guard = candidate;
         Ok(value)
@@ -361,7 +362,16 @@ impl Daemon {
 
 pub async fn run() -> anyhow::Result<()> {
     let path = crate::config::config_path();
-    let config = crate::config::load_at(&path)?;
+    let config = {
+        let _lock = crate::config::ConfigLock::acquire(&path)?;
+        let mut config = crate::config::load_at(&path)?;
+        let before = serde_json::to_value(&config)?;
+        config.capture_mounts();
+        if serde_json::to_value(&config)? != before {
+            crate::config::save_to(&path, &config)?;
+        }
+        config
+    };
     let daemon = Daemon::new(config).with_config_path(path);
     daemon.run().await
 }

@@ -188,7 +188,9 @@ pub fn resolve_prefix_with(
         return (prefix, PrefixSource::Environment);
     }
 
-    let game_dir = game.effective_game_dir();
+    let Ok(game_dir) = game.resolved_game_dir() else {
+        return (default_prefix(), PrefixSource::Default);
+    };
     if let Some(portable) = portable_prefix(&game_dir) {
         return (portable.clone(), PrefixSource::Portable(portable));
     }

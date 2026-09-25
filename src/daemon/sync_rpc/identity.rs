@@ -112,7 +112,10 @@ impl Daemon {
             (
                 locations,
                 parents,
-                game.exe_path.to_string_lossy().to_string(),
+                game.resolved_exe()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+                    .to_string(),
             )
         };
         Ok(MachineIdentity {
@@ -202,11 +205,14 @@ impl Daemon {
                 .games
                 .get(game_id)
                 .ok_or_else(|| format!("配置中找不到游戏: {game_id}"))?;
-            (game.exe_fingerprint.clone(), game.exe_path.clone())
+            (game.exe_fingerprint.clone(), game.resolved_exe())
         };
         if let Some(fingerprint) = known {
             return Ok(Some(fingerprint));
         }
+        let Ok(exe) = exe else {
+            return Ok(None);
+        };
         let Some(fingerprint) = crate::sync::fingerprint::of_file(&exe) else {
             tracing::warn!(
                 "{game_id}: 算不出 exe 指纹（{}），这一版不带指纹",

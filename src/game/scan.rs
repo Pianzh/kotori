@@ -73,6 +73,8 @@ pub(super) fn game_entry(dir: &Path, exe: PathBuf) -> GameConfig {
 
     GameConfig {
         cloud_id: None,
+        game_dir_mount: None,
+        exe_mount: None,
         exe_fingerprint,
         // 还没上传过：云端落点就是本机的游戏 id（第一次上传时按身份定下来）。
         cloud_dir: None,
@@ -107,6 +109,7 @@ pub fn add_from_dir(directory: &Path) -> anyhow::Result<Vec<(String, GameConfig)
     let mut config = crate::config::load()?;
     let found = scan(directory)?;
     let added = add_games(&mut config, found);
+    config.capture_mounts();
     crate::config::save(&config)?;
     Ok(added)
 }

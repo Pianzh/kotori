@@ -20,10 +20,7 @@ impl Daemon {
             .games
             .iter()
             .map(|(id, game)| {
-                let mut value = serde_json::to_value(game).unwrap_or_else(|e| {
-                    tracing::warn!("failed to serialize game {id}: {e}");
-                    json!({})
-                });
+                let mut value = game.location_view();
                 if let Value::Object(map) = &mut value {
                     map.insert("id".to_string(), Value::String(id.clone()));
                 }
@@ -155,6 +152,8 @@ impl Daemon {
                 id.clone(),
                 crate::config::GameConfig {
                     cloud_id: None,
+                    game_dir_mount: None,
+                    exe_mount: None,
                     // 指纹与 `game::game_entry`（扫描那条路）同一个算法：见
                     // `sync::fingerprint`。读不到（盘不在）就是 `None`，等配对扫描
                     // 或者第一次上传时再补（`fill_fingerprints`）。
@@ -188,25 +187,33 @@ impl Daemon {
     pub(super) async fn rpc_game_update(
         &self,
         id: &str,
-        patch: GamePatch,
+        mut patch: GamePatch,
     ) -> Result<Value, String> {
         self.mutate_config(|config| {
             // Save paths are validated by resolving them, which needs an
             // immutable view of the game *and* the config; take that before
             // mutating anything.
-            if let Some(save_paths) = &patch.save_paths {
+            if let Some(save_paths) = &mut patch.save_paths {
                 let snapshot = config
                     .games
                     .get(id)
                     .cloned()
                     .ok_or_else(|| format!("配置中找不到游戏: {id}"))?;
                 let mut candidate = snapshot;
+                candidate.reconcile_save_paths(save_paths);
                 if let Some(dir) = &patch.game_dir {
                     candidate.game_dir = dir.clone();
+                    if !dir.as_os_str().is_empty() {
+                        candidate.game_dir_mount = None;
+                    }
                 }
                 let (root, _) = crate::wine::SaveRoot::for_platform(&candidate, config);
-                let game_dir = candidate.effective_game_dir();
+                // 有挂载引用时按它解析：盘没挂载就明确报错，而不是用一个假目录骗过验证。
+                let game_dir = candidate.resolved_game_dir()?;
                 for save in save_paths {
+                    if save.mount.is_some() {
+                        continue;
+                    }
                     crate::wine::resolve_save_path(&root, &game_dir, save)?;
                 }
             }
@@ -224,10 +231,16 @@ impl Daemon {
             }
 
             if let Some(dir) = &patch.game_dir {
-                if !dir.is_dir() {
+                if dir.as_os_str().is_empty() && game.game_dir_mount.is_none() {
+                    return Err("游戏目录和挂载引用至少需要填写一项".into());
+                }
+                if !dir.as_os_str().is_empty() && !dir.is_dir() {
                     return Err(format!("游戏目录不存在: {}", dir.display()));
                 }
                 game.game_dir = dir.clone();
+                if !dir.as_os_str().is_empty() {
+                    game.game_dir_mount = None;
+                }
             }
 
             if let Some(exe) = &patch.exe_path {
@@ -243,6 +256,7 @@ impl Daemon {
                 // 粘住的，只有用户能改（配对界面）。换了版本也还是同一款游戏。
                 game.exe_fingerprint = crate::sync::fingerprint::of_file(exe);
                 game.exe_path = exe.clone();
+                game.exe_mount = None;
             }
 
             if let Some(args) = &patch.launch_args {
@@ -303,7 +317,12 @@ impl Daemon {
             (game, prefix, source)
         };
 
-        let game_dir = game.effective_game_dir();
+        let mounts = crate::mount::MountTable::read();
+        let game_dir = game.resolved_game_dir_with(&mounts)?;
+        let exe_path = game.resolved_exe_with(&mounts)?;
+        if !game_dir.is_dir() || !exe_path.is_file() {
+            return Err("游戏目录或可执行文件不存在，请检查磁盘和游戏位置".into());
+        }
 
         // 云同步自检（用户 2026-09-22："云同步（打开游戏）前必须自检"）。整条路上
         // **只有一种情况会打断用户**：未定、指纹又认不出来 —— 那时**先不起游戏**，
@@ -358,7 +377,7 @@ impl Daemon {
             prefix_source.label()
         );
 
-        let exe = game.exe_path.to_string_lossy().to_string();
+        let exe = exe_path.to_string_lossy().to_string();
         let spec = LaunchSpec {
             game_id: id,
             exe: &exe,

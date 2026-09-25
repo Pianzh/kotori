@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+mod locations;
 mod lock;
 mod paths;
 mod profile;
@@ -71,6 +72,10 @@ pub struct WineConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub game_dir_mount: Option<crate::mount::MountPath>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe_mount: Option<crate::mount::MountPath>,
     pub name: String,
     /// Where the game is installed. This is the working directory a launch
     /// uses (many VNs resolve assets relative to it) and the base that
@@ -237,6 +242,8 @@ fn is_windows_absolute(path: &str) -> bool {
 /// One save location of a game.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct SavePath {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mount: Option<crate::mount::MountPath>,
     pub kind: SavePathKind,
     pub path: String,
     /// Glob patterns (relative to this path) that must not be synced, e.g.
@@ -249,6 +256,7 @@ impl SavePath {
     pub fn new(kind: SavePathKind, path: impl Into<String>) -> Self {
         Self {
             kind,
+            mount: None,
             path: path.into(),
             exclude: Vec::new(),
         }
@@ -291,6 +299,8 @@ impl<'de> Deserialize<'de> for SavePath {
         #[derive(Deserialize)]
         struct Detailed {
             #[serde(default)]
+            mount: Option<crate::mount::MountPath>,
+            #[serde(default)]
             kind: Option<SavePathKind>,
             path: String,
             #[serde(default)]
@@ -307,6 +317,7 @@ impl<'de> Deserialize<'de> for SavePath {
         Ok(match Repr::deserialize(deserializer)? {
             Repr::Simple(path) => SavePath::inferred(path),
             Repr::Detailed(d) => SavePath {
+                mount: d.mount,
                 kind: d.kind.unwrap_or_else(|| SavePathKind::infer(&d.path)),
                 path: d.path,
                 exclude: d.exclude,
@@ -342,21 +353,10 @@ impl GameConfig {
     /// See [`Config::normalize`].
     pub fn normalize(&mut self) {
         if self.game_dir.as_os_str().is_empty()
+            && self.game_dir_mount.is_none()
             && let Some(parent) = self.exe_path.parent()
         {
             self.game_dir = parent.to_path_buf();
-        }
-    }
-
-    /// Working directory of a launch, and the base for relative save paths.
-    pub fn effective_game_dir(&self) -> PathBuf {
-        if self.game_dir.as_os_str().is_empty() {
-            self.exe_path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."))
-        } else {
-            self.game_dir.clone()
         }
     }
 
@@ -372,7 +372,10 @@ impl GameConfig {
             .filter(|name| !name.is_empty())
             .map(str::to_string)
             .or_else(|| {
-                self.exe_path
+                self.exe_mount
+                    .as_ref()
+                    .map(|m| m.relative.as_path())
+                    .unwrap_or(&self.exe_path)
                     .file_name()
                     .map(|name| name.to_string_lossy().trim().to_string())
                     .filter(|name| !name.is_empty())
