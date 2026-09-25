@@ -324,14 +324,35 @@ impl Daemon {
     /// Apply a mutation to the config atomically: the change is made on a copy,
     /// persisted, and only then committed to memory, so the daemon's view never
     /// diverges from the file on disk.
+    ///
+    /// 两处是后加的,都为同一个理由(配置**不止一个写者**,见
+    /// [`crate::config::ConfigLock`]):
+    ///
+    /// * 整个"读-改-写"在配置文件的跨进程锁里 —— `kotori add` 在没有 daemon 时
+    ///   会直接写这个文件,两边同时落地会丢一笔(BUG-16);
+    /// * 底稿取自**磁盘上那一份**,不是内存里那一份 —— 否则 daemon 手上这份旧配置
+    ///   会把 CLI 刚加进去的游戏整份覆盖掉。重读失败(用户把文件删了、写坏了)就
+    ///   退回内存那一份:那正是"daemon 是唯一写者"时代的行为,不能因为一次读不动
+    ///   就让这次改动存不下去。
     async fn mutate_config<F>(&self, mutate: F) -> Result<Value, String>
     where
         F: FnOnce(&mut Config) -> Result<Value, String>,
     {
         let mut guard = self.config.write().await;
-        let mut candidate = guard.clone();
-        let value = mutate(&mut candidate)?;
         let path = self.config_path.read().await.clone();
+        let _lock = crate::config::ConfigLock::acquire(&path)
+            .map_err(|e| format!("锁住配置文件失败: {e}"))?;
+        let mut candidate = match crate::config::load_at(&path) {
+            Ok(on_disk) => on_disk,
+            Err(error) => {
+                tracing::warn!(
+                    "改配置前重读 {} 失败（{error}），改用内存里那一份",
+                    path.display()
+                );
+                guard.clone()
+            }
+        };
+        let value = mutate(&mut candidate)?;
         crate::config::save_to(&path, &candidate).map_err(|e| format!("保存配置失败: {e}"))?;
         *guard = candidate;
         Ok(value)

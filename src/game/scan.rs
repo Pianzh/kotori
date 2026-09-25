@@ -98,7 +98,12 @@ pub(super) fn game_entry(dir: &Path, exe: PathBuf) -> GameConfig {
 /// Scan a directory and write the found games into the config file.
 /// Returns the list of games that were actually added (existing entries are
 /// never overwritten, so tuned profiles survive a re-scan).
+///
+/// 这是 `kotori add` 的**兜底**路径:没有 daemon 时它自己写配置(有 daemon 就走
+/// `game.add`,见 `cli::add_cli`)。整个"读-改-写"都在配置文件的跨进程锁里 ——
+/// 同时跑两条 `kotori add`,或者 daemon 恰好在这时候保存,都不会丢一笔(BUG-16)。
 pub fn add_from_dir(directory: &Path) -> anyhow::Result<Vec<(String, GameConfig)>> {
+    let _lock = crate::config::ConfigLock::acquire(&crate::config::config_path())?;
     let mut config = crate::config::load()?;
     let found = scan(directory)?;
     let added = add_games(&mut config, found);

@@ -68,6 +68,45 @@ impl Daemon {
         .await
     }
 
+    /// 扫一个目录,把它找到的游戏加进库里 —— `kotori add` 走的就是这条。
+    ///
+    /// 从前 `kotori add` 自己 `load()`/`save()` 配置,CLI 因此成了**第二个写者**
+    /// (BUG-16):它与这里(UI 的自动保存)在同一毫秒落地时,谁后写谁赢,先写的那
+    /// 一笔就没了。收进 daemon 之后只有一个写者,而且加完**内存与磁盘同一步更新**
+    /// —— GUI 不用等下一次刷新就能看到新游戏。
+    ///
+    /// 返回值的形状与 CLI 打印的一一对应:`added` 是真正新加进去的(已存在的 exe
+    /// 会被跳过,见 `game::add_games`),`warnings` 是"这个 exe 已经被别的档案用
+    /// 着"的提醒。两件事都在 daemon 侧算,因为只有它手里是最新的那份配置。
+    pub(super) async fn rpc_game_add(&self, directory: &Path) -> Result<Value, String> {
+        if !directory.is_dir() {
+            return Err(format!("目录不存在: {}", directory.display()));
+        }
+        let found = crate::game::scan(directory).map_err(|e| e.to_string())?;
+        self.mutate_config(move |config| {
+            let added = crate::game::add_games(config, found);
+            let games: Vec<Value> = added
+                .iter()
+                .map(|(id, game)| {
+                    json!({
+                        "id": id,
+                        "name": game.name,
+                        "exe_path": game.exe_path.display().to_string(),
+                    })
+                })
+                .collect();
+            let warnings: Vec<Value> = added
+                .iter()
+                .filter_map(|(id, game)| {
+                    crate::game::duplicate_exe_warning(config, &game.exe_path, Some(id))
+                        .map(|message| json!({ "id": id, "message": message }))
+                })
+                .collect();
+            Ok(json!({ "added": games, "warnings": warnings }))
+        })
+        .await
+    }
+
     /// Create a library entry from explicit user input (the manual add path —
     /// no scanning heuristics involved).
     pub(super) async fn rpc_game_create(&self, new_game: NewGame) -> Result<Value, String> {

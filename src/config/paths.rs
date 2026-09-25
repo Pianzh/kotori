@@ -89,6 +89,10 @@ pub fn relocate_config(
     config: &Config,
     disable_current: bool,
 ) -> anyhow::Result<Option<PathBuf>> {
+    // 换地方也是一次"写配置",所以它也拿锁 —— 锁的是**新**地点那一把,因为
+    // "以后存到哪"从此就是它(与 `Daemon::mutate_config`、`kotori add` 的直写
+    // 用同一族锁,见 `config::lock`)。
+    let _lock = super::ConfigLock::acquire(target)?;
     save_to(target, config)?;
     if !disable_current || current == target || !current.is_file() {
         return Ok(None);

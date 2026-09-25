@@ -54,6 +54,10 @@ impl Daemon {
             }
 
             "game.list" => respond(id, self.rpc_game_list().await),
+            "game.add" => match param_str(&req.params, "directory") {
+                Ok(directory) => respond(id, self.rpc_game_add(Path::new(directory)).await),
+                Err(e) => rpc_err(id, -32602, e),
+            },
             "game.remove" => match param_str(&req.params, "id") {
                 Ok(game_id) => respond(id, self.rpc_game_remove(game_id).await),
                 Err(e) => rpc_err(id, -32602, e),

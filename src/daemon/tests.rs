@@ -381,3 +381,51 @@ fn every_game_config_key_is_either_patchable_or_a_known_exception() {
         });
     }
 }
+
+/// daemon 改一笔配置之前必须**先看一眼磁盘**:`kotori add` 在没有 daemon 时会
+/// 直接往这个文件里写(BUG-16),拿内存里那份旧配置整份覆盖的话,刚加进去的游戏
+/// 就被悄悄抹掉了。
+#[tokio::test]
+async fn a_write_rereads_the_file_so_a_cli_add_is_not_overwritten() {
+    let dir = crate::config::test_scratch("daemon-reread");
+    let path = dir.join("config.toml");
+    let config: Config = toml::from_str(
+        r#"
+[games.probe]
+name = "探针"
+exe_path = "/games/probe/game.exe"
+"#,
+    )
+    .unwrap();
+    crate::config::save_to(&path, &config).unwrap();
+    let daemon = Daemon::new(config).with_config_path(path.clone());
+
+    // "另一个进程"往文件里加了一款:只动磁盘,daemon 内存里没有它。
+    let mut on_disk = crate::config::load_from(&path).unwrap();
+    let extra: Config = toml::from_str(
+        r#"
+[games.cli-added]
+name = "命令行加的"
+exe_path = "/games/cli/game.exe"
+"#,
+    )
+    .unwrap();
+    on_disk.games.extend(extra.games);
+    crate::config::save_to(&path, &on_disk).unwrap();
+
+    let reply = daemon
+        .handle_request(
+            r#"{"jsonrpc":"2.0","id":1,"method":"game.update","params":{"id":"probe","name":"改过名"}}"#,
+        )
+        .await;
+    let value: Value = serde_json::from_str(&reply.body).unwrap();
+    assert!(value.get("error").is_none(), "{value}");
+
+    let after = crate::config::load_from(&path).unwrap();
+    assert!(
+        after.games.contains_key("cli-added"),
+        "daemon 把 CLI 加的那一款覆盖掉了:{after:?}"
+    );
+    assert_eq!(after.games["probe"].name, "改过名", "自己那一笔也得落下去");
+    let _ = std::fs::remove_dir_all(&dir);
+}

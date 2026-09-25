@@ -77,13 +77,17 @@ ashpd = { version = "0.13.13", features = ["file_chooser", "tokio"] }
 # `src/picker.rs`),不引 rfd 的 GTK / portal 后端。
 [target.'cfg(windows)'.dependencies]
 rfd = { version = "0.15", default-features = false }
-# 两个入口:`AttachConsole`(CLI 在终端里跑得有输出,见 `src/main.rs` 顶部的
-# `windows_subsystem`)与 Toolhelp 快照(进程观测:一份快照回答"谁在跑、谁是
-# 谁的孩子",见 `src/process/windows.rs`)。
+# 三个入口:`AttachConsole`(CLI 在终端里跑得有输出,见 `src/main.rs` 顶部的
+# `windows_subsystem`)、Toolhelp 快照(进程观测:一份快照回答"谁在跑、谁是
+# 谁的孩子",见 `src/process/windows.rs`),还有 `LockFileEx` / `UnlockFileEx`
+# (`Win32_Storage_FileSystem` + `OVERLAPPED` 所在的 `Win32_System_IO`)——
+# 配置文件上那把跨进程锁的 Windows 那一半(见 `src/config/lock.rs`)。
 windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Threading",
+    "Win32_Storage_FileSystem",
+    "Win32_System_IO",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Foundation",
 ] }

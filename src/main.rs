@@ -216,25 +216,10 @@ fn main() -> anyhow::Result<()> {
             }
         }
         cli::Command::Add { directory } => {
-            let added = game::add_from_dir(&directory)?;
-            if added.is_empty() {
-                println!("No new games added from {}", directory.display());
-            } else {
-                println!("Added {} game(s):", added.len());
-                for (id, g) in &added {
-                    println!("  [{}] {} -> {}", id, g.name, g.exe_path.display());
-                }
-                // 重扫描的已有条目走的是"跳过"分支(不覆盖调好的档案),不会出现在
-                // added 里;这里的警告只针对真正新加的、exe 又撞上别的档案的那几条。
-                let config = config::load()?;
-                for (id, g) in &added {
-                    if let Some(warning) =
-                        game::duplicate_exe_warning(&config, &g.exe_path, Some(id))
-                    {
-                        println!("  ⚠ [{}] {}", id, warning);
-                    }
-                }
-            }
+            // 加游戏有两条路(daemon 在 / daemon 不在),都在 `cli::add_cli` 里。
+            // 从前这一段直接 `load()`/`save()`,CLI 于是成了配置的第二个写者
+            // (BUG-16)。
+            cli::add_cli(&rt, &directory)?;
         }
         cli::Command::Sync { action } => {
             cli::sync_cli(&rt, action)?;

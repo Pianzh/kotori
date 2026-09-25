@@ -117,9 +117,9 @@ fn scan_is_read_only_and_repeated_add_preserves_game_settings() {
         std::fs::read(fixture.dir.join("config.toml")).unwrap(),
         before
     );
+    // `add` 走 daemon（唯一写者），所以**不用** reload 就已经在库里了 —— 从前它
+    // 直接改磁盘，daemon 内存里的库要等下一次 reload 才知道（BUG-16）。
     assert!(run(&fixture, &["add", directory.to_str().unwrap()]).ok);
-    // add 直接更新磁盘配置；用公开 reload 命令让 daemon 重新读取。
-    assert!(run(&fixture, &["reload"]).ok);
     let response = fixture.rpc("game.list", json!({}));
     let games = response["result"]["games"].as_array().unwrap();
     assert_eq!(games.len(), 1, "{response}");
@@ -132,7 +132,6 @@ fn scan_is_read_only_and_repeated_add_preserves_game_settings() {
         true
     );
     assert!(run(&fixture, &["add", directory.to_str().unwrap()]).ok);
-    assert!(run(&fixture, &["reload"]).ok);
     let response = fixture.rpc("game.list", json!({}));
     let games = response["result"]["games"].as_array().unwrap();
     assert_eq!(games.len(), 1, "duplicate created: {response}");
@@ -246,4 +245,30 @@ fn scan_list_and_reload_say_what_they_know() {
     assert!(reload.ok, "{}", reload.err);
     assert!(reload.out.contains("3 款"), "该报 3 款:\n{}", reload.out);
     fixture.shutdown();
+}
+
+/// daemon 没起来时 `add` 照样能用（自己拿锁写盘）—— 用户不该为了加一个游戏先把
+/// 守护进程拉起来。这也钉住"两条路都不改变用法"（BUG-16）。
+#[test]
+fn add_works_without_a_daemon_and_does_not_start_one() {
+    let fixture = Fixture::new("cli-add-offline");
+    let library = fixture.dir.join("离线 library");
+    let game = library.join("Solo Game");
+    std::fs::create_dir_all(&game).unwrap();
+    std::fs::write(game.join("Game.exe"), b"fixture executable").unwrap();
+
+    let reply = run(&fixture, &["add", library.to_str().unwrap()]);
+    assert!(reply.ok, "{}", reply.err);
+    assert!(reply.out.contains("Solo Game"), "{}", reply.out);
+
+    let config = std::fs::read_to_string(fixture.dir.join("config.toml")).unwrap();
+    assert!(
+        config.contains("Solo Game"),
+        "配置里没有新加的游戏:\n{config}"
+    );
+    // 写完之后那一发 reload 是尽力而为:它不该把 daemon 顺带拉起来。
+    assert!(
+        run(&fixture, &["status"]).out.contains("守护进程未响应"),
+        "CLI 不该为了 add 启动守护进程"
+    );
 }

@@ -2,8 +2,10 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+mod add_cli;
 mod scale_cli;
 mod sync_cli;
+pub(crate) use add_cli::add_cli;
 pub(crate) use scale_cli::scale_cli;
 pub(crate) use sync_cli::sync_cli;
 

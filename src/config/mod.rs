@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+mod lock;
 mod paths;
 mod profile;
 mod sync;
+
+pub use lock::ConfigLock;
 
 // Only what the rest of the crate actually names. Everything else stays reachable
 // through `config::profile` / `config::paths` — a re-export nobody uses is a

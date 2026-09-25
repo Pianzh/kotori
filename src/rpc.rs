@@ -61,6 +61,14 @@ async fn connect(socket_path: &Path) -> Result<IpcStream, String> {
     ))
 }
 
+/// 端点那头有没有守护进程 —— 只探连接,不发请求。
+///
+/// 调用方靠它决定"这次是走 RPC 还是自己干"(`kotori add`,见 `cli::add_cli`):
+/// 连不上**不是错误**,是"没有别人在替我写配置"。
+pub async fn is_running(socket_path: &Path) -> bool {
+    connect(socket_path).await.is_ok()
+}
+
 /// Send a JSON-RPC request to the daemon and receive a single response.
 ///
 /// `game.wait` legitimately blocks until the game exits, so this waits for the
