@@ -236,7 +236,7 @@ fn game_detail(game: &UiGame) -> GameDetail {
 }
 impl App {
     /// `sync.status` 里属于当前这个游戏的那一行。
-    pub(super) fn selected_sync_game(&self) -> Option<&SyncGameRow> {
+    pub(in crate::ui) fn selected_sync_game(&self) -> Option<&SyncGameRow> {
         let id = self.selected.as_deref()?;
         self.sync_status
             .as_ref()?

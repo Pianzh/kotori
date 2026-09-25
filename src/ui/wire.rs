@@ -248,6 +248,17 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     cloud.on_search_changed(|text| dispatch(Message::CloudSearch(one_line(&text))));
     cloud.on_toggle(|key| dispatch(Message::CloudToggle(key.to_string())));
     cloud.on_back(|| dispatch(Message::CloudBack));
+    // 单游戏页那一页「这一款的云端存档」：状态在一个全局里（见 `pages/game-versions.slint`）。
+    let versions = window.global::<GameVersionsBoard>();
+    versions.on_back(|| dispatch(Message::GameVersionsClosed));
+    versions.on_replace(|name| dispatch(Message::GameVersionsReplace(name.to_string())));
+    versions.on_replace_confirmed(|| dispatch(Message::GameVersionsReplaceConfirmed));
+    versions.on_replace_cancelled(|| dispatch(Message::GameVersionsReplaceCancelled));
+    // 那一页里的「更改绑定…」与身份条上那颗是同一件事，走同一条消息。
+    versions.on_rebind_requested(|| dispatch(Message::SyncRebindRequested));
+    // 身份条**整条可点**：进去看这一款在云端存了哪几版。
+    let game_sync = window.global::<GameSyncBoard>();
+    game_sync.on_cloud_requested(|| dispatch(Message::GameVersionsOpened));
     // 添加页那块云端匹配：挑一条 / 「不是这一款」/ 改主意（照 `CloudBoard`）。
     let add_match = window.global::<AddMatchBoard>();
     add_match.on_choose(|cloud_id| dispatch(Message::MatchChoose(cloud_id.to_string())));

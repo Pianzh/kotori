@@ -13,12 +13,21 @@ export component CardRow inherits Rectangle {
     // 说明文字的颜色:默认是灰的,设置页的「环境检查」要拿它当状态行(绿/红)。
     in property <color> description-color: Tokens.text-3;
     in property <bool> interactive: true;
+    /// 整条可点（点进去看详情 / 下钻）。右侧控件放在下面（它们是 `@children`）就自动在
+    /// 上层接住自己的点击，点在这些控件之外才轮到这一条 —— 与 `pages/games.slint` 的
+    /// `GameRow` 同一条规矩（那边踩过：垫底的 `TouchArea` 声明晚了会盖住右边的按钮）。
+    in property <bool> clickable: false;
+
+    callback clicked();
 
     background: interactive && ta.has-hover ? #ffffff08 : #00000000;
     animate background { duration: 120ms; }
     height: layout.preferred-height;
 
-    ta := TouchArea { }
+    ta := TouchArea {
+        mouse-cursor: root.clickable ? pointer : default;
+        clicked => { if (root.clickable) { root.clicked(); } }
+    }
 
     layout := HorizontalLayout {
         padding: 16px;

@@ -33,6 +33,9 @@ pub(super) struct Ui {
     /// 「云端存档」那一块的两张表：云端有哪几款、点开那一款有哪几版。
     pub(super) cloud_rows: Rc<VecModel<CloudGameItem>>,
     pub(super) cloud_versions: Rc<VecModel<CloudVersionItem>>,
+    /// 单游戏页那一页「这一款的云端存档」里那几版。与上面那张**分开**：两处可能同时在
+    /// 树里（那一页盖在单游戏页上），共用一个模型会互相覆盖（同 `cloud_pick_rows`）。
+    pub(super) game_version_rows: Rc<VecModel<CloudVersionItem>>,
     /// 添加页那块云端匹配的候选（指纹命中多条时才有内容）。
     pub(super) add_match_rows: Rc<VecModel<AddMatchItem>>,
     /// 「自己选…」那个浮层里的云端清单（与上面那张表分开：两处同时在树里，共用一个
@@ -121,6 +124,7 @@ pub(super) fn run() -> anyhow::Result<()> {
     let saves = Rc::new(VecModel::<SaveItem>::default());
     let cloud_rows = Rc::new(VecModel::<CloudGameItem>::default());
     let cloud_versions = Rc::new(VecModel::<CloudVersionItem>::default());
+    let game_version_rows = Rc::new(VecModel::<CloudVersionItem>::default());
     let add_match_rows = Rc::new(VecModel::<AddMatchItem>::default());
     let cloud_pick_rows = Rc::new(VecModel::<CloudPickRow>::default());
     let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
@@ -132,6 +136,9 @@ pub(super) fn run() -> anyhow::Result<()> {
     window
         .global::<CloudBoard>()
         .set_versions(cloud_versions.clone().into());
+    window
+        .global::<GameVersionsBoard>()
+        .set_rows(game_version_rows.clone().into());
     window
         .global::<AddMatchBoard>()
         .set_rows(add_match_rows.clone().into());
@@ -151,6 +158,7 @@ pub(super) fn run() -> anyhow::Result<()> {
         saves,
         cloud_rows,
         cloud_versions,
+        game_version_rows,
         add_match_rows,
         cloud_pick_rows,
         process_rows,

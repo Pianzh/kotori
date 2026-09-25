@@ -71,6 +71,7 @@ fn dragging_the_pointer_scrolls_the_list() {
         saves,
         cloud_rows: Rc::new(VecModel::default()),
         cloud_versions: Rc::new(VecModel::default()),
+        game_version_rows: Rc::new(VecModel::default()),
         add_match_rows: Rc::new(VecModel::default()),
         cloud_pick_rows: Rc::new(VecModel::default()),
         process_rows,

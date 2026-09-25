@@ -112,6 +112,9 @@ pub struct App {
     pub(super) sync_form: SyncForm,
     /// Restore waiting for a second click: (game id, snapshot).
     pub(super) sync_restore_pending: Option<(String, Option<String>)>,
+    /// 单游戏页那一页「这一款的云端存档」：云端有哪几版 + 替换的二次确认
+    /// （`model::versions`）。它跟着 `game-open` 走，所以不是"另一页"而是一层覆盖。
+    pub(super) versions: VersionsState,
 }
 
 impl App {
@@ -176,6 +179,7 @@ impl App {
                 sync_status: None,
                 sync_form: SyncForm::default(),
                 sync_restore_pending: None,
+                versions: VersionsState::default(),
             },
             Task::batch([
                 Task::perform(async { connect_and_load().await }, Message::GamesLoaded),

@@ -17,6 +17,7 @@ use crate::ui::test_support::{sync_payload, sync_status_fixture, ui_game};
 mod add;
 mod cloud;
 mod settings;
+mod versions;
 
 /// 建一个带测试后端的窗口。
 fn ui() -> Ui {
@@ -54,6 +55,7 @@ fn ui() -> Ui {
         saves,
         cloud_rows: Rc::new(VecModel::default()),
         cloud_versions: Rc::new(VecModel::default()),
+        game_version_rows: Rc::new(VecModel::default()),
         add_match_rows,
         cloud_pick_rows: Rc::new(VecModel::default()),
         process_rows,

@@ -31,7 +31,13 @@ export global GameSyncBoard {
     /// 新建那一步的确认（两段式：先点、再确认才真的新建）。
     callback new-identity-confirmed();
     callback new-identity-cancelled();
+    /// 点了身份那一条：看这一款身份在云端存了哪几版（整页，见 `game-versions.slint`）。
+    callback cloud-requested();
 }
+
+// 身份那一条**整条可点**（进去看这一款身份在云端存了哪几版）。单独起一个组件名是为了
+// 让命中测试找得到它：单游戏页里 `CardRow` 有十几个，而 `ElementHandle` 只按类型名查。
+component IdentityRow inherits CardRow { }
 
 export component GameSyncGroup inherits Rectangle {
     in property <string> sync-line: "";
@@ -94,11 +100,16 @@ export component GameSyncGroup inherits Rectangle {
                         }
                     }
                     Divider { }
-                    CardRow {
+                    // 这一条**整条可点**：进去看这一款身份在云端存了哪几版（`game-versions.slint`）。
+                    // ⚠ "确认新建身份"那一步例外：那时右边是确认/取消，整条可点会跟它抢点击，
+                    //    而用户此刻在办的是另一件事。
+                    IdentityRow {
                         title: GameSyncBoard.bound ? GameSyncBoard.bound-name : "还没绑定云端存档";
                         description: GameSyncBoard.new-pending
                             ? "确认之后这一款会往新的一条上传。云端原来那条不会删，随时能再绑回来。"
                             : (GameSyncBoard.bound ? GameSyncBoard.bound-summary : "这一款的存档上传时会在云端新建一条身份。");
+                        clickable: !GameSyncBoard.new-pending;
+                        clicked => { GameSyncBoard.cloud-requested(); }
                         HorizontalLayout {
                             spacing: 8px;
                             alignment: center;

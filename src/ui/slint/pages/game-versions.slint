@@ -1,0 +1,259 @@
+// 这一款的云端存档：当前绑的那条身份在云端存了哪几版，以及"用哪一版替换本机"。
+//
+// 入口是单游戏页云存档组里那条**身份**（整条可点，见 `game-sync.slint`）。这一页是
+// **整页盖**在那一页上面的（不是浮层，也不是又一次窗口级下钻）：它与单游戏页共用
+// `game-open` 那个状态，关掉就回到原样，左侧导航一动不动。
+//
+// ⚠ 版本列表排**最上面**（进这一页就是来看它的）；身份那一条退到最下面 —— 它是"这些存档
+// 属于谁"的注脚，不是这一页的主角。
+//
+// 状态与回调走一个全局（照 `GameSyncBoard`）：单游戏页那串属性是经 `app.slint` 一路
+// 转发下来的，而那一层已经不替新东西转发（见 `state/sync-board.slint` 的文件头）。
+//
+// ⚠ 替换是**破坏性**的：用云端某一版盖掉本机存档目录，不能撤销。所以每一颗「替换」都
+// 要过一道居中弹窗；弹窗里那句"想留一手就先点一次「立即同步」"是给用户的自保出路
+// （与单游戏页那颗「恢复」下面的说明同一套说法）。
+
+import { ScrollView } from "std-widgets.slint";
+import { Tokens } from "../theme.slint";
+import { CardRow, Group } from "../widgets/card.slint";
+import { AccentButton, StdButton } from "../widgets/buttons.slint";
+import { CloudVersionItem } from "../types.slint";
+
+export global GameVersionsBoard {
+    in-out property <bool> open: false;
+    /// 这一款叫什么（标题用）。
+    in-out property <string> game-name: "";
+    /// 绑的是哪一条身份（没绑定就是空串）。
+    in-out property <string> identity: "";
+    in-out property <string> identity-summary: "";
+    in-out property <bool> bound: false;
+    in-out property <bool> loading: false;
+    /// 一句话状态：正在读 / 读不成 / 替换成没成。
+    in-out property <string> message: "";
+    in-out property <bool> ok: true;
+    /// 这一款身份下的每一版，**最新在前**。
+    in-out property <[CloudVersionItem]> rows: [];
+    /// 正等着二次确认的那一版（版本名）。空串 = 没有弹窗。
+    in-out property <string> pending: "";
+    /// 替换在路上（挡住连点第二下）。
+    in-out property <bool> busy: false;
+
+    callback back();
+    /// 某一行的「替换」：先记下是哪一版，弹窗由 `pending` 驱动。
+    callback replace(string);
+    callback replace-confirmed();
+    callback replace-cancelled();
+    /// 绑定 / 换绑 —— 与身份条上那颗是同一件事（这里也放一颗，免得为了换绑还要退出去）。
+    callback rebind-requested();
+}
+
+export component GameVersionsPage inherits Rectangle {
+    width: 100%;
+    height: 100%;
+    // 不透明：它盖在单游戏设置页上面，底色透明就会看见下面的内容。
+    background: Tokens.base;
+
+    ScrollView {
+        // 见 `games.slint` 里的长注释：fluent 默认关掉拖拽滚动，没有滚轮的机器要靠这一行。
+        mouse-drag-pan-enabled: true;
+
+        VerticalLayout {
+            padding-left: 28px;
+            padding-right: 28px;
+            padding-top: 12px;
+            padding-bottom: 32px;
+            spacing: 0px;
+
+            // ── 头 ────────────────────────────────────────────────────────
+            HorizontalLayout {
+                spacing: 12px;
+                padding-bottom: 18px;
+                StdButton {
+                    label: "← 返回";
+                    button-width: 84px;
+                    clicked => { GameVersionsBoard.back(); }
+                }
+                Text {
+                    text: GameVersionsBoard.game-name + " · 云端存档";
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: Tokens.text;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+
+            // ── 云端存了哪几版（这一页的主角，排在最上面）──────────────────
+            if GameVersionsBoard.loading : Text {
+                text: "正在列云端的版本…";
+                font-size: 12px;
+                color: Tokens.text-3;
+            }
+
+            if !GameVersionsBoard.loading && GameVersionsBoard.rows.length == 0 : Text {
+                text: GameVersionsBoard.bound
+                    ? "这一条身份在云端还没有存档。"
+                    : "还没绑定云端身份，云端没有它的存档。";
+                font-size: 12px;
+                color: Tokens.text-3;
+                wrap: word-wrap;
+            }
+
+            // 一版一块、彼此留缝：不然几版挨在一起看不出是几条。
+            VerticalLayout {
+                spacing: 6px;
+                for version[index] in GameVersionsBoard.rows : Rectangle {
+                    height: row-layout.preferred-height;
+                    border-radius: Tokens.radius-card;
+                    background: Tokens.card;
+                    row-layout := HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 12px;
+                        padding-top: 10px;
+                        padding-bottom: 10px;
+                        spacing: 10px;
+
+                        Text {
+                            text: version.label;
+                            font-size: 13px;
+                            color: Tokens.text;
+                            vertical-alignment: center;
+                        }
+                        // 最新那一版在最上面（`rows` 由 Rust 倒序排好）。
+                        if index == 0 : Text {
+                            text: "最新";
+                            font-size: 11px;
+                            color: Tokens.ok;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: version.size-label;
+                            font-size: 12px;
+                            color: Tokens.text-2;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: version.name;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        VerticalLayout {
+                            alignment: center;
+                            StdButton {
+                                label: "替换";
+                                button-width: 76px;
+                                button-enabled: !GameVersionsBoard.busy;
+                                clicked => { GameVersionsBoard.replace(version.name); }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // ── 一句话状态（替换成没成 / 读不成的原因） ────────────────────
+            if GameVersionsBoard.message != "" : VerticalLayout {
+                padding-top: 10px;
+                Text {
+                    text: GameVersionsBoard.message;
+                    font-size: 12px;
+                    color: GameVersionsBoard.ok ? Tokens.ok : Tokens.danger;
+                    wrap: word-wrap;
+                }
+            }
+
+            // ── 这些存档属于谁（注脚：排在最下面）──────────────────────────
+            VerticalLayout {
+                padding-top: 26px;
+                Group {
+                    CardRow {
+                        title: GameVersionsBoard.bound ? GameVersionsBoard.identity : "还没绑定云端存档";
+                        description: GameVersionsBoard.bound
+                            ? GameVersionsBoard.identity-summary
+                            : "这一款的存档上传时会在云端新建一条身份。";
+                        StdButton {
+                            label: GameVersionsBoard.bound ? "更改绑定…" : "绑定云端存档…";
+                            button-width: 128px;
+                            clicked => { GameVersionsBoard.rebind-requested(); }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── 「替换」的二次确认：居中弹窗 ──────────────────────────────────────
+    // ⚠ 覆盖本机存档不能撤销，所以每一颗「替换」都要过这一道，不做就地确认。
+    if GameVersionsBoard.pending != "" : Rectangle {
+        width: 100%;
+        height: 100%;
+
+        // 遮罩：点空白 = 取消。
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: #00000073;
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { GameVersionsBoard.replace-cancelled(); }
+            }
+        }
+
+        card := Rectangle {
+            width: 460px;
+            // 高度跟着内容走（写死高度时内容一少，布局会把余量摊到各项之间，像散架）。
+            height: min(body.preferred-height + 48px, root.height - 40px);
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            border-radius: Tokens.radius-card;
+            background: Tokens.flyout;
+            border-width: 1px;
+            border-color: Tokens.flyout-stroke;
+
+            body := VerticalLayout {
+                x: 24px;
+                y: 24px;
+                width: parent.width - 48px;
+                spacing: 10px;
+
+                Text {
+                    text: "用这一版替换本机的存档？";
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Tokens.text;
+                }
+                Text {
+                    text: GameVersionsBoard.pending;
+                    font-size: 12px;
+                    color: Tokens.text-2;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: "本机现在的进度会被盖掉，这一步不能撤销。想留一手，就先点一次「立即同步」，把当前状态也传到云端。";
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    StdButton {
+                        label: "取消";
+                        button-width: 76px;
+                        clicked => { GameVersionsBoard.replace-cancelled(); }
+                    }
+                    AccentButton {
+                        label: "用这一版覆盖";
+                        button-width: 132px;
+                        button-enabled: !GameVersionsBoard.busy;
+                        clicked => { GameVersionsBoard.replace-confirmed(); }
+                    }
+                }
+            }
+        }
+    }
+}

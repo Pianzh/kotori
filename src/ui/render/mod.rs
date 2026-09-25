@@ -20,6 +20,7 @@ use detail::push_detail;
 use games::push_games;
 use settings::push_settings;
 use sync::{push_sync, push_sync_ask};
+use versions::push_versions;
 
 mod add;
 mod cloud;
@@ -27,6 +28,7 @@ mod detail;
 mod games;
 mod settings;
 mod sync;
+mod versions;
 
 #[cfg(test)]
 mod hit_test;
@@ -45,6 +47,7 @@ pub(super) fn render(ui: &mut Ui) {
     push_sync(ui);
     push_cloud(ui);
     push_sync_ask(ui);
+    push_versions(ui);
     push_settings(ui);
 }
 /// 「浏览…」:按钮能不能点,以及不能点时那行理由。

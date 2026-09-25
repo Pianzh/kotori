@@ -253,6 +253,16 @@ pub enum Message {
     CloudBack,
     /// `(云端落点, 这一款的版本明细)`。
     CloudVersionsLoaded(String, Result<Vec<CloudVersionRow>, String>),
+    /// 单游戏页那一页「这一款的云端存档」（`update::update_versions`）：点了身份那一条
+    /// （整条可点）→ 开页，并按当前这一款去列它那条身份在云端的版本。
+    GameVersionsOpened,
+    GameVersionsClosed,
+    GameVersionsLoaded(Result<Vec<CloudVersionRow>, String>),
+    /// 某一行的「替换」：载荷是**版本名**，真正的动作等二次确认。
+    GameVersionsReplace(String),
+    GameVersionsReplaceCancelled,
+    GameVersionsReplaceConfirmed,
+    GameVersionsReplaced(Result<String, String>),
     SyncMasterPasswordChanged(String),
     SyncUnlock,
     SyncUnlocked(Result<(), String>),

@@ -15,6 +15,7 @@ mod profile;
 pub(in crate::ui) mod run;
 mod settings;
 mod sync;
+mod versions;
 
 use settings::is_settings_message;
 
@@ -27,6 +28,9 @@ impl App {
                 self.draft = None;
                 self.confirm_delete = false;
                 self.confirm_stop = false;
+                // 那一层覆盖跟着"当前这一款"走：切页 / 回库 / 删条目时都不能留着，
+                // 否则下次进另一款，它带着上一款的版本直接盖上来。
+                self.versions.closed();
                 self.error = None;
                 if tab == Tab::Cloud {
                     return self.cloud_entered();
@@ -195,6 +199,7 @@ impl App {
                 self.saved_msg = None;
                 self.confirm_delete = false;
                 self.confirm_stop = false;
+                self.versions.closed();
                 flush
             }
             Message::SearchChanged(query) => {
@@ -239,6 +244,7 @@ impl App {
                     Ok(()) => {
                         self.selected = None;
                         self.draft = None;
+                        self.versions.closed();
                         self.error = None;
                         return Task::perform(async { connect_and_load().await }, |r| {
                             Message::GamesLoaded(r)
@@ -322,6 +328,16 @@ impl App {
             | Message::CloudBack
             | Message::CloudVersionsLoaded(..)) => self.update_cloud(m),
 
+            // ── 单游戏页那一页「这一款的云端存档」（处理在 `update::update_versions`） ──
+            // 与上面那一族分开：那一页只读，这一页能覆盖本机存档，是**写**动作。
+            m @ (Message::GameVersionsOpened
+            | Message::GameVersionsClosed
+            | Message::GameVersionsLoaded(..)
+            | Message::GameVersionsReplace(..)
+            | Message::GameVersionsReplaceCancelled
+            | Message::GameVersionsReplaceConfirmed
+            | Message::GameVersionsReplaced(..)) => self.update_versions(m),
+
             // ── 服务、wine 与单游戏设置（处理在 `update::update_settings`） ──
             // 这一族有哪些变体由 `is_settings_message` 说了算（它就在 handler 旁边，
             // 两处挨着改，不会漏）。
@@ -353,103 +369,8 @@ impl App {
                 self.begin_auto_save()
             }
             Message::SaveGroup(scope) => self.begin_save(scope),
-            Message::ProfileSaved(generation, result) => {
-                let Some(attempt) = self.save_in_flight.take() else {
-                    // 一笔只回一次,理论上到不了这儿;真到了也别让界面永远停在"保存中"。
-                    self.saving = false;
-                    return Task::none();
-                };
-                self.saving = false;
-                // 写的是哪一组由**那一笔自己**说了算（回包里不带，见 `Message`）。
-                let scope = attempt.scope;
-                // 用户可能已经翻到别的游戏去了:回包只能落在它自己那一份草稿上,
-                // 否则会把别人的 `*_original` 写成这个游戏的值。
-                let same_game = self.selected.as_deref() == Some(attempt.draft.game_id.as_str());
-
-                match &result {
-                    Ok(()) => {
-                        if same_game {
-                            if let Some(draft) = self.draft.as_mut() {
-                                // 服务端现在有的就是这一笔带过去的东西 ⇒ 把**这一组**
-                                // 的书签推进过去,下一次只发改过的字段(游戏盘没挂载时
-                                // 也不会因为重发旧路径而白报错)。另外两组没动过,别碰。
-                                match scope {
-                                    SaveScope::Auto => {}
-                                    SaveScope::Paths => {
-                                        draft.game_dir_original = attempt.draft.game_dir.clone();
-                                        draft.exe_original = attempt.draft.exe.clone();
-                                        draft.game_dir_mount_original =
-                                            attempt.draft.game_dir_mount.clone();
-                                        draft.exe_mount_original = attempt.draft.exe_mount.clone();
-                                    }
-                                    SaveScope::Saves => {
-                                        draft.save_paths_original =
-                                            attempt.draft.save_paths.clone();
-                                    }
-                                }
-                            }
-                            self.report_saved(
-                                if scope == SaveScope::Auto {
-                                    "已自动保存"
-                                } else {
-                                    "已保存"
-                                },
-                                true,
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        // 草稿一个字都不动:用户正在打的那半截不能被回包吃掉。
-                        if same_game {
-                            self.report_saved(format!("保存失败: {e}"), false);
-                        } else {
-                            // 已经离开那一页了,别把失败吞掉 —— 挂到顶部的错误条上。
-                            self.error = Some(format!("保存失败: {e}"));
-                        }
-                    }
-                }
-
-                // 这一笔已经过期(按过「重置」、又改过,或者用户已经翻到别的游戏去了):
-                // 配置里现在写着的可能是一个用户不要的值,用手上的草稿再存一次把它拉
-                // 回来。⚠ **不能只看 `same_game`**:切到另一款之后,新款那笔编辑会因为
-                // "上一笔还在路上"被退回,这里若不补发就再也没人发它了 —— B 的修改就是
-                // 这样丢的(BUG-18)。
-                //
-                // ⚠ **只有自动那一族才补发**:路径与存档位置是按钮驱动的,补发等于又把它
-                // 变回自动保存(用户 2026-09-25 明确不要那个)。
-                if scope == SaveScope::Auto && generation != self.autosave_generation {
-                    return self.begin_auto_save();
-                }
-                // 存完把库读一遍:列表与"已存值"要跟上,否则退出这一页再进来看到的是旧的。
-                // 页面自己的副本不会被它重置(种子没动,见 game-settings.slint)。
-                let socket = self.daemon_socket.clone();
-                Task::perform(
-                    async move { load_games_from(&socket).await },
-                    Message::GamesLoaded,
-                )
-            }
-            Message::ResetProfile => {
-                // 作废还挂在防抖窗口里的那一笔,然后把页面重新按「已存值」铺一遍
-                // (真正把副本抄回去的是 wire 里的 `reseed_detail`)。
-                self.cancel_auto_save();
-                let Some(game) = self.selected_game().cloned() else {
-                    return Task::none();
-                };
-                let unchanged = self
-                    .draft
-                    .as_ref()
-                    .is_none_or(|draft| draft.matches_stored(&game));
-                self.draft = Some(Draft::from_game(&game));
-                self.report_saved(
-                    if unchanged {
-                        "没有未保存的改动"
-                    } else {
-                        "已还原为已保存的设置"
-                    },
-                    true,
-                );
-                Task::none()
-            }
+            Message::ProfileSaved(generation, result) => self.profile_saved(generation, result),
+            Message::ResetProfile => self.reset_profile(),
             Message::PickerProbed(result) => {
                 if let Err(reason) = &result {
                     // 不是"出错了",是这台机器上确实没有 —— 记一条,界面据此灰掉按钮。

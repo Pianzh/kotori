@@ -28,6 +28,7 @@ import { GameActions } from "game-actions.slint";
 import { GameLaunchGroup } from "game-launch.slint";
 import { GameScaleAdvancedGroup, GameScaleGroup } from "game-scale.slint";
 import { GameSyncGroup } from "game-sync.slint";
+import { GameVersionsBoard, GameVersionsPage } from "game-versions.slint";
 
 
 
@@ -435,4 +436,8 @@ export component GameSettingsPage inherits Rectangle {
             root.open-save = -1;
         }
     }
+
+    // 这一款身份的云端存档：整页盖在最上面（连上面那两个下拉也盖住）。它与本页共用
+    // `game-open` —— 关掉就回到这里，左侧导航一动不动。状态在 `game-versions.slint` 里。
+    if GameVersionsBoard.open : GameVersionsPage { }
 }
