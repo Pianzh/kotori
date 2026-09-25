@@ -346,7 +346,7 @@ fn a_portable_config_never_reaches_for_the_system_keyring() {
     portable.set(SecretKey::B2KeyId, "portable-key").unwrap();
     assert!(plain.is_file(), "凭据该落在便携目录里");
     assert_eq!(
-        PlainFile::new(&plain).load().unwrap(),
+        PlainFile::new(plain).load().unwrap(),
         vec![(SecretKey::B2KeyId, "portable-key".to_string())]
     );
     std::fs::remove_dir_all(&dir).ok();

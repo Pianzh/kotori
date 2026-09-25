@@ -26,7 +26,7 @@ exe_path = "/games/probe/game.exe"
     // 机器上真实的那一份(`Daemon::new` 会走到真密钥环)。
     let daemon = Daemon::with_keyring_at(
         config,
-        crate::secrets::Keyring::plain_file(&dir.join("config_dir").join("credentials.json")),
+        crate::secrets::Keyring::plain_file(dir.join("config_dir").join("credentials.json")),
         dir.join("config_dir").join("secrets.json"),
     )
     .with_config_path(default.clone())
@@ -80,7 +80,7 @@ async fn switching_to_the_source_already_in_use_changes_nothing() {
     crate::config::save_to(&default, &Config::default()).unwrap();
     let daemon = Daemon::with_keyring_at(
         Config::default(),
-        crate::secrets::Keyring::plain_file(&dir.join("credentials.json")),
+        crate::secrets::Keyring::plain_file(dir.join("credentials.json")),
         dir.join("secrets.json"),
     )
     .with_config_path(default.clone())
@@ -131,7 +131,7 @@ async fn switching_the_config_source_takes_the_credentials_along() {
     let moved = portable_dir.join("credentials.json");
     assert!(moved.is_file(), "凭据没跟着配置走:{value}");
     assert_eq!(
-        crate::secrets::Keyring::plain_file(&moved)
+        crate::secrets::Keyring::plain_file(moved)
             .get(crate::secrets::SecretKey::B2KeyId)
             .unwrap(),
         Some("key-id".to_string())
