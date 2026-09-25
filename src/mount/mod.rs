@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "linux")]
 mod linux;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

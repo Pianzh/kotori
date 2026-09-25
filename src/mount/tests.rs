@@ -134,7 +134,7 @@ fn round_trip_through_a_bind_point_keeps_the_same_path() {
     // 两个候选长度相同,按确定性规则（字典序）选一个；两者都是同一份数据。
     assert!(matches!(
         table.resolve(&reference).unwrap(),
-        path if path == PathBuf::from("/r/w/games/Game/game.exe")
-            || path == PathBuf::from("/media/games/Game/game.exe")
+        path if path == *"/r/w/games/Game/game.exe"
+            || path == *"/media/games/Game/game.exe"
     ));
 }

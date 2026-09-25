@@ -360,22 +360,6 @@ impl GameConfig {
         }
     }
 
-    /// Working directory of a launch, and the base for relative save paths.
-    pub fn effective_game_dir(&self) -> PathBuf {
-        // 用于展示的兼容入口；文件操作必须使用可报告挂载失败的 resolved_game_dir。
-        if self.game_dir_mount.is_some() || self.exe_mount.is_some() {
-            return self.resolved_game_dir().unwrap_or_default();
-        }
-        if self.game_dir.as_os_str().is_empty() {
-            self.exe_path
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| PathBuf::from("."))
-        } else {
-            self.game_dir.clone()
-        }
-    }
-
     /// 自动追踪时要盯的进程名:`process_name` 优先,没写就用 exe 自己的文件名
     /// (与直启那条路一致 —— wine 会把 `argv[0]` 改成它)。
     ///
