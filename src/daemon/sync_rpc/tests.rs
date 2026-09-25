@@ -322,3 +322,49 @@ async fn the_pre_launch_self_check_asks_once_and_remembers_the_answer() {
         Decision::Ask { found: None }
     );
 }
+
+#[tokio::test]
+async fn resolve_can_bind_an_existing_cloud_identity() {
+    let (daemon, path) = daemon_at(Keyring::memory());
+    let value = call(
+        &daemon,
+        "sync.resolve",
+        r#"{"id":"demo","choice":"pair","cloud_id":"cloud-1","cloud_key":"remote/demo"}"#,
+    )
+    .await;
+    assert_eq!(value["result"]["ok"], true, "{value}");
+
+    let config = crate::config::load_from(&path).unwrap();
+    let game = &config.games["demo"];
+    assert_eq!(game.cloud_id.as_deref(), Some("cloud-1"));
+    assert_eq!(game.cloud_dir.as_deref(), Some("remote/demo"));
+    assert!(game
+        .cloud_conclusion
+        .as_deref()
+        .is_some_and(|value| value.starts_with("ok:")));
+
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}
+
+#[tokio::test]
+async fn resolve_pair_without_an_identity_creates_a_new_binding_decision() {
+    let (daemon, path) = daemon_at(Keyring::memory());
+    let value = call(
+        &daemon,
+        "sync.resolve",
+        r#"{"id":"demo","choice":"pair"}"#,
+    )
+    .await;
+    assert_eq!(value["result"]["ok"], true, "{value}");
+
+    let config = crate::config::load_from(&path).unwrap();
+    let game = &config.games["demo"];
+    assert!(game.cloud_id.is_none());
+    assert!(game.cloud_dir.is_none());
+    assert!(game
+        .cloud_conclusion
+        .as_deref()
+        .is_some_and(|value| value.starts_with("new:")));
+
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}

@@ -125,3 +125,48 @@ pub fn params(
 ) -> serde_json::Map<String, Value> {
     pairs.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use std::os::unix::net::UnixListener;
+    use std::thread;
+
+    async fn response_error(body: &'static [u8]) -> String {
+        let path = std::env::temp_dir().join(format!(
+            "kotori-rpc-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let listener = UnixListener::bind(&path).unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.write_all(body).unwrap();
+        });
+
+        let result = call(&path, "daemon.status", None).await;
+        server.join().unwrap();
+        let _ = std::fs::remove_file(path);
+        result.unwrap_err()
+    }
+
+    #[tokio::test]
+    async fn malformed_empty_and_error_responses_are_reported() {
+        assert!(
+            response_error(b"{not-json\n")
+                .await
+                .contains("响应解析失败")
+        );
+        assert_eq!(response_error(b"").await, "守护进程无响应");
+        assert_eq!(
+            response_error(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-1,\"message\":\"boom\"}}\n")
+                .await,
+            "boom"
+        );
+        assert_eq!(
+            response_error(b"{\"jsonrpc\":\"2.0\",\"id\":1}\n").await,
+            "响应缺少 result"
+        );
+    }
+}

@@ -284,3 +284,35 @@ fn the_cloud_list_is_read_from_a_local_cache_after_the_first_fetch() {
     let after = machine.rpc("sync.cloud_list", json!({}));
     assert_eq!(after["result"]["from_cache"], true, "{after}");
 }
+
+#[test]
+fn a_failed_refresh_keeps_the_old_cache_and_reports_the_error() {
+    let mut machine = Fixture::new("cache-failure");
+    machine.enable_fake_sync(true);
+    machine.start();
+    machine.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+
+    let first = machine.rpc("sync.cloud_list", json!({}));
+    assert_eq!(first["result"]["from_cache"], false, "{first}");
+    let cached_at = first["result"]["cached_at"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    std::fs::write(machine.dir.join("fail"), "index").unwrap();
+    let failed = machine.rpc("sync.cloud_list", json!({ "refresh": true }));
+    assert_eq!(failed["result"]["from_cache"], true, "{failed}");
+    assert_eq!(failed["result"]["cached_at"], cached_at, "{failed}");
+    assert!(
+        failed["result"]["refresh_error"].is_string(),
+        "刷新失败必须把原因带回界面: {failed}"
+    );
+
+    std::fs::remove_file(machine.dir.join("fail")).unwrap();
+    let recovered = machine.rpc("sync.cloud_list", json!({ "refresh": true }));
+    assert_eq!(recovered["result"]["from_cache"], false, "{recovered}");
+    assert!(recovered["result"]["refresh_error"].is_null(), "{recovered}");
+}

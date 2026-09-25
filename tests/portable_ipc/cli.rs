@@ -84,6 +84,21 @@ fn status_and_reload_report_missing_daemon_without_starting_one() {
 }
 
 #[test]
+fn sync_status_starts_a_missing_daemon() {
+    let fixture = Fixture::new("cli-autostart");
+    let status = run(&fixture, &["sync", "status"]);
+    assert!(
+        status.ok,
+        "stdout={} stderr={}",
+        status.out,
+        status.err
+    );
+
+    let shutdown = fixture.rpc("daemon.shutdown", json!({}));
+    assert!(shutdown.get("error").is_none(), "{shutdown}");
+}
+
+#[test]
 fn negative_sharpness_is_a_valid_argument_and_reaches_session_validation() {
     let mut fixture = Fixture::new("cli-negative");
     fixture.start();
