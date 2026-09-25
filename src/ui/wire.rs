@@ -201,11 +201,12 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_detail_sync_restore_cancelled(|| dispatch(Message::SyncRestoreCancelled));
 
     // ── 云同步 ────────────────────────────────────────────────────────────
-    window.on_sync_enabled_toggled(|value| dispatch(Message::SyncToggleEnabled(value)));
-    window.on_sync_engine_selected(|engine| {
+    let sync_form = window.global::<SyncBoard>();
+    sync_form.on_enabled_toggled(|value| dispatch(Message::SyncToggleEnabled(value)));
+    sync_form.on_engine_selected(|engine| {
         dispatch(Message::SyncEngineSelected(engine.to_string()));
     });
-    window.on_sync_field(|field, text| {
+    sync_form.on_field(|field, text| {
         // 5 是 applicationKey、6 是主密码:那两个里空格会混进密钥,换行必须**删掉**;
         // 其余都是普通单行文本,换行换成空格即可(见 `one_line`)。
         let text = if field == 5 || field == 6 {
@@ -229,12 +230,12 @@ pub(super) fn install_callbacks(window: &AppWindow) {
             _ => dispatch(Message::SyncMasterPasswordChanged(text)),
         }
     });
-    window.on_sync_save_kopia_password(|| dispatch(Message::SyncSaveKopiaPassword));
-    window.on_sync_save_settings(|| dispatch(Message::SyncSaveSettings));
+    sync_form.on_save_kopia_password(|| dispatch(Message::SyncSaveKopiaPassword));
+    sync_form.on_save_settings(|| dispatch(Message::SyncSaveSettings));
     // 「程序位置」的两个「浏览…」：借系统对话框挑目录（或可执行文件所在的目录）。
-    window.on_sync_browse_rclone_binary(|| dispatch(Message::PickPath(PathTarget::RcloneBinary)));
-    window.on_sync_browse_kopia_binary(|| dispatch(Message::PickPath(PathTarget::KopiaBinary)));
-    window.on_sync_test(|| dispatch(Message::SyncTest));
+    sync_form.on_browse_rclone_binary(|| dispatch(Message::PickPath(PathTarget::RcloneBinary)));
+    sync_form.on_browse_kopia_binary(|| dispatch(Message::PickPath(PathTarget::KopiaBinary)));
+    sync_form.on_test(|| dispatch(Message::SyncTest));
     // 启动前那一问：回答与取消都从一个 Slint 全局来（照 `CloudBoard`）。
     let ask = window.global::<SyncAskState>();
     ask.on_answered(|choice| dispatch(Message::SyncAskAnswered(choice.to_string())));
@@ -262,23 +263,23 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     cloud_pick.on_query_changed(|text| dispatch(Message::CloudPickSearch(one_line(&text))));
     cloud_pick.on_chosen(|cloud_id| dispatch(Message::CloudPickChoose(cloud_id.to_string())));
     cloud_pick.on_closed(|| dispatch(Message::CloudPickDismiss));
-    window.on_sync_now(|id| {
+    sync_form.on_now(|id| {
         let id = id.to_string();
         dispatch(Message::SyncNow((!id.is_empty()).then_some(id)));
     });
-    window.on_sync_restore(|id| {
+    sync_form.on_restore(|id| {
         dispatch(Message::SyncRestoreRequested(id.to_string(), None));
     });
-    window.on_sync_restore_confirmed(|| dispatch(Message::SyncRestoreConfirmed));
-    window.on_sync_restore_cancelled(|| dispatch(Message::SyncRestoreCancelled));
-    window.on_sync_save_credentials(|| dispatch(Message::SyncSaveCredentials));
-    window.on_sync_clear_credentials(|| dispatch(Message::SyncClearCredentials));
-    window.on_sync_unlock(|| dispatch(Message::SyncUnlock));
-    window.on_sync_set_master_password(|| dispatch(Message::SyncSetMasterPassword));
-    window.on_sync_lock_credentials(|| dispatch(Message::SyncLockCredentials));
-    window.on_sync_delete_master_requested(|| dispatch(Message::SyncMasterDeleteRequested));
-    window.on_sync_delete_master_cancelled(|| dispatch(Message::SyncMasterDeleteCancelled));
-    window.on_sync_delete_master_confirmed(|| dispatch(Message::SyncMasterDeleteConfirmed));
+    sync_form.on_restore_confirmed(|| dispatch(Message::SyncRestoreConfirmed));
+    sync_form.on_restore_cancelled(|| dispatch(Message::SyncRestoreCancelled));
+    sync_form.on_save_credentials(|| dispatch(Message::SyncSaveCredentials));
+    sync_form.on_clear_credentials(|| dispatch(Message::SyncClearCredentials));
+    sync_form.on_unlock(|| dispatch(Message::SyncUnlock));
+    sync_form.on_set_master_password(|| dispatch(Message::SyncSetMasterPassword));
+    sync_form.on_lock_credentials(|| dispatch(Message::SyncLockCredentials));
+    sync_form.on_delete_master_requested(|| dispatch(Message::SyncMasterDeleteRequested));
+    sync_form.on_delete_master_cancelled(|| dispatch(Message::SyncMasterDeleteCancelled));
+    sync_form.on_delete_master_confirmed(|| dispatch(Message::SyncMasterDeleteConfirmed));
 
     // ── 设置 ──────────────────────────────────────────────────────────────
     window.on_service_start(|| dispatch(Message::ServiceStart));

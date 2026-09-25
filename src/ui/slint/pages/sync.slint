@@ -14,83 +14,18 @@ import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { SyncCredentialsGroup } from "sync-credentials.slint";
 import { SyncKopiaGroup } from "sync-kopia.slint";
+import { SyncBoard } from "../state/sync-board.slint";
 
 export component SyncPage inherits ScrollView {
     // 见 `games.slint` 里的长注释:fluent 默认关掉拖拽滚动,没有滚轮的机器要靠这一行。
     mouse-drag-pan-enabled: true;
-    // ── 只读状态(daemon 报什么就显示什么) ────────────────────────────────
-    in property <bool> loaded: false;
-    in property <string> remote: "";
-    in property <string> rclone: "";
-    /// 当前引擎:`rclone` | `kopia`。两个引擎在桶里各写各的区域,所以这一条必须
-    /// 显示出来 —— 选错了不会报错,只会"看不见对面的存档"。
-    in property <string> engine: "rclone";
-    in property <string> kopia-binary: "";
-    in property <string> kopia-prefix: "";
-    /// 密码状态那句话(「默认 kotori」/「已自己设置」)。
-    in property <string> kopia-password-state: "";
-    in property <bool> kopia-using-default: true;
-    in property <string> keyring: "";
-    in property <bool> ephemeral: false;
-    in property <string> keyring-hint: "";
-    in property <string> problem: "";
-    in property <bool> ready: false;
-    in property <string> credentials-label: "";
-    in property <string> master-hint: "";
-    in property <int> store-kind: 0;          // 0 系统密钥环 / 1 主密码文件 / 2 仅本次会话
-    in property <bool> store-locked: false;
-    in property <string> store-path: "";
-    in property <string> master-file: "";
-    // 三级存储里现在生效的那一级的名字(「系统密钥环」/「主密码凭据文件」/「本次会话的内存」)。
-    in property <string> store-name: "";
-    in property <bool> confirm-master-delete: false;
-    in property <bool> can-delete-credentials: false;
-
-    // ── 可编辑 ────────────────────────────────────────────────────────────
-    // ⚠ 不能叫 `enabled`:ScrollView(std-widgets)自带这个属性名,重名编译器会拒绝。
-    in-out property <bool> sync-enabled: false;
-    in-out property <string> bucket: "";
-    in-out property <string> prefix: "";
-    in-out property <string> endpoint: "";
-    in-out property <string> keep-versions: "";
-    // 两个引擎的**程序位置**（用户填的；空 = 由 kotori 自己找：`KOTORI_*` → kotori
-    // 自己的目录 → PATH）。填目录或完整路径都行 —— 从资源管理器复制过来的是目录。
-    in-out property <string> rclone-input: "";
-    in-out property <string> kopia-input: "";
-    in-out property <string> key-id: "";
-    in-out property <string> app-key: "";
-    in-out property <string> master-password: "";
-    in-out property <string> kopia-password: "";
-    in-out property <bool> connection-revealed: false;
-
-    in property <bool> busy: false;
-    in property <string> message: "";
-    in property <bool> message-ok: true;
+    // 状态与回调都在 `SyncBoard` 里(见那个文件头)。那些字段不属于这一页,而属于窗口:
+    // Rust 把它当成一份表单来推、来收,和页面此刻是不是正显示无关。
+    //
+    // 页面自己只留两样私有的东西:入场动画的开关,以及窗口注入的「浏览…能不能用」。
     // 「浏览…」这台机器上能不能用（与其它页面同一个来源，理由在 `path-hint` 里）。
     in property <bool> browse-enabled: true;
-
     in-out property <bool> revealed: false;
-
-    callback enabled-toggled(bool);
-    callback engine-selected(string);
-    callback field(int, string);
-    callback browse-rclone-binary();
-    callback browse-kopia-binary();
-    callback save-settings();
-    callback save-kopia-password();
-    callback test();
-    callback sync-now(string);
-    callback restore(string);
-    callback restore-confirmed();
-    callback restore-cancelled();
-    callback save-credentials();
-    callback clear-credentials();
-    callback unlock();
-    callback set-master-password();
-    callback lock-credentials();
-    callback delete-master-requested();
-    callback delete-master-cancelled();
-    callback delete-master-confirmed();
 
     Timer { interval: 40ms; running: true; triggered => { root.revealed = true; } }
 
@@ -116,12 +51,12 @@ export component SyncPage inherits ScrollView {
                     HorizontalLayout {
                         spacing: 8px;
                         Text {
-                            text: root.ready ? "● 已就绪" : (root.problem != "" ? "● 待解决" : "● 未就绪");
+                            text: SyncBoard.ready ? "● 已就绪" : (SyncBoard.problem != "" ? "● 待解决" : "● 未就绪");
                             font-size: 13px;
-                            color: root.ready ? Tokens.ok : (root.problem != "" ? Tokens.warn : Tokens.text-3);
+                            color: SyncBoard.ready ? Tokens.ok : (SyncBoard.problem != "" ? Tokens.warn : Tokens.text-3);
                         }
                         Text {
-                            text: root.remote;
+                            text: SyncBoard.remote;
                             font-size: 13px;
                             color: Tokens.text-3;
                             overflow: elide;
@@ -135,14 +70,14 @@ export component SyncPage inherits ScrollView {
                         StdButton {
                             label: "测试连接";
                             button-width: 88px;
-                            button-enabled: !root.busy;
-                            clicked => { root.test(); }
+                            button-enabled: !SyncBoard.busy;
+                            clicked => { SyncBoard.test(); }
                         }
                         StdButton {
                             label: "立即同步全部";
                             button-width: 112px;
-                            button-enabled: !root.busy;
-                            clicked => { root.sync-now(""); }
+                            button-enabled: !SyncBoard.busy;
+                            clicked => { SyncBoard.now(""); }
                         }
                     }
                 }
@@ -165,31 +100,31 @@ export component SyncPage inherits ScrollView {
                     padding: 16px;
                     spacing: 4px;
                     Text {
-                        text: root.loaded ? (root.rclone != "" ? "rclone:" + root.rclone : "rclone 未安装(Arch:sudo pacman -S rclone)") : "读取中…";
+                        text: SyncBoard.loaded ? (SyncBoard.rclone != "" ? "rclone:" + SyncBoard.rclone : "rclone 未安装(Arch:sudo pacman -S rclone)") : "读取中…";
                         font-size: 11px;
-                        color: root.rclone != "" || !root.loaded ? Tokens.text-3 : Tokens.warn;
+                        color: SyncBoard.rclone != "" || !SyncBoard.loaded ? Tokens.text-3 : Tokens.warn;
                         wrap: word-wrap;
                     }
                     Text {
-                        text: "凭据存放:" + root.keyring;
+                        text: "凭据存放:" + SyncBoard.keyring;
                         font-size: 11px;
-                        color: root.ephemeral ? Tokens.warn : Tokens.text-3;
+                        color: SyncBoard.ephemeral ? Tokens.warn : Tokens.text-3;
                         wrap: word-wrap;
                     }
-                    if root.ephemeral : Text {
+                    if SyncBoard.ephemeral : Text {
                         text: "⚠ 连凭据文件都写不下去,填进去的凭据只留在内存里,重启后要重新输入。";
                         font-size: 11px;
                         color: Tokens.warn;
                         wrap: word-wrap;
                     }
-                    if root.ephemeral : Text {
-                        text: root.keyring-hint;
+                    if SyncBoard.ephemeral : Text {
+                        text: SyncBoard.keyring-hint;
                         font-size: 11px;
                         color: Tokens.text-3;
                         wrap: word-wrap;
                     }
-                    if root.problem != "" : Text {
-                        text: "待解决:" + root.problem;
+                    if SyncBoard.problem != "" : Text {
+                        text: "待解决:" + SyncBoard.problem;
                         font-size: 11px;
                         color: Tokens.warn;
                         wrap: word-wrap;
@@ -214,8 +149,8 @@ export component SyncPage inherits ScrollView {
                     title: "启用云同步";
                     description: "退出游戏后自动上传存档,启动前自动取回较新的版本。";
                     Switch {
-                        checked <=> root.sync-enabled;
-                        toggled => { root.enabled-toggled(root.sync-enabled); }
+                        checked <=> SyncBoard.enabled;
+                        toggled => { SyncBoard.enabled-toggled(SyncBoard.enabled); }
                     }
                 }
                 Divider { }
@@ -225,16 +160,16 @@ export component SyncPage inherits ScrollView {
                     HorizontalLayout {
                         spacing: 8px;
                         StdButton {
-                            label: root.engine == "rclone" ? "rclone(zip) √" : "rclone(zip)";
+                            label: SyncBoard.engine == "rclone" ? "rclone(zip) √" : "rclone(zip)";
                             button-width: 124px;
-                            button-enabled: !root.busy && root.engine != "rclone";
-                            clicked => { root.engine-selected("rclone"); }
+                            button-enabled: !SyncBoard.busy && SyncBoard.engine != "rclone";
+                            clicked => { SyncBoard.engine-selected("rclone"); }
                         }
                         StdButton {
-                            label: root.engine == "kopia" ? "kopia √" : "kopia";
+                            label: SyncBoard.engine == "kopia" ? "kopia √" : "kopia";
                             button-width: 96px;
-                            button-enabled: !root.busy && root.engine != "kopia";
-                            clicked => { root.engine-selected("kopia"); }
+                            button-enabled: !SyncBoard.busy && SyncBoard.engine != "kopia";
+                            clicked => { SyncBoard.engine-selected("kopia"); }
                         }
                     }
                 }
@@ -246,14 +181,14 @@ export component SyncPage inherits ScrollView {
                         spacing: 4px;
                         PathField {
                             field-width: 300px;
-                            text <=> root.rclone-input;
-                            edited(text) => { root.field(8, text); }
+                            text <=> SyncBoard.rclone-input;
+                            edited(text) => { SyncBoard.field(8, text); }
                             browse-enabled: root.browse-enabled;
-                            browse-clicked => { root.browse-rclone-binary(); }
+                            browse-clicked => { SyncBoard.browse-rclone-binary(); }
                             placeholder: "留空＝自己去 PATH 里找";
                         }
                         Text {
-                            text: root.rclone == "" ? "当前：没找到 rclone" : "当前：" + root.rclone;
+                            text: SyncBoard.rclone == "" ? "当前：没找到 rclone" : "当前：" + SyncBoard.rclone;
                             font-size: 11px;
                             color: Tokens.text-3;
                             wrap: word-wrap;
@@ -268,14 +203,14 @@ export component SyncPage inherits ScrollView {
                         spacing: 4px;
                         PathField {
                             field-width: 300px;
-                            text <=> root.kopia-input;
-                            edited(text) => { root.field(9, text); }
+                            text <=> SyncBoard.kopia-input;
+                            edited(text) => { SyncBoard.field(9, text); }
                             browse-enabled: root.browse-enabled;
-                            browse-clicked => { root.browse-kopia-binary(); }
+                            browse-clicked => { SyncBoard.browse-kopia-binary(); }
                             placeholder: "留空＝自己去 PATH 里找";
                         }
                         Text {
-                            text: root.kopia-binary == "" ? "当前：没找到 kopia" : "当前：" + root.kopia-binary;
+                            text: SyncBoard.kopia-binary == "" ? "当前：没找到 kopia" : "当前：" + SyncBoard.kopia-binary;
                             font-size: 11px;
                             color: Tokens.text-3;
                             wrap: word-wrap;
@@ -292,8 +227,8 @@ export component SyncPage inherits ScrollView {
                     description: "Backblaze 控制台(B2 Cloud Storage → Buckets → Create a Bucket)里你自己建的桶的名字:全局唯一,重名要换一个;类型选 Private——存档不该公开可读。它不是凭据:只能访问这个桶的 keyID / applicationKey 在凭据区填。bucket 是整个桶,下面那行 prefix 是桶里归 kotori 独占的目录(<bucket>/<prefix>/…),桶里放别的东西不冲突,kotori 只碰自己 prefix 下的路径。⚠ 随本组最下面的「保存设置」一起保存。";
                     TextField {
                         field-width: 220px;
-                        text <=> root.bucket;
-                        edited(text) => { root.field(1, text); }
+                        text <=> SyncBoard.bucket;
+                        edited(text) => { SyncBoard.field(1, text); }
                         placeholder: "kotori-saves";
                     }
                 }
@@ -303,8 +238,8 @@ export component SyncPage inherits ScrollView {
                     description: "bucket 里归 kotori 独占的目录(bucket 在上面那一行填),bucket 里的其他东西我们一律不碰。";
                     TextField {
                         field-width: 220px;
-                        text <=> root.prefix;
-                        edited(text) => { root.field(2, text); }
+                        text <=> SyncBoard.prefix;
+                        edited(text) => { SyncBoard.field(2, text); }
                         placeholder: "kotori";
                     }
                 }
@@ -314,8 +249,8 @@ export component SyncPage inherits ScrollView {
                     description: "留空即可(rclone 会自己找到)。填 s3.<区域>.backblazeb2.com 会被明确拒绝 —— 那对 s3 后端才成立。";
                     TextField {
                         field-width: 220px;
-                        text <=> root.endpoint;
-                        edited(text) => { root.field(0, text); }
+                        text <=> SyncBoard.endpoint;
+                        edited(text) => { SyncBoard.field(0, text); }
                         placeholder: "留空";
                     }
                 }
@@ -325,8 +260,8 @@ export component SyncPage inherits ScrollView {
                     description: "0 表示永不删除云端版本;填写后只清理旧版本包,绝不动本地存档。";
                     TextField {
                         field-width: 100px;
-                        text <=> root.keep-versions;
-                        edited(text) => { root.field(3, text); }
+                        text <=> SyncBoard.keep-versions;
+                        edited(text) => { SyncBoard.field(3, text); }
                         placeholder: "0";
                     }
                 }
@@ -337,44 +272,44 @@ export component SyncPage inherits ScrollView {
                     AccentButton {
                         label: "保存设置";
                         button-width: 108px;
-                        button-enabled: !root.busy;
-                        clicked => { root.save-settings(); }
+                        button-enabled: !SyncBoard.busy;
+                        clicked => { SyncBoard.save-settings(); }
                     }
                     Text {
-                        text: root.message;
+                        text: SyncBoard.message;
                         font-size: 12px;
-                        color: root.message-ok ? Tokens.ok : Tokens.danger;
+                        color: SyncBoard.message-ok ? Tokens.ok : Tokens.danger;
                         vertical-alignment: center;
                         wrap: word-wrap;
                         horizontal-stretch: 1;
-                        visible: root.message != "";
+                        visible: SyncBoard.message != "";
                     }
                 }
             }
         }
 
         // ── kopia 仓库(只在 kopia 模式下) ───────────────────────────────
-        if root.engine == "kopia" : RevealItem {
+        if SyncBoard.engine == "kopia" : RevealItem {
             revealed: root.revealed;
             step: 4;
             bottom: 8px;
             SectionTitle { text: "kopia 仓库"; }
         }
-        if root.engine == "kopia" : RevealItem {
+        if SyncBoard.engine == "kopia" : RevealItem {
             revealed: root.revealed;
             step: 5;
             bottom: 24px;
             SyncKopiaGroup {
-                binary: root.kopia-binary;
-                bucket: root.bucket;
-                repo-prefix: root.kopia-prefix;
-                password-state: root.kopia-password-state;
-                using-default: root.kopia-using-default;
-                busy: root.busy;
-                password <=> root.kopia-password;
-                revealed <=> root.connection-revealed;
-                field(id, text) => { root.field(id, text); }
-                save-password => { root.save-kopia-password(); }
+                binary: SyncBoard.kopia-binary;
+                bucket: SyncBoard.bucket;
+                repo-prefix: SyncBoard.kopia-prefix;
+                password-state: SyncBoard.kopia-password-state;
+                using-default: SyncBoard.kopia-using-default;
+                busy: SyncBoard.busy;
+                password <=> SyncBoard.kopia-password;
+                revealed <=> SyncBoard.connection-revealed;
+                field(id, text) => { SyncBoard.field(id, text); }
+                save-password => { SyncBoard.save-kopia-password(); }
             }
         }
 
@@ -390,28 +325,28 @@ export component SyncPage inherits ScrollView {
             step: 6;
             bottom: 24px;
                 SyncCredentialsGroup {
-                    store-kind: root.store-kind;
-                    store-locked: root.store-locked;
-                    store-path: root.store-path;
-                    master-file: root.master-file;
-                    store-name: root.store-name;
-                    confirm-master-delete: root.confirm-master-delete;
-                    credentials-label: root.credentials-label;
-                    master-hint: root.master-hint;
-                    can-delete-credentials: root.can-delete-credentials;
-                    busy: root.busy;
-                    key-id <=> root.key-id;
-                    app-key <=> root.app-key;
-                    master-password <=> root.master-password;
-                    field(id, text) => { root.field(id, text); }
-                    save-credentials => { root.save-credentials(); }
-                    clear-credentials => { root.clear-credentials(); }
-                    unlock => { root.unlock(); }
-                    set-master-password => { root.set-master-password(); }
-                    lock-credentials => { root.lock-credentials(); }
-                    delete-master-requested => { root.delete-master-requested(); }
-                    delete-master-cancelled => { root.delete-master-cancelled(); }
-                    delete-master-confirmed => { root.delete-master-confirmed(); }
+                    store-kind: SyncBoard.store-kind;
+                    store-locked: SyncBoard.store-locked;
+                    store-path: SyncBoard.store-path;
+                    master-file: SyncBoard.master-file;
+                    store-name: SyncBoard.store-name;
+                    confirm-master-delete: SyncBoard.confirm-master-delete;
+                    credentials-label: SyncBoard.credentials-label;
+                    master-hint: SyncBoard.master-hint;
+                    can-delete-credentials: SyncBoard.can-delete-credentials;
+                    busy: SyncBoard.busy;
+                    key-id <=> SyncBoard.key-id;
+                    app-key <=> SyncBoard.app-key;
+                    master-password <=> SyncBoard.master-password;
+                    field(id, text) => { SyncBoard.field(id, text); }
+                    save-credentials => { SyncBoard.save-credentials(); }
+                    clear-credentials => { SyncBoard.clear-credentials(); }
+                    unlock => { SyncBoard.unlock(); }
+                    set-master-password => { SyncBoard.set-master-password(); }
+                    lock-credentials => { SyncBoard.lock-credentials(); }
+                    delete-master-requested => { SyncBoard.delete-master-requested(); }
+                    delete-master-cancelled => { SyncBoard.delete-master-cancelled(); }
+                    delete-master-confirmed => { SyncBoard.delete-master-confirmed(); }
                 }
         }
 

@@ -327,7 +327,9 @@ pub(super) fn settings_page(mut ui: Ui) {
         (4, "key_id"),
         (5, "app_key"),
     ] {
-        window.invoke_sync_field(field, format!("v{field}").into());
+        window
+            .global::<SyncBoard>()
+            .invoke_field(field, format!("v{field}").into());
         let form = with_ui(|ui| ui.app.sync_form.clone());
         let actual = match expected {
             "endpoint" => form.endpoint,
@@ -340,42 +342,54 @@ pub(super) fn settings_page(mut ui: Ui) {
         assert_eq!(actual, format!("v{field}"), "字段 {field}");
     }
     // 6 是主密码:它不是 `[sync]` 里的设置项,所以不走 SyncField。
-    window.invoke_sync_field(6, "master".into());
+    window
+        .global::<SyncBoard>()
+        .invoke_field(6, "master".into());
     assert_eq!(
         with_ui(|ui| ui.app.sync_form.master_password.clone()),
         "master"
     );
 
     // 恢复要二次确认:`restore` 只记下"待确认",`restore_cancelled` 抹掉它。
-    window.invoke_sync_restore("demo".into());
+    window.global::<SyncBoard>().invoke_restore("demo".into());
     assert_app(&|app| {
         assert_eq!(
             app.sync_restore_pending.as_ref().map(|(id, _)| id.as_str()),
             Some("demo")
         )
     });
-    window.invoke_sync_restore_cancelled();
+    window.global::<SyncBoard>().invoke_restore_cancelled();
     assert_app(&|app| assert!(app.sync_restore_pending.is_none()));
 
     // 没先点"删除"就直接确认:什么都不该发生(防手滑)。
-    window.invoke_sync_delete_master_confirmed();
+    window
+        .global::<SyncBoard>()
+        .invoke_delete_master_confirmed();
     assert_app(&|app| assert!(!app.sync_form.busy));
 
     // 删除凭据文件:请求 → 待确认;取消 → 抹掉;确认 → 发出去。测试里没有 daemon,
     // 任务不会回包,所以只断言"待确认"被清掉、表单进入忙。
-    window.invoke_sync_delete_master_requested();
+    window
+        .global::<SyncBoard>()
+        .invoke_delete_master_requested();
     assert_app(&|app| assert!(app.sync_form.confirm_master_delete));
-    window.invoke_sync_delete_master_cancelled();
+    window
+        .global::<SyncBoard>()
+        .invoke_delete_master_cancelled();
     assert_app(&|app| assert!(!app.sync_form.confirm_master_delete));
-    window.invoke_sync_delete_master_requested();
-    window.invoke_sync_delete_master_confirmed();
+    window
+        .global::<SyncBoard>()
+        .invoke_delete_master_requested();
+    window
+        .global::<SyncBoard>()
+        .invoke_delete_master_confirmed();
     assert_app(&|app| {
         assert!(!app.sync_form.confirm_master_delete);
         assert!(app.sync_form.busy);
     });
     with_ui(|ui| ui.app.sync_form.busy = false);
 
-    window.invoke_sync_lock_credentials();
+    window.global::<SyncBoard>().invoke_lock_credentials();
     assert_app(&|app| assert!(app.sync_form.busy));
     with_ui(|ui| ui.app.sync_form.busy = false);
 

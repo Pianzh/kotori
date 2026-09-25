@@ -1,0 +1,84 @@
+// 「云同步」页的表单与状态 —— 一个全局。
+//
+// 为什么要一个全局,而不是留在这页自己的属性里:Rust 侧只摸得到**根窗口**和全局,
+// 所以页面要跟 Rust 交换的每个属性,都得在根窗口上再声明一遍、再写一遍转发回调。
+// 「云同步」这一族有 37 个属性 + 20 个回调,摊在 `app.slint` 里就是 125 行 —— 它就是
+// 被这么顶到 543 行的。放进全局之后两侧都直接读写,根窗口一行都不用写。
+//
+// 同一条路子的先例(见各自文件头):`ProcessPickerState`、`CloudPickerState`、
+// `SyncAskState`、`AddMatchBoard`、`CloudBoard`、`GameSyncBoard`。
+//
+// ⚠ 只放**跨组件共享**的字段。页面私有的留在 `pages/sync.slint` 自己身上:入场动画的
+// `revealed`,以及由窗口注入的 `browse-enabled`。
+
+export global SyncBoard {
+    // ── 只读状态(daemon 报什么就显示什么) ────────────────────────────────
+    in-out property <bool> loaded: false;
+    in-out property <string> remote: "";
+    in-out property <string> rclone: "";
+    /// 当前引擎:`rclone` | `kopia`。两个引擎在桶里各写各的区域,所以这一条必须
+    /// 显示出来 —— 选错了不会报错,只会"看不见对面的存档"。
+    in-out property <string> engine: "rclone";
+    in-out property <string> kopia-binary: "";
+    in-out property <string> kopia-prefix: "";
+    /// 密码状态那句话(「默认 kotori」/「已自己设置」)。
+    in-out property <string> kopia-password-state: "";
+    in-out property <bool> kopia-using-default: true;
+    in-out property <string> keyring: "";
+    in-out property <bool> ephemeral: false;
+    in-out property <string> keyring-hint: "";
+    in-out property <string> problem: "";
+    in-out property <bool> ready: false;
+    in-out property <string> credentials-label: "";
+    in-out property <string> master-hint: "";
+    in-out property <int> store-kind: 0;      // 0 系统密钥环 / 1 主密码文件 / 2 仅本次会话
+    in-out property <bool> store-locked: false;
+    in-out property <string> store-path: "";
+    in-out property <string> master-file: "";
+    /// 三级存储里现在生效的那一级的名字(「系统密钥环」/「主密码凭据文件」/「本次会话的内存」)。
+    in-out property <string> store-name: "";
+    in-out property <bool> confirm-master-delete: false;
+    in-out property <bool> can-delete-credentials: false;
+    in-out property <bool> busy: false;
+    in-out property <string> message: "";
+    in-out property <bool> message-ok: true;
+
+    // ── 可编辑 ────────────────────────────────────────────────────────────
+    // ⚠ 它曾在页面上叫 `sync-enabled`:那个前缀是为了躲开 ScrollView(std-widgets)
+    // 自带的 `enabled`(重名编译器会拒绝)。全局没有这个包袱,所以这里就叫 `enabled`。
+    in-out property <bool> enabled: false;
+    in-out property <string> bucket: "";
+    in-out property <string> prefix: "";
+    in-out property <string> endpoint: "";
+    in-out property <string> keep-versions: "";
+    // 两个引擎的**程序位置**（用户填的；空 = 由 kotori 自己找：`KOTORI_*` → kotori
+    // 自己的目录 → PATH）。填目录或完整路径都行 —— 从资源管理器复制过来的是目录。
+    in-out property <string> rclone-input: "";
+    in-out property <string> kopia-input: "";
+    in-out property <string> key-id: "";
+    in-out property <string> app-key: "";
+    in-out property <string> master-password: "";
+    in-out property <string> kopia-password: "";
+    in-out property <bool> connection-revealed: false;
+
+    callback enabled-toggled(bool);
+    callback engine-selected(string);
+    callback field(int, string);
+    callback browse-rclone-binary();
+    callback browse-kopia-binary();
+    callback save-settings();
+    callback save-kopia-password();
+    callback test();
+    callback now(string);
+    callback restore(string);
+    callback restore-confirmed();
+    callback restore-cancelled();
+    callback save-credentials();
+    callback clear-credentials();
+    callback unlock();
+    callback set-master-password();
+    callback lock-credentials();
+    callback delete-master-requested();
+    callback delete-master-cancelled();
+    callback delete-master-confirmed();
+}

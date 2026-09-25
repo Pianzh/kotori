@@ -4,60 +4,54 @@ use super::*;
 
 pub(super) fn push_sync(ui: &mut Ui) {
     let app = &ui.app;
-    let w = &ui.window;
+    // 这一族住在一个 Slint 全局里(见 `slint/state/sync-board.slint`):页面与 Rust 都直接
+    // 读写它,根窗口不再替它转发 —— 它曾经是 `app.slint` 里最长的那一段。
+    let f = ui.window.global::<SyncBoard>();
     let form = &app.sync_form;
     let status = app.sync_status.as_ref();
 
     // ── 可编辑的一半 ──
-    push_bool(w.get_sync_enabled(), form.enabled, |v| {
-        w.set_sync_enabled(v)
-    });
-    push_str(w.get_sync_bucket(), &form.bucket, |v| w.set_sync_bucket(v));
-    push_str(w.get_sync_prefix(), &form.prefix, |v| w.set_sync_prefix(v));
-    push_str(w.get_sync_endpoint(), &form.endpoint, |v| {
-        w.set_sync_endpoint(v)
-    });
-    push_str(w.get_sync_keep_versions(), &form.keep_versions, |v| {
-        w.set_sync_keep_versions(v)
+    push_bool(f.get_enabled(), form.enabled, |v| f.set_enabled(v));
+    push_str(f.get_bucket(), &form.bucket, |v| f.set_bucket(v));
+    push_str(f.get_prefix(), &form.prefix, |v| f.set_prefix(v));
+    push_str(f.get_endpoint(), &form.endpoint, |v| f.set_endpoint(v));
+    push_str(f.get_keep_versions(), &form.keep_versions, |v| {
+        f.set_keep_versions(v)
     });
     // 两个"程序位置"：用户**填的**那一份（空 = 由 kotori 自己找）。它们和 bucket 一样
     // 属于表单；"当前生效的路径"是另一回事，由下面只读区推（见 `sync-rclone`）。
-    push_str(w.get_sync_rclone_input(), &form.rclone_binary, |v| {
-        w.set_sync_rclone_input(v)
+    push_str(f.get_rclone_input(), &form.rclone_binary, |v| {
+        f.set_rclone_input(v)
     });
-    push_str(w.get_sync_kopia_input(), &form.kopia_binary, |v| {
-        w.set_sync_kopia_input(v)
+    push_str(f.get_kopia_input(), &form.kopia_binary, |v| {
+        f.set_kopia_input(v)
     });
-    push_str(w.get_sync_key_id(), &form.key_id, |v| w.set_sync_key_id(v));
-    push_str(w.get_sync_app_key(), &form.app_key, |v| {
-        w.set_sync_app_key(v)
+    push_str(f.get_key_id(), &form.key_id, |v| f.set_key_id(v));
+    push_str(f.get_app_key(), &form.app_key, |v| f.set_app_key(v));
+    push_str(f.get_master_password(), &form.master_password, |v| {
+        f.set_master_password(v)
     });
-    push_str(w.get_sync_master_password(), &form.master_password, |v| {
-        w.set_sync_master_password(v)
+    push_str(f.get_engine(), &form.engine, |v| f.set_engine(v));
+    push_str(f.get_kopia_password(), &form.kopia_password, |v| {
+        f.set_kopia_password(v)
     });
-    push_str(w.get_sync_engine(), &form.engine, |v| w.set_sync_engine(v));
-    push_str(w.get_sync_kopia_password(), &form.kopia_password, |v| {
-        w.set_sync_kopia_password(v)
+    push_bool(f.get_connection_revealed(), form.connection_revealed, |v| {
+        f.set_connection_revealed(v)
     });
+    push_bool(f.get_busy(), form.busy, |v| f.set_busy(v));
     push_bool(
-        w.get_sync_connection_revealed(),
-        form.connection_revealed,
-        |v| w.set_sync_connection_revealed(v),
-    );
-    push_bool(w.get_sync_busy(), form.busy, |v| w.set_sync_busy(v));
-    push_bool(
-        w.get_sync_confirm_master_delete(),
+        f.get_confirm_master_delete(),
         form.confirm_master_delete,
-        |v| w.set_sync_confirm_master_delete(v),
+        |v| f.set_confirm_master_delete(v),
     );
 
     let message = form.msg.clone().unwrap_or_default();
     let ok = !message.contains("失败") && !message.contains("不一样") && !message.contains("请先");
-    push_str(w.get_sync_message(), &message, |v| w.set_sync_message(v));
-    push_bool(w.get_sync_message_ok(), ok, |v| w.set_sync_message_ok(v));
+    push_str(f.get_message(), &message, |v| f.set_message(v));
+    push_bool(f.get_message_ok(), ok, |v| f.set_message_ok(v));
 
     // ── 只读的一半 ──
-    push_bool(w.get_sync_loaded(), form.loaded, |v| w.set_sync_loaded(v));
+    push_bool(f.get_loaded(), form.loaded, |v| f.set_loaded(v));
     let (has_key_id, has_app_key) = match status {
         Some(status) => (
             status.has_secret("b2-key-id"),
@@ -67,86 +61,78 @@ pub(super) fn push_sync(ui: &mut Ui) {
     };
     let empty = SyncStatus::default();
     let status = status.unwrap_or(&empty);
-    push_str(w.get_sync_remote(), &status.remote, |v| {
-        w.set_sync_remote(v)
-    });
+    push_str(f.get_remote(), &status.remote, |v| f.set_remote(v));
     push_str(
-        w.get_sync_rclone(),
+        f.get_rclone(),
         status.rclone.as_deref().unwrap_or_default(),
-        |v| w.set_sync_rclone(v),
+        |v| f.set_rclone(v),
     );
     push_str(
-        w.get_sync_kopia_binary(),
+        f.get_kopia_binary(),
         status.kopia.as_deref().unwrap_or_default(),
-        |v| w.set_sync_kopia_binary(v),
+        |v| f.set_kopia_binary(v),
     );
     // 引擎只推一次(上面表单那一处):它既是可编辑项、又是状态显示项,
     // 推两次会让用户刚点的选择被随后的 status 覆盖。
-    push_str(w.get_sync_kopia_prefix(), &status.kopia_prefix, |v| {
-        w.set_sync_kopia_prefix(v)
+    push_str(f.get_kopia_prefix(), &status.kopia_prefix, |v| {
+        f.set_kopia_prefix(v)
     });
     // 密码状态只说"是不是默认",绝不说值 —— 值从来没离开过凭据库。
     let kopia_password_set = status.has_secret("kopia-password");
-    push_bool(w.get_sync_kopia_using_default(), !kopia_password_set, |v| {
-        w.set_sync_kopia_using_default(v)
+    push_bool(f.get_kopia_using_default(), !kopia_password_set, |v| {
+        f.set_kopia_using_default(v)
     });
     push_str(
-        w.get_sync_kopia_password_state(),
+        f.get_kopia_password_state(),
         if kopia_password_set {
             "已自己设置(存在凭据库里)"
         } else {
             "默认的 kotori"
         },
-        |v| w.set_sync_kopia_password_state(v),
+        |v| f.set_kopia_password_state(v),
     );
-    push_str(w.get_sync_keyring(), &status.keyring, |v| {
-        w.set_sync_keyring(v)
-    });
-    push_bool(w.get_sync_ephemeral(), status.ephemeral, |v| {
-        w.set_sync_ephemeral(v)
+    push_str(f.get_keyring(), &status.keyring, |v| f.set_keyring(v));
+    push_bool(f.get_ephemeral(), status.ephemeral, |v| f.set_ephemeral(v));
+    push_str(f.get_keyring_hint(), crate::secrets::keyring_hint(), |v| {
+        f.set_keyring_hint(v)
     });
     push_str(
-        w.get_sync_keyring_hint(),
-        crate::secrets::keyring_hint(),
-        |v| w.set_sync_keyring_hint(v),
-    );
-    push_str(
-        w.get_sync_problem(),
+        f.get_problem(),
         status.problem.as_deref().unwrap_or_default(),
-        |v| w.set_sync_problem(v),
+        |v| f.set_problem(v),
     );
-    push_bool(w.get_sync_ready(), status.ready, |v| w.set_sync_ready(v));
-    push_int(w.get_sync_store_kind(), status.store().index(), |v| {
-        w.set_sync_store_kind(v)
+    push_bool(f.get_ready(), status.ready, |v| f.set_ready(v));
+    push_int(f.get_store_kind(), status.store().index(), |v| {
+        f.set_store_kind(v)
     });
     // 说"存到哪"/"存在哪"都用这一级自己的名字:没有密钥环的机器上凭据只在内存里,
     // 文案写成"密钥环"就是在骗用户。
-    push_str(w.get_sync_store_name(), status.store().name(), |v| {
-        w.set_sync_store_name(v)
+    push_str(f.get_store_name(), status.store().name(), |v| {
+        f.set_store_name(v)
     });
-    push_str(w.get_sync_store_path(), &status.store_path, |v| {
-        w.set_sync_store_path(v)
+    push_str(f.get_store_path(), &status.store_path, |v| {
+        f.set_store_path(v)
     });
-    push_str(w.get_sync_master_file(), &status.master_file, |v| {
-        w.set_sync_master_file(v)
+    push_str(f.get_master_file(), &status.master_file, |v| {
+        f.set_master_file(v)
     });
-    push_bool(w.get_sync_store_locked(), status.store_locked, |v| {
-        w.set_sync_store_locked(v)
+    push_bool(f.get_store_locked(), status.store_locked, |v| {
+        f.set_store_locked(v)
     });
     push_bool(
-        w.get_sync_has_credentials(),
+        f.get_can_delete_credentials(),
         has_key_id || has_app_key,
-        |v| w.set_sync_has_credentials(v),
+        |v| f.set_can_delete_credentials(v),
     );
     push_str(
-        w.get_sync_credentials_label(),
+        f.get_credentials_label(),
         &credentials_label(has_key_id, has_app_key, status.store().name()),
-        |v| w.set_sync_credentials_label(v),
+        |v| f.set_credentials_label(v),
     );
     push_str(
-        w.get_sync_master_hint(),
+        f.get_master_hint(),
         &format!("至少 {} 位,自己记得住就行", app.min_master_password()),
-        |v| w.set_sync_master_hint(v),
+        |v| f.set_master_hint(v),
     );
 }
 

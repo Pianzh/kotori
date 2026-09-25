@@ -21,8 +21,9 @@ import { CloudPickerDialog, CloudPickerState } from "widgets/cloud-picker.slint"
 import { SyncAskDialog, SyncAskState } from "widgets/sync-ask.slint";
 import { CloudPage, CloudBoard } from "pages/cloud.slint";
 import { GameSyncBoard } from "pages/game-sync.slint";
+import { SyncBoard } from "state/sync-board.slint";
 // 再导出一次是**给 Rust 看的**:只有主文件导出过的全局才生成 `window.global::<…>()`。
-export { ProcessPickerState, SyncAskState, CloudBoard, AddMatchBoard, CloudPickerState, GameSyncBoard }
+export { ProcessPickerState, SyncAskState, CloudBoard, AddMatchBoard, CloudPickerState, GameSyncBoard, SyncBoard }
 
 export component AppWindow inherits Window {
     title: "Kotori";
@@ -178,70 +179,8 @@ export component AppWindow inherits Window {
     callback detail-sync-restore-cancelled();
 
     // ── 云同步 ────────────────────────────────────────────────────────────
-    in-out property <bool> sync-loaded: false;
-    in-out property <string> sync-remote: "";
-    in-out property <string> sync-rclone: "";
-    // 当前引擎(rclone | kopia)。两个引擎在桶里各写各的区域,所以这一条要显示出来。
-    in-out property <string> sync-engine: "rclone";
-    in-out property <string> sync-kopia-binary: "";
-    in-out property <string> sync-kopia-prefix: "";
-    in-out property <string> sync-kopia-password-state: "";
-    in-out property <bool> sync-kopia-using-default: true;
-    in-out property <string> sync-keyring: "";
-    in-out property <bool> sync-ephemeral: false;
-    in-out property <string> sync-keyring-hint: "";
-    in-out property <string> sync-problem: "";
-    in-out property <bool> sync-ready: false;
-    in-out property <string> sync-credentials-label: "";
-    in-out property <string> sync-master-hint: "";
-    in-out property <int> sync-store-kind: 0;
-    in-out property <bool> sync-store-locked: false;
-    in-out property <string> sync-store-path: "";
-    in-out property <string> sync-master-file: "";
-    in-out property <string> sync-store-name: "";
-    in-out property <bool> sync-confirm-master-delete: false;
-    in-out property <bool> sync-has-credentials: false;
-    in-out property <bool> sync-enabled: false;
-    in-out property <string> sync-bucket: "";
-    in-out property <string> sync-prefix: "";
-    in-out property <string> sync-endpoint: "";
-    in-out property <string> sync-keep-versions: "";
-    // 两个引擎的可执行文件在哪（空 = 由 kotori 自己找；目录或完整路径都行）。
-    // ⚠ 名字里的 `-input` 不能省：`sync-rclone` 与 `sync-kopia-binary` 已经被
-    // 「当前生效的那个路径」占着了（只读状态，见 render/sync.rs 的只读区）。
-    in-out property <string> sync-rclone-input: "";
-    in-out property <string> sync-kopia-input: "";
-    in-out property <string> sync-key-id: "";
-    in-out property <string> sync-app-key: "";
-    in-out property <string> sync-master-password: "";
-    in-out property <string> sync-kopia-password: "";
-    in-out property <bool> sync-connection-revealed: false;
-    in-out property <bool> sync-busy: false;
-    in-out property <string> sync-message: "";
-    in-out property <bool> sync-message-ok: true;
-
-    callback sync-enabled-toggled(bool);
-    callback sync-engine-selected(string);
-    callback sync-field(int, string);
-    // 「程序位置」那一组的两个「浏览…」。
-    callback sync-browse-rclone-binary();
-    callback sync-browse-kopia-binary();
-    callback sync-save-settings();
-    callback sync-save-kopia-password();
-    callback sync-test();
-    callback sync-now(string);
-    callback sync-restore(string);
-    callback sync-restore-confirmed();
-    callback sync-restore-cancelled();
-    callback sync-save-credentials();
-    callback sync-clear-credentials();
-    callback sync-unlock();
-    callback sync-set-master-password();
-    // 我们自己的那套凭据方案(主密码加密文件)的两个动作,外加删除前的二次确认。
-    callback sync-lock-credentials();
-    callback sync-delete-master-requested();
-    callback sync-delete-master-cancelled();
-    callback sync-delete-master-confirmed();
+    // 表单与回调都在 `state/sync-board.slint` 那个全局里(见它的文件头):这一族有 37 个
+    // 属性 + 20 个回调,留在这里就是 125 行转发,而除了「云同步」页没人用它们。
 
     // ── 设置(全局) ───────────────────────────────────────────────────────
     // 后台服务:守护进程的启动 / 停止(措辞与状态由 Rust 算,见 render/settings.rs)
@@ -438,63 +377,6 @@ export component AppWindow inherits Window {
 
                         if root.tab == 3 : SyncPage {
                             width: 100%; height: 100%;
-                            loaded: root.sync-loaded;
-                            remote: root.sync-remote;
-                            rclone: root.sync-rclone;
-                            engine: root.sync-engine;
-                            kopia-binary: root.sync-kopia-binary;
-                            kopia-prefix: root.sync-kopia-prefix;
-                            kopia-password-state: root.sync-kopia-password-state;
-                            kopia-using-default: root.sync-kopia-using-default;
-                            keyring: root.sync-keyring;
-                            ephemeral: root.sync-ephemeral;
-                            keyring-hint: root.sync-keyring-hint;
-                            problem: root.sync-problem;
-                            ready: root.sync-ready;
-                            credentials-label: root.sync-credentials-label;
-                            master-hint: root.sync-master-hint;
-                            store-kind: root.sync-store-kind;
-                            store-locked: root.sync-store-locked;
-                            store-path: root.sync-store-path;
-                            master-file: root.sync-master-file;
-                            store-name: root.sync-store-name;
-                            confirm-master-delete: root.sync-confirm-master-delete;
-                            can-delete-credentials: root.sync-has-credentials;
-                            sync-enabled <=> root.sync-enabled;
-                            bucket <=> root.sync-bucket;
-                            prefix <=> root.sync-prefix;
-                            endpoint <=> root.sync-endpoint;
-                            keep-versions <=> root.sync-keep-versions;
-                            rclone-input <=> root.sync-rclone-input;
-                            kopia-input <=> root.sync-kopia-input;
-                            key-id <=> root.sync-key-id;
-                            app-key <=> root.sync-app-key;
-                            master-password <=> root.sync-master-password;
-                            kopia-password <=> root.sync-kopia-password;
-                            connection-revealed <=> root.sync-connection-revealed;
-                            busy: root.sync-busy;
-                            message: root.sync-message;
-                            message-ok: root.sync-message-ok;
-                            enabled-toggled(value) => { root.sync-enabled-toggled(value); }
-                            engine-selected(engine) => { root.sync-engine-selected(engine); }
-                            field(id, text) => { root.sync-field(id, text); }
-                            browse-rclone-binary => { root.sync-browse-rclone-binary(); }
-                            browse-kopia-binary => { root.sync-browse-kopia-binary(); }
-                            save-settings => { root.sync-save-settings(); }
-                            save-kopia-password => { root.sync-save-kopia-password(); }
-                            test => { root.sync-test(); }
-                            sync-now(id) => { root.sync-now(id); }
-                            restore(id) => { root.sync-restore(id); }
-                            restore-confirmed => { root.sync-restore-confirmed(); }
-                            restore-cancelled => { root.sync-restore-cancelled(); }
-                            save-credentials => { root.sync-save-credentials(); }
-                            clear-credentials => { root.sync-clear-credentials(); }
-                            unlock => { root.sync-unlock(); }
-                            set-master-password => { root.sync-set-master-password(); }
-                            lock-credentials => { root.sync-lock-credentials(); }
-                            delete-master-requested => { root.sync-delete-master-requested(); }
-                            delete-master-cancelled => { root.sync-delete-master-cancelled(); }
-                            delete-master-confirmed => { root.sync-delete-master-confirmed(); }
                         }
 
                         if root.tab == 4 : SettingsPage {
