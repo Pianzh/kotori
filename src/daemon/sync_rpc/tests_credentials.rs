@@ -258,6 +258,30 @@ async fn a_short_master_password_is_refused_with_a_reason() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[tokio::test]
+async fn kopia_password_can_be_stored_and_cleared() {
+    let keyring = Keyring::memory();
+    let daemon = daemon(keyring.clone());
+
+    let stored = call(
+        &daemon,
+        "sync.set_kopia_password",
+        r#"{"password":"custom-repository-password"}"#,
+    )
+    .await;
+    assert_eq!(stored["result"]["stored"], true, "{stored}");
+    assert_eq!(stored["result"]["using_default"], false, "{stored}");
+    assert_eq!(
+        keyring.get(SecretKey::KopiaPassword).unwrap().as_deref(),
+        Some("custom-repository-password")
+    );
+
+    let cleared = call(&daemon, "sync.set_kopia_password", r#"{"password":""}"#).await;
+    assert_eq!(cleared["result"]["cleared"], true, "{cleared}");
+    assert_eq!(cleared["result"]["using_default"], true, "{cleared}");
+    assert_eq!(keyring.get(SecretKey::KopiaPassword).unwrap(), None);
+}
+
 #[test]
 fn an_explicitly_given_store_is_never_replaced_behind_the_caller() {
     // Only the *fallback* is retried. A store handed in deliberately (tests,

@@ -157,3 +157,47 @@ async fn switching_the_config_source_takes_the_credentials_along() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn a_failed_credential_move_leaves_the_config_source_unchanged() {
+    let dir = crate::config::test_scratch("daemon-switch-failure");
+    let default_dir = dir.join("default");
+    let default = default_dir.join("config.toml");
+    std::fs::create_dir_all(&default_dir).unwrap();
+    crate::config::save_to(&default, &Config::default()).unwrap();
+
+    // 便携目录的父亲故意是一个普通文件，搬凭据时会在创建目录阶段失败。
+    let blocked_parent = dir.join("blocked");
+    std::fs::write(&blocked_parent, b"not a directory").unwrap();
+    let portable = blocked_parent.join("config.toml");
+
+    let store = crate::secrets::Keyring::plain_file(default_dir.join("credentials.json"));
+    store
+        .set(crate::secrets::SecretKey::B2KeyId, "key-id")
+        .unwrap();
+    let daemon =
+        Daemon::with_keyring_at(Config::default(), store, default_dir.join("secrets.json"))
+            .with_config_path(default.clone())
+            .with_config_sources(Some(portable.clone()), default.clone());
+    let before = std::fs::read_to_string(&default).unwrap();
+
+    let reply = daemon
+        .handle_request(
+            r#"{"jsonrpc":"2.0","id":1,"method":"config.set_source","params":{"portable":true}}"#,
+        )
+        .await;
+    let value: Value = serde_json::from_str(&reply.body).unwrap();
+    assert!(
+        value["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("切换配置来源失败"),
+        "{value}"
+    );
+    assert_eq!(*daemon.config_path.read().await, default);
+    assert_eq!(std::fs::read_to_string(&default).unwrap(), before);
+    assert!(!portable.exists());
+    assert!(daemon.sync.secrets_path().starts_with(&default_dir));
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

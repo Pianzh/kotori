@@ -327,3 +327,23 @@ fn a_member_over_the_file_limit_is_refused() {
 
     std::fs::remove_dir_all(&dir).ok();
 }
+
+#[test]
+fn a_package_over_the_total_byte_limit_is_refused() {
+    let dir = temp("too-large-total");
+    let saves = dir.join("saves");
+    write(&saves, "a.sav", "one");
+    write(&saves, "b.sav", "two");
+    let zip = dir.join("v.zip");
+    pack(&zip, &[target("rel-savedata", &saves)], now(), None).unwrap();
+
+    let limits = Limits {
+        file_bytes: 1024 * 1024,
+        total_bytes: 1,
+        ..Limits::default()
+    };
+    let error = extract_with(&zip, &dir.join("out"), limits).unwrap_err();
+    assert!(error.contains("总量超过上限"), "{error}");
+
+    std::fs::remove_dir_all(&dir).ok();
+}

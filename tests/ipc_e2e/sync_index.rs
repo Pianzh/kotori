@@ -7,10 +7,12 @@
 //! 索引是**镜像**：身份卡才是真相（丢了/坏了能照它重建）。所以这两条都在盯"读索引
 //! 就够，一张身份卡都不用读"这件事。
 
+use std::time::Duration;
+
 use serde_json::json;
 
 use crate::fixture::Fixture;
-use crate::helpers::rclone_calls;
+use crate::helpers::{rclone_calls, wait_until};
 
 /// 「云端存档」页的数据来自**一个桶一份的索引**，不是遍历身份卡。
 ///
@@ -283,4 +285,80 @@ fn the_cloud_list_is_read_from_a_local_cache_after_the_first_fetch() {
     // 上传成功之后缓存也跟着更新（这里没有游戏，用刷新这条路代表"我们刚知道最新内容"）。
     let after = machine.rpc("sync.cloud_list", json!({}));
     assert_eq!(after["result"]["from_cache"], true, "{after}");
+}
+
+#[test]
+fn a_failed_refresh_keeps_the_old_cache_and_reports_the_error() {
+    let mut machine = Fixture::new("cache-failure");
+    machine.enable_fake_sync(true);
+    machine.start();
+    machine.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+
+    let first = machine.rpc("sync.cloud_list", json!({}));
+    assert_eq!(first["result"]["from_cache"], false, "{first}");
+    let cached_at = first["result"]["cached_at"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    std::fs::write(machine.dir.join("fail"), "index").unwrap();
+    let failed = machine.rpc("sync.cloud_list", json!({ "refresh": true }));
+    assert_eq!(failed["result"]["from_cache"], true, "{failed}");
+    assert_eq!(failed["result"]["cached_at"], cached_at, "{failed}");
+    assert!(
+        failed["result"]["refresh_error"].is_string(),
+        "刷新失败必须把原因带回界面: {failed}"
+    );
+
+    std::fs::remove_file(machine.dir.join("fail")).unwrap();
+    let recovered = machine.rpc("sync.cloud_list", json!({ "refresh": true }));
+    assert_eq!(recovered["result"]["from_cache"], false, "{recovered}");
+    assert!(
+        recovered["result"]["refresh_error"].is_null(),
+        "{recovered}"
+    );
+}
+
+#[test]
+fn changing_the_sync_target_refreshes_but_retention_does_not() {
+    let mut machine = Fixture::new("index-settings-refresh");
+    machine.enable_fake_sync(true);
+    machine.start();
+    machine.rpc(
+        "sync.set_credentials",
+        json!({ "key_id": "id", "app_key": "key" }),
+    );
+
+    let first = machine.rpc("sync.cloud_list", json!({}));
+    assert_eq!(first["result"]["from_cache"], false, "{first}");
+    let before = rclone_calls(&machine).len();
+
+    let retention = machine.rpc("sync.set_settings", json!({ "keep_versions": 7 }));
+    assert_eq!(
+        retention["result"]["settings"]["keep_versions"], 7,
+        "{retention}"
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(
+        rclone_calls(&machine).len(),
+        before,
+        "只改保留版本数不该刷新索引: {:?}",
+        rclone_calls(&machine)
+    );
+
+    let target = machine.rpc("sync.set_settings", json!({ "bucket": "another-bucket" }));
+    assert_eq!(
+        target["result"]["settings"]["bucket"], "another-bucket",
+        "{target}"
+    );
+    assert!(
+        wait_until(Duration::from_secs(5), || {
+            rclone_calls(&machine).len() > before
+        }),
+        "改目标后应后台刷新索引: {:?}",
+        rclone_calls(&machine)
+    );
 }

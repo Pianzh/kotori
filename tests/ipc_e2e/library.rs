@@ -102,6 +102,56 @@ fn library_entries_are_managed_over_ipc() {
     );
 }
 
+// 这条是故意留下的检测闸：当前 `game.update` 还没有这个护栏，CI 变红就是在报缺口。
+// 这里只写检测，不改产品实现。
+#[test]
+fn updating_a_game_to_another_games_exe_is_refused() {
+    let mut fixture = Fixture::new("duplicate-update");
+    fixture.start();
+
+    let first_dir = fixture.dir.join("first");
+    let second_dir = fixture.dir.join("second");
+    std::fs::create_dir_all(&first_dir).unwrap();
+    std::fs::create_dir_all(&second_dir).unwrap();
+    let first_exe = first_dir.join("game.exe");
+    let second_exe = second_dir.join("game.exe");
+    std::fs::write(&first_exe, b"first executable").unwrap();
+    std::fs::write(&second_exe, b"second executable").unwrap();
+
+    let first = fixture.rpc(
+        "game.create",
+        json!({ "name": "First", "exe_path": first_exe, "game_dir": first_dir }),
+    );
+    let first_id = first["result"]["id"].as_str().unwrap().to_string();
+    let second = fixture.rpc(
+        "game.create",
+        json!({ "name": "Second", "exe_path": second_exe, "game_dir": second_dir }),
+    );
+    let second_id = second["result"]["id"].as_str().unwrap().to_string();
+
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": second_id, "exe_path": first_exe }),
+    );
+    assert!(
+        response.get("error").is_some(),
+        "game.update 也必须拒绝另一个档案已经拥有的 exe: {response}"
+    );
+
+    let games = fixture.rpc("game.list", json!({}))["result"]["games"].clone();
+    let games = games.as_array().unwrap();
+    let first = games
+        .iter()
+        .find(|game| game["id"].as_str() == Some(first_id.as_str()))
+        .unwrap();
+    let second = games
+        .iter()
+        .find(|game| game["id"].as_str() == Some(second_id.as_str()))
+        .unwrap();
+    assert_eq!(first["exe_path"], first_exe.to_string_lossy().as_ref());
+    assert_eq!(second["exe_path"], second_exe.to_string_lossy().as_ref());
+}
+
 /// The daemon is the only writer of the config, so the GUI persists a scale
 /// profile with `game.update`; the patch must be validated and atomic.
 #[test]

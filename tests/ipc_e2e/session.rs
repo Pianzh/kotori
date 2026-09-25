@@ -383,3 +383,49 @@ fn direct_launch_session_ends_when_the_game_exits() {
         );
     }
 }
+
+#[test]
+fn direct_launch_rejects_a_game_that_exits_immediately() {
+    let mut fixture = Fixture::new("direct-immediate");
+    let bin = fixture.dir.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+
+    let game_dir = fixture.dir.join("ImmediateGame");
+    std::fs::create_dir_all(&game_dir).unwrap();
+    let exe = game_dir.join("game.exe");
+    std::fs::write(&exe, b"").unwrap();
+
+    write_script(
+        &bin.join("wine"),
+        "#!/bin/sh\n[ \"$1\" = \"--kotori-warmup\" ] && exit 0\nexit 23\n",
+    );
+    fixture.extra_path = Some(bin);
+    fixture.start();
+
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Immediate Game", "exe_path": exe, "game_dir": game_dir }),
+    );
+    assert_eq!(response["result"]["id"], "immediate-game", "{response}");
+    let response = fixture.rpc(
+        "game.update",
+        json!({ "id": "immediate-game", "direct_launch": true }),
+    );
+    assert_eq!(response["result"]["success"], true, "{response}");
+
+    let response = fixture.rpc("game.launch", json!({ "id": "immediate-game" }));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("立即退出"),
+        "{response}"
+    );
+    assert!(
+        fixture.rpc("daemon.status", json!({}))["result"]["sessions"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "启动失败不能留下幽灵 session"
+    );
+}

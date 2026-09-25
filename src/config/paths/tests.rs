@@ -181,3 +181,19 @@ fn no_exe_information_falls_back_to_the_default() {
         fallback.0.join("config.toml")
     );
 }
+
+#[test]
+fn a_malformed_config_is_backed_up_by_load_at() {
+    let dir = test_scratch("config-corrupt-load-at");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, "this is not = valid toml {{{").unwrap();
+
+    let loaded = load_at(&path).expect("解析失败时应该回退默认配置");
+    assert!(loaded.games.is_empty());
+    assert_eq!(loaded.daemon.log_level, Config::default().daemon.log_level);
+
+    let backup = path.with_extension("toml.corrupt");
+    assert!(backup.is_file(), "原配置应该被保留为 .corrupt");
+    assert!(!path.exists(), "原路径应该让位给备份");
+    std::fs::remove_dir_all(&dir).ok();
+}
