@@ -135,6 +135,7 @@ impl Daemon {
     async fn auto_watch_candidates(&self) -> Vec<Watched> {
         let wanted: Vec<Watched> = {
             let config = self.config.read().await;
+            let mounts = crate::mount::MountTable::read();
             config
                 .games
                 .iter()
@@ -144,8 +145,8 @@ impl Daemon {
                     Some(Watched {
                         id: id.clone(),
                         name,
-                        exe: game.exe_path.clone(),
-                        game_dir: game.effective_game_dir(),
+                        exe: game.resolved_exe_with(&mounts).ok()?,
+                        game_dir: game.resolved_game_dir_with(&mounts).ok()?,
                         profile: game.scale_profile.clone(),
                     })
                 })

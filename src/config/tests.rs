@@ -129,6 +129,8 @@ watch_only = false
 fn the_watched_process_name_falls_back_to_the_exe_file_name() {
     let game = |process_name: Option<&str>| GameConfig {
         cloud_id: None,
+        game_dir_mount: None,
+        exe_mount: None,
         exe_fingerprint: None,
         cloud_dir: None,
         cloud_rejected: Vec::new(),
@@ -190,6 +192,8 @@ fn sample_config() -> Config {
         "demo".into(),
         GameConfig {
             cloud_id: None,
+            game_dir_mount: None,
+            exe_mount: None,
             exe_fingerprint: None,
             cloud_dir: None,
             cloud_rejected: Vec::new(),

@@ -34,6 +34,8 @@ impl Drop for FakePrefix {
 pub(super) fn game(game_dir: &str, exe: &str) -> GameConfig {
     GameConfig {
         cloud_id: None,
+        game_dir_mount: None,
+        exe_mount: None,
         exe_fingerprint: None,
         cloud_dir: None,
         cloud_rejected: Vec::new(),

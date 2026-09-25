@@ -173,6 +173,8 @@ fn an_exe_already_used_by_another_entry_is_reported_by_name() {
 fn game_config_named(name: &str) -> crate::config::GameConfig {
     crate::config::GameConfig {
         cloud_id: None,
+        game_dir_mount: None,
+        exe_mount: None,
         exe_fingerprint: None,
         cloud_dir: None,
         cloud_rejected: Vec::new(),

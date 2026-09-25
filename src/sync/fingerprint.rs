@@ -78,7 +78,7 @@ pub fn fill_missing(config: &mut crate::config::Config) -> Vec<String> {
         if game.exe_fingerprint.is_some() {
             continue;
         }
-        if let Some(print) = of_file(&game.exe_path) {
+        if let Some(print) = game.resolved_exe().ok().and_then(|exe| of_file(&exe)) {
             game.exe_fingerprint = Some(print);
             filled.push(id.clone());
         }

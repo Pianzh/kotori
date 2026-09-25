@@ -73,7 +73,10 @@ pub fn list() -> anyhow::Result<()> {
     games.sort_by(|a, b| a.0.cmp(b.0));
     for (id, game) in games {
         println!("  {} - {}", id, game.name);
-        println!("    exe:     {}", game.exe_path.display());
+        match game.resolved_exe() {
+            Ok(exe) => println!("    exe:     {}", exe.display()),
+            Err(error) => println!("    exe:     {error}"),
+        }
         // 这两个开关从前只活在配置里，`list` 看不见（BUG-14）：CLI 用户没法确认
         // 这一条到底是自动追踪、只观测会话还是直接启动。
         println!("    watch:   {}", game.auto_watch);
@@ -121,11 +124,11 @@ pub fn add_games(
 ) -> Vec<(String, GameConfig)> {
     let mut added = Vec::new();
     for game in found {
-        if config
-            .games
-            .values()
-            .any(|existing| existing.exe_path == game.exe_path)
-        {
+        if config.games.values().any(|existing| {
+            existing
+                .resolved_exe()
+                .is_ok_and(|exe| exe == game.exe_path)
+        }) {
             continue;
         }
         let id = generate_unique_game_id(config, &game.name);
@@ -188,7 +191,10 @@ pub fn exe_owner(
         .games
         .iter()
         .find(|(id, game)| {
-            Some(id.as_str()) != exclude_id && crate::util::same_file(&game.exe_path, exe_path)
+            Some(id.as_str()) != exclude_id
+                && game
+                    .resolved_exe()
+                    .is_ok_and(|exe| crate::util::same_file(&exe, exe_path))
         })
         .map(|(_, game)| game.name.clone())
 }
@@ -217,8 +223,9 @@ pub fn duplicate_exe_warning(
         .iter()
         .filter(|(id, game)| {
             Some(id.as_str()) != exclude_id
-                && std::fs::canonicalize(&game.exe_path).unwrap_or_else(|_| game.exe_path.clone())
-                    == wanted
+                && game
+                    .resolved_exe()
+                    .is_ok_and(|exe| std::fs::canonicalize(&exe).unwrap_or(exe) == wanted)
         })
         .map(|(_, game)| game.name.as_str())
         .collect();

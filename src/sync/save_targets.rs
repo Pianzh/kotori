@@ -33,7 +33,15 @@ pub struct SaveTarget {
 /// mean "upload the whole disk"), aborts the whole game.
 pub fn targets(game: &GameConfig, config: &Config) -> Result<Vec<SaveTarget>, String> {
     let (root, _) = crate::wine::SaveRoot::for_platform(game, config);
-    let game_dir = game.effective_game_dir();
+    let game_dir = if game
+        .save_paths
+        .iter()
+        .any(|s| s.kind == crate::config::SavePathKind::Relative)
+    {
+        game.resolved_game_dir()?
+    } else {
+        PathBuf::new()
+    };
 
     let mut targets = Vec::with_capacity(game.save_paths.len());
     for save in &game.save_paths {
@@ -96,6 +104,8 @@ mod tests {
         config.wine.prefix = Some(prefix.clone());
         let game = GameConfig {
             cloud_id: None,
+            game_dir_mount: None,
+            exe_mount: None,
             exe_fingerprint: None,
             cloud_dir: None,
             cloud_rejected: Vec::new(),
@@ -143,6 +153,8 @@ mod tests {
 
         let game = GameConfig {
             cloud_id: None,
+            game_dir_mount: None,
+            exe_mount: None,
             exe_fingerprint: None,
             cloud_dir: None,
             cloud_rejected: Vec::new(),
@@ -174,6 +186,8 @@ mod tests {
         // 那一对，也是"同一个位置两种写法"最常见的形态。
         let game = GameConfig {
             cloud_id: None,
+            game_dir_mount: None,
+            exe_mount: None,
             exe_fingerprint: None,
             cloud_dir: None,
             cloud_rejected: Vec::new(),

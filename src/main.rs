@@ -11,6 +11,7 @@ mod daemon;
 mod desktop;
 mod display;
 mod game;
+mod mount;
 mod picker;
 mod platform;
 mod process;

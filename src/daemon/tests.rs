@@ -77,6 +77,8 @@ async fn game_list_exposes_the_full_scale_profile() {
         "demo".into(),
         crate::config::GameConfig {
             cloud_id: None,
+            game_dir_mount: None,
+            exe_mount: None,
             exe_fingerprint: None,
             cloud_dir: None,
             cloud_rejected: Vec::new(),
@@ -117,6 +119,8 @@ async fn games_are_sorted_by_name() {
             name.into(),
             crate::config::GameConfig {
                 cloud_id: None,
+                game_dir_mount: None,
+                exe_mount: None,
                 exe_fingerprint: None,
                 cloud_dir: None,
                 cloud_rejected: Vec::new(),
@@ -164,6 +168,8 @@ async fn games_with_the_same_name_still_have_one_order() {
             id.into(),
             crate::config::GameConfig {
                 cloud_id: None,
+                game_dir_mount: None,
+                exe_mount: None,
                 exe_fingerprint: None,
                 cloud_dir: None,
                 cloud_rejected: Vec::new(),
@@ -264,6 +270,8 @@ fn every_game_config_key_is_either_patchable_or_a_known_exception() {
 
     let config = serde_json::to_value(crate::config::GameConfig {
         cloud_id: None,
+        game_dir_mount: None,
+        exe_mount: None,
         exe_fingerprint: None,
         cloud_dir: None,
         cloud_rejected: Vec::new(),
