@@ -21,6 +21,7 @@ import { DropdownList, Select } from "../widgets/select.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { GameItem, GameDetail, PathPick, SaveItem } from "../types.slint";
+import { GamePathsGroup } from "game-paths.slint";
 import { GameSavesGroup } from "game-saves.slint";
 import { GameHeader } from "game-header.slint";
 import { GameActions } from "game-actions.slint";
@@ -199,100 +200,29 @@ export component GameSettingsPage inherits Rectangle {
                     stop-cancelled => { root.stop-cancelled(); }
                 }
 
-            // ── 路径 ──────────────────────────────────────────────────
-            RevealItem {
+            // ── 路径（整组在 `game-paths.slint` 里） ──────────────────
+            GamePathsGroup {
                 revealed: root.revealed;
-                step: 1;
-                bottom: 8px;
-                SectionTitle { text: "路径"; }
-            }
-            RevealItem {
-                revealed: root.revealed;
-                step: 2;
-                bottom: 24px;
-                Group {
-                    CardRow {
-                        title: "游戏根目录";
-                        description: "启动时的 CWD,也是 relative 存档路径的基准。";
-                        PathField {
-                            field-width: 340px;
-                            text <=> root.game-dir;
-                            edited(text) => { root.game-dir-changed(text); }
-                            browse-enabled: root.browse-enabled;
-                            browse-clicked => { root.browse-game-dir(); }
-                            placeholder: "/path/to/game";
-                        }
-                    }
-                    CardRow {
-                        title: "根目录所在的外置盘";
-                        description: root.mount-supported
-                            ? "盘号是磁盘的 UUID（如 5A3F-2B1C）；相对目录以**磁盘根**为基准（如 Games/某游戏）。盘号留空＝这个位置不用引用，只看上面那个绝对路径。"
-                            : "Windows 上读不到挂载表，这两栏填了也不生效。从别的机器带过来的引用在这里解析不出来（上面的路径会是空的）—— 把这两栏清空、填上真实路径就恢复正常。";
-                        DiskFields {
-                            disk <=> root.game-dir-disk;
-                            relative <=> root.game-dir-relative;
-                            disk-edited(text) => { root.game-dir-disk-changed(text); }
-                            relative-edited(text) => { root.game-dir-relative-changed(text); }
-                        }
-                    }
-                    Divider { }
-                    CardRow {
-                        title: "可执行文件";
-                        description: "exe 的完整路径。";
-                        PathField {
-                            field-width: 340px;
-                            text <=> root.exe-path;
-                            edited(text) => { root.exe-changed(text); }
-                            browse-enabled: root.browse-enabled;
-                            browse-clicked => { root.browse-exe(); }
-                            placeholder: "/path/to/game.exe";
-                        }
-                    }
-                    CardRow {
-                        title: "可执行文件所在的外置盘";
-                        description: root.mount-supported
-                            ? "同上：盘号留空＝不用引用。盘不在时这一款照样能在库里留着，只是启动会明确报「未挂载」。"
-                            : "Windows 上不生效，清空这两栏即可回到绝对路径。";
-                        DiskFields {
-                            disk <=> root.exe-disk;
-                            relative <=> root.exe-relative;
-                            disk-edited(text) => { root.exe-disk-changed(text); }
-                            relative-edited(text) => { root.exe-relative-changed(text); }
-                        }
-                    }
-                    if root.path-hint != "" : VerticalLayout {
-                        Divider { }
-                        VerticalLayout {
-                            padding: 12px;
-                            Text {
-                                text: root.path-hint;
-                                font-size: 11px;
-                                color: Tokens.text-3;
-                                wrap: word-wrap;
-                            }
-                        }
-                    }
-                    Divider { }
-                    // ⚠ 路径这一组**不自动保存**（用户 2026-09-25 改的主意）：打到一半
-                    //   就被写下去会误伤（daemon 会拒、界面弹错，真写错一次就指到别处了）。
-                    HorizontalLayout {
-                        padding: 12px;
-                        spacing: 10px;
-                        AccentButton {
-                            label: root.saving ? "保存中…" : "保存路径";
-                            button-width: 120px;
-                            button-enabled: root.path-dirty && !root.saving;
-                            clicked => { root.save-paths(); }
-                        }
-                        Text {
-                            text: root.path-dirty ? "有未保存的路径改动（离开这一页会丢弃）" : "";
-                            font-size: 11px;
-                            color: Tokens.warn;
-                            vertical-alignment: center;
-                        }
-                        Rectangle { horizontal-stretch: 1; background: #00000000; }
-                    }
-                }
+                browse-enabled: root.browse-enabled;
+                path-hint: root.path-hint;
+                dirty: root.path-dirty;
+                saving: root.saving;
+                mount-supported: root.mount-supported;
+                game-dir <=> root.game-dir;
+                exe-path <=> root.exe-path;
+                game-dir-disk <=> root.game-dir-disk;
+                game-dir-relative <=> root.game-dir-relative;
+                exe-disk <=> root.exe-disk;
+                exe-relative <=> root.exe-relative;
+                game-dir-changed(text) => { root.game-dir-changed(text); }
+                exe-changed(text) => { root.exe-changed(text); }
+                game-dir-disk-changed(text) => { root.game-dir-disk-changed(text); }
+                game-dir-relative-changed(text) => { root.game-dir-relative-changed(text); }
+                exe-disk-changed(text) => { root.exe-disk-changed(text); }
+                exe-relative-changed(text) => { root.exe-relative-changed(text); }
+                browse-game-dir => { root.browse-game-dir(); }
+                browse-exe => { root.browse-exe(); }
+                save-paths => { root.save-paths(); }
             }
 
             GameLaunchGroup {
@@ -378,11 +308,18 @@ export component GameSettingsPage inherits Rectangle {
                         wrap: word-wrap;
                     }
                     Text {
-                        text: "平铺桌面(niri)下游戏窗口铺满整块显示器,窗口尺寸不由 kotori 决定,输出分辨率只影响缩放计算;KDE 上窗口缩放走 KWin。窗口聚焦时也能用 gamescope 自带热键实时切:Super+U FSR、Super+Y NIS、Super+N 最近邻、Super+I/O 锐度增/减。";
+                        text: "平铺桌面(niri)下游戏窗口铺满整块显示器,窗口尺寸不由 kotori 决定,输出分辨率只影响缩放计算;KDE 上窗口缩放走 KWin。滤镜与锐度要在终端里切:kotori scale fsr|nis|integer|linear|sharpness <0-5>。";
                         font-size: 11px;
                         color: Tokens.text-3;
                         wrap: word-wrap;
                     }
+                    // ⚠ 这里原来写着「窗口聚焦时也能用 gamescope 自带热键实时切:Super+U FSR、
+                    //    Super+Y NIS…」。ADR-015 早就确认 **nested 下那些键永不命中**
+                    //    (gamescope 的热键只在它自己抢到键盘时才算),留着就是骗人;用户
+                    //    2026-09-25 说"临时删掉或者注释掉,说不定哪天会加回来",所以先摘到
+                    //    注释里。将来真走了 headless / 独占那条路,把下面这句原样放回去:
+                    //    "窗口聚焦时也能用 gamescope 自带热键实时切:Super+U FSR、Super+Y NIS、
+                    //     Super+N 最近邻、Super+I/O 锐度增/减。"
                 }
             }
 

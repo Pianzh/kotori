@@ -1,0 +1,138 @@
+// 单游戏设置页的「路径」组（根目录 / exe / 两个外置盘引用 + 一颗保存按钮）。
+//
+// 单独一个文件，理由与 `game-launch.slint` / `game-scale.slint` / `game-saves.slint` 一样：
+// 那一页已经很长，而这一组自带一条完整的小规矩 —— **不自动保存**，只有下面那颗按钮能把
+// 它落盘（用户 2026-09-25 定的：路径打到一半就被写下去会误伤，daemon 会拒、界面弹错，
+// 真写错一次就把这一款指到别处了）。
+//
+// ⚠ 那几个输入框的值由**页面**持有（页面自己 `seed-copy`、自己接「浏览…」的回包），
+//    这个组件只负责画出来 + 上报"用户改了什么"。
+
+import { Tokens } from "../theme.slint";
+import { Divider, RevealItem } from "../widgets/base.slint";
+import { AccentButton } from "../widgets/buttons.slint";
+import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
+import { DiskFields } from "../widgets/disk-fields.slint";
+import { PathField } from "../widgets/path-field.slint";
+
+export component GamePathsGroup inherits VerticalLayout {
+    in property <bool> revealed: false;
+    in property <bool> browse-enabled: true;
+    in property <string> path-hint: "";
+    // 这一组有没有未保存的改动（按钮据此点亮）；保存中禁用按钮。
+    in property <bool> dirty: false;
+    in property <bool> saving: false;
+    // 这台机器读不读得到挂载表（Windows 上读不到 ⇒ 引用填了也不生效）。
+    in property <bool> mount-supported: true;
+
+    in-out property <string> game-dir: "";
+    in-out property <string> exe-path: "";
+    in-out property <string> game-dir-disk: "";
+    in-out property <string> game-dir-relative: "";
+    in-out property <string> exe-disk: "";
+    in-out property <string> exe-relative: "";
+
+    callback game-dir-changed(string);
+    callback exe-changed(string);
+    callback game-dir-disk-changed(string);
+    callback game-dir-relative-changed(string);
+    callback exe-disk-changed(string);
+    callback exe-relative-changed(string);
+    callback browse-game-dir();
+    callback browse-exe();
+    callback save-paths();
+
+    RevealItem {
+        revealed: root.revealed;
+        step: 1;
+        bottom: 8px;
+        SectionTitle { text: "路径"; }
+    }
+    RevealItem {
+        revealed: root.revealed;
+        step: 2;
+        bottom: 24px;
+        Group {
+            CardRow {
+                title: "游戏根目录";
+                description: "启动时的 CWD,也是 relative 存档路径的基准。";
+                PathField {
+                    field-width: 340px;
+                    text <=> root.game-dir;
+                    edited(text) => { root.game-dir-changed(text); }
+                    browse-enabled: root.browse-enabled;
+                    browse-clicked => { root.browse-game-dir(); }
+                    placeholder: "/path/to/game";
+                }
+            }
+            CardRow {
+                title: "根目录所在的外置盘";
+                description: root.mount-supported
+                    ? "盘号是磁盘的 UUID（如 5A3F-2B1C）；相对目录以**磁盘根**为基准（如 Games/某游戏）。盘号留空＝这个位置不用引用，只看上面那个绝对路径。"
+                    : "Windows 上读不到挂载表，这两栏填了也不生效。从别的机器带过来的引用在这里解析不出来（上面的路径会是空的）—— 把这两栏清空、填上真实路径就恢复正常。";
+                DiskFields {
+                    disk <=> root.game-dir-disk;
+                    relative <=> root.game-dir-relative;
+                    disk-edited(text) => { root.game-dir-disk-changed(text); }
+                    relative-edited(text) => { root.game-dir-relative-changed(text); }
+                }
+            }
+            Divider { }
+            CardRow {
+                title: "可执行文件";
+                description: "exe 的完整路径。";
+                PathField {
+                    field-width: 340px;
+                    text <=> root.exe-path;
+                    edited(text) => { root.exe-changed(text); }
+                    browse-enabled: root.browse-enabled;
+                    browse-clicked => { root.browse-exe(); }
+                    placeholder: "/path/to/game.exe";
+                }
+            }
+            CardRow {
+                title: "可执行文件所在的外置盘";
+                description: root.mount-supported
+                    ? "同上：盘号留空＝不用引用。盘不在时这一款照样能在库里留着，只是启动会明确报「未挂载」。"
+                    : "Windows 上不生效，清空这两栏即可回到绝对路径。";
+                DiskFields {
+                    disk <=> root.exe-disk;
+                    relative <=> root.exe-relative;
+                    disk-edited(text) => { root.exe-disk-changed(text); }
+                    relative-edited(text) => { root.exe-relative-changed(text); }
+                }
+            }
+            if root.path-hint != "" : VerticalLayout {
+                Divider { }
+                VerticalLayout {
+                    padding: 12px;
+                    Text {
+                        text: root.path-hint;
+                        font-size: 11px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                }
+            }
+            Divider { }
+            // ⚠ 这一组**不自动保存**（见文件头）：打了才写，不打就丢。
+            HorizontalLayout {
+                padding: 12px;
+                spacing: 10px;
+                AccentButton {
+                    label: root.saving ? "保存中…" : "保存路径";
+                    button-width: 120px;
+                    button-enabled: root.dirty && !root.saving;
+                    clicked => { root.save-paths(); }
+                }
+                Text {
+                    text: root.dirty ? "有未保存的路径改动（离开这一页会丢弃）" : "";
+                    font-size: 11px;
+                    color: Tokens.warn;
+                    vertical-alignment: center;
+                }
+                Rectangle { horizontal-stretch: 1; background: #00000000; }
+            }
+        }
+    }
+}
