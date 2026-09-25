@@ -69,6 +69,10 @@ pub(super) fn daemon_at(keyring: Keyring) -> (Daemon, PathBuf) {
         uuid::Uuid::new_v4()
     ));
     let path = dir.join("config.toml");
+    // 先把这份配置**写进那个文件**:daemon 改配置时会先重读磁盘(见
+    // `Daemon::mutate_config`),而"内存里有、磁盘上没有"的 daemon 在生产里不
+    // 存在 —— 启动时它就是从这个文件读出来的。
+    crate::config::save_to(&path, &config).unwrap();
     (
         Daemon::with_keyring(config, keyring).with_config_path(path.clone()),
         path,
