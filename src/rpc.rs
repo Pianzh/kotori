@@ -160,8 +160,10 @@ mod tests {
         );
         assert_eq!(response_error(b"").await, "守护进程无响应");
         assert_eq!(
-            response_error(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-1,\"message\":\"boom\"}}\n")
-                .await,
+            response_error(
+                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-1,\"message\":\"boom\"}}\n"
+            )
+            .await,
             "boom"
         );
         assert_eq!(

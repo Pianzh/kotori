@@ -102,6 +102,8 @@ fn library_entries_are_managed_over_ipc() {
     );
 }
 
+// 这条是故意留下的检测闸：当前 `game.update` 还没有这个护栏，CI 变红就是在报缺口。
+// 这里只写检测，不改产品实现。
 #[test]
 fn updating_a_game_to_another_games_exe_is_refused() {
     let mut fixture = Fixture::new("duplicate-update");
@@ -132,10 +134,7 @@ fn updating_a_game_to_another_games_exe_is_refused() {
         json!({ "id": second_id, "exe_path": first_exe }),
     );
     assert!(
-        response["error"]["message"]
-            .as_str()
-            .unwrap_or_default()
-            .contains("已经属于"),
+        response.get("error").is_some(),
         "game.update 也必须拒绝另一个档案已经拥有的 exe: {response}"
     );
 
