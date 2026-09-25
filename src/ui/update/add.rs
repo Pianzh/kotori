@@ -26,6 +26,37 @@ impl App {
                 self.set_new_exe(value);
                 self.schedule_match()
             }
+            Message::NewGameDirDiskChanged(value) => {
+                self.new_game_dir_disk = value;
+                Task::none()
+            }
+            Message::NewGameDirRelativeChanged(value) => {
+                self.new_game_dir_relative = value;
+                Task::none()
+            }
+            Message::NewExeDiskChanged(value) => {
+                self.new_exe_disk = value;
+                Task::none()
+            }
+            Message::NewExeRelativeChanged(value) => {
+                self.new_exe_relative = value;
+                Task::none()
+            }
+            // 挑完一条路径之后认一次盘：认得出来就把那两栏填好，让用户在点「添加游戏」
+            // **之前**看得见（用户 2026-09-25 定的"中间加一小步"）。认不出来（不在任何
+            // 挂载盘上、或压根没有这块盘）就什么都不动 —— 那不是错误，只是没有引用可用。
+            Message::NewMountInferred(for_exe, result) => {
+                if let Ok(Some(mount)) = result {
+                    if for_exe {
+                        self.new_exe_disk = mount.disk;
+                        self.new_exe_relative = mount.relative;
+                    } else {
+                        self.new_game_dir_disk = mount.disk;
+                        self.new_game_dir_relative = mount.relative;
+                    }
+                }
+                Task::none()
+            }
             // 防抖到点:这期间用户又改了的话,这一个定时器就作废(他还会再排一个)。
             Message::MatchExeReady(exe) => {
                 if !self.add_match.still_pending(&exe) {
@@ -137,8 +168,19 @@ impl App {
             }
             Message::CreateRequested => {
                 let exe = self.new_exe.trim().to_string();
-                if exe.is_empty() {
-                    self.create_msg = Some("可执行文件必须填写".to_string());
+                let exe_mount = MountRef {
+                    disk: self.new_exe_disk.trim().to_string(),
+                    relative: self.new_exe_relative.trim().to_string(),
+                };
+                let dir_mount = MountRef {
+                    disk: self.new_game_dir_disk.trim().to_string(),
+                    relative: self.new_game_dir_relative.trim().to_string(),
+                };
+                // 既没有路径、也没有引用 = 这条档案无从启动。给了引用就放行：盘可能
+                // 插在别的机器上（用户 2026-09-25："大不了就是报错打不开，这是正常的"）。
+                if exe.is_empty() && exe_mount.is_unset() {
+                    self.create_msg =
+                        Some("可执行文件必须填写（或者填上它所在外置盘的盘号）".to_string());
                     return Task::none();
                 }
                 // 根目录与游戏名都可以不填 —— 不填就按 exe 自己推(用户 2026-09-19
@@ -163,7 +205,9 @@ impl App {
                 self.error = None;
                 let socket = self.daemon_socket.clone();
                 Task::perform(
-                    async move { create_game(&socket, name, exe, game_dir).await },
+                    async move {
+                        create_game(&socket, name, exe, game_dir, &dir_mount, &exe_mount).await
+                    },
                     Message::CreateFinished,
                 )
             }
@@ -190,6 +234,10 @@ impl App {
                         self.new_name.clear();
                         self.new_game_dir.clear();
                         self.new_exe.clear();
+                        self.new_game_dir_disk.clear();
+                        self.new_game_dir_relative.clear();
+                        self.new_exe_disk.clear();
+                        self.new_exe_relative.clear();
                         self.auto_filled_dir.clear();
                         self.auto_filled_name.clear();
                         self.add_match.reset();
@@ -251,6 +299,10 @@ impl App {
     /// 上次自动填的值(= 用户没动过)才重填;用户自己改过的值不动。
     pub(in crate::ui) fn set_new_exe(&mut self, value: String) {
         self.new_exe = value;
+        // 换了 exe，原先认出来的盘引用不再指向它 —— 清掉；随后那条路径的 infer
+        // （浏览 / 挑进程 / 手打都会走到这里）会把新的填回来。
+        self.new_exe_disk.clear();
+        self.new_exe_relative.clear();
         let (dir, name) = autofill_from_exe(&self.new_exe);
         if let Some(dir) = &dir
             && (self.new_game_dir.is_empty() || self.new_game_dir == self.auto_filled_dir)

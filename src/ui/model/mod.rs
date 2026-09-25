@@ -30,7 +30,10 @@ pub(super) use cloud::{CloudGameRow, CloudListReply, CloudState, CloudVersionRow
 pub(super) use cloud_label::{identity_label, identity_summary};
 pub(super) use cloud_pick::{CloudPick, CloudPickPurpose};
 pub(super) use environment::{EnvCheck, Environment};
-pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, SAVE_PATH_KINDS, SaveAttempt};
+pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, MountRef, SAVE_PATH_KINDS, SaveAttempt};
+// `SaveScope` 是 `Message` 的载荷之一（`Message` 自己是 `pub(crate)`），所以它得跟着
+// 放宽到 `pub(crate)`，否则 clippy 报"类型比用到它的那个字段更私有"。
+pub(crate) use game::SaveScope;
 pub(super) use picker::ProcessPicker;
 pub(super) use session::{MAX_AUTO_RETRIES, STATUS_POLL};
 pub(super) use sync::{CredentialStore, SyncAskCloud, SyncForm, engine_switched_note};

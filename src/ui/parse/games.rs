@@ -15,6 +15,22 @@ pub(in crate::ui) fn matches_query(game: &UiGame, query: &str) -> bool {
     game.name.to_lowercase().contains(&query) || game.exe.to_lowercase().contains(&query)
 }
 
+/// 读一条挂载引用。`disk` 是身份：它没写就当"没有引用"（只有相对目录没有意义）。
+pub(in crate::ui) fn parse_mount(value: &Value) -> Option<MountRef> {
+    let disk = value.get("disk").and_then(|v| v.as_str()).unwrap_or("");
+    if disk.trim().is_empty() {
+        return None;
+    }
+    Some(MountRef {
+        disk: disk.to_string(),
+        relative: value
+            .get("relative")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
 pub(in crate::ui) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
     let games = value
         .get("games")
@@ -72,6 +88,13 @@ pub(in crate::ui) fn parse_games(value: &Value) -> Result<Vec<UiGame>, String> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string(),
+                // 挂载引用：盘不在时上两栏是空的，只有这里还指着那块盘（`disk` 没写
+                // 就等于没有引用）。
+                game_dir_mount: g
+                    .get("game_dir_mount")
+                    .and_then(parse_mount)
+                    .unwrap_or_default(),
+                exe_mount: g.get("exe_mount").and_then(parse_mount).unwrap_or_default(),
                 launch_args: string_list(g.get("launch_args")),
                 profile_name: scale
                     .and_then(|s| s.get("name"))

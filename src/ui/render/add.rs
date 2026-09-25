@@ -15,6 +15,25 @@ pub(super) fn push_add(ui: &mut Ui) {
         w.set_new_game_dir(v)
     });
     push_str(w.get_new_exe(), &app.new_exe, |v| w.set_new_exe(v));
+    // 挂载引用那两栏：挑完路径之后由 daemon 认一次盘填进来（也可以用自己改）。
+    push_str(w.get_new_game_dir_disk(), &app.new_game_dir_disk, |v| {
+        w.set_new_game_dir_disk(v)
+    });
+    push_str(
+        w.get_new_game_dir_relative(),
+        &app.new_game_dir_relative,
+        |v| w.set_new_game_dir_relative(v),
+    );
+    push_str(w.get_new_exe_disk(), &app.new_exe_disk, |v| {
+        w.set_new_exe_disk(v)
+    });
+    push_str(w.get_new_exe_relative(), &app.new_exe_relative, |v| {
+        w.set_new_exe_relative(v)
+    });
+    // 挂载引用这台机器能不能用（Windows 读不到挂载表 ⇒ 那两栏的说明改口径）。
+    push_bool(w.get_mount_supported(), cfg!(target_os = "linux"), |v| {
+        w.set_mount_supported(v)
+    });
     push_bool(w.get_creating(), app.creating, |v| w.set_creating(v));
     let message = app.create_msg.clone().unwrap_or_default();
     let ok = message.starts_with("已添加");

@@ -244,7 +244,8 @@ fn a_late_save_never_touches_another_games_draft() {
     ];
     app.update(Message::GameSelected("demo".into()));
     app.update(Message::ExePathChanged("/games/demo/renamed.exe".into()));
-    app.update(Message::AutoSave(app.autosave_generation));
+    // 路径那一组归按钮管（不再自动保存）—— 这里就是"用户按了保存路径"。
+    app.update(Message::SaveGroup(SaveScope::Paths));
     assert!(app.save_in_flight.is_some());
 
     app.update(Message::GameSelected("other".into()));

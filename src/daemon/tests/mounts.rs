@@ -7,6 +7,8 @@
 
 use super::*;
 
+use serde_json::{Value, json};
+
 use crate::config::GameConfig;
 
 /// 带一条 `demo` 档案的 daemon。配置**真的写进**临时文件：`mutate_config` 改之前

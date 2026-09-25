@@ -81,6 +81,16 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     window.on_new_name_changed(|text| dispatch(Message::NewNameChanged(one_line(&text))));
     window.on_new_game_dir_changed(|text| dispatch(Message::NewGameDirChanged(one_line(&text))));
     window.on_new_exe_changed(|text| dispatch(Message::NewExeChanged(one_line(&text))));
+    window.on_new_game_dir_disk_changed(|text| {
+        dispatch(Message::NewGameDirDiskChanged(one_line(&text)))
+    });
+    window.on_new_game_dir_relative_changed(|text| {
+        dispatch(Message::NewGameDirRelativeChanged(one_line(&text)))
+    });
+    window.on_new_exe_disk_changed(|text| dispatch(Message::NewExeDiskChanged(one_line(&text))));
+    window.on_new_exe_relative_changed(|text| {
+        dispatch(Message::NewExeRelativeChanged(one_line(&text)))
+    });
     window.on_create_requested(|| dispatch(Message::CreateRequested));
     window.on_browse_new_game_dir(|| dispatch(Message::PickPath(PathTarget::NewGameDir)));
     window.on_browse_new_exe(|| dispatch(Message::PickPath(PathTarget::NewExe)));
@@ -102,6 +112,15 @@ pub(super) fn install_callbacks(window: &AppWindow) {
 
     window.on_game_dir_changed(|text| dispatch(Message::GameDirChanged(one_line(&text))));
     window.on_exe_changed(|text| dispatch(Message::ExePathChanged(one_line(&text))));
+    window.on_game_dir_disk_changed(|text| dispatch(Message::GameDirDiskChanged(one_line(&text))));
+    window.on_game_dir_relative_changed(|text| {
+        dispatch(Message::GameDirRelativeChanged(one_line(&text)))
+    });
+    window.on_exe_disk_changed(|text| dispatch(Message::ExeDiskChanged(one_line(&text))));
+    window.on_exe_relative_changed(|text| dispatch(Message::ExeRelativeChanged(one_line(&text))));
+    // 「路径」与「存档位置」两组各自的保存按钮（这两组不自动保存）。
+    window.on_save_paths(|| dispatch(Message::SaveGroup(SaveScope::Paths)));
+    window.on_save_saves(|| dispatch(Message::SaveGroup(SaveScope::Saves)));
     window.on_launch_args_changed(|text| dispatch(Message::LaunchArgsChanged(one_line(&text))));
     window
         .on_gamescope_args_changed(|text| dispatch(Message::GamescopeArgsChanged(one_line(&text))));

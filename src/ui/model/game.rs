@@ -27,12 +27,48 @@ pub struct SavePathDraft {
     pub exclude: String,
 }
 
+/// 「挂载盘号 + 磁盘内相对目录」在界面上的样子（用户 2026-09-25 手填的那两栏）。
+///
+/// **盘号空 = 这个位置不用挂载引用**，照老规矩存绝对路径；反过来，只填了相对目录
+/// 而没填盘号是无效的 —— 盘号是身份，离开它那段相对路径毫无意义（保存时会报错）。
+///
+/// 相对目录的基准是**文件系统根**，不是挂载点（bind / btrfs 子卷时前面还要带上
+/// 子卷前缀），placeholder 里得给出例子，否则很容易照着挂载点填。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MountRef {
+    pub disk: String,
+    pub relative: String,
+}
+
+impl MountRef {
+    /// 这一栏算不算"没填"。只看盘号：`relative` 空是合法的（那就是文件系统根）。
+    pub(in crate::ui) fn is_unset(&self) -> bool {
+        self.disk.trim().is_empty()
+    }
+
+    /// 发给 daemon 的形状。`None` = 不用引用（patch 里发 `null`）。
+    pub(in crate::ui) fn to_json(&self) -> Option<serde_json::Value> {
+        if self.is_unset() {
+            return None;
+        }
+        Some(serde_json::json!({
+            "disk": self.disk.trim(),
+            "relative": self.relative.trim(),
+        }))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct UiGame {
     pub id: String,
     pub name: String,
     pub game_dir: String,
     pub exe: String,
+    /// 这两处各自的挂载引用（盘号 + 磁盘内相对目录）。盘在的时候 daemon 给的是
+    /// **解析后**的路径填在上面两栏里，这里则是"它是谁"；盘不在时上面两栏是空的，
+    /// 只有这里还指着那块盘。
+    pub game_dir_mount: MountRef,
+    pub exe_mount: MountRef,
     /// 传给这个 exe 的额外参数(存的是原始 argv,页面里拼成一行显示)。
     pub launch_args: Vec<String>,
     pub save_paths: Vec<SavePathDraft>,
@@ -80,6 +116,13 @@ pub(in crate::ui) struct Draft {
     pub(in crate::ui) game_dir_original: String,
     pub(in crate::ui) exe: String,
     pub(in crate::ui) exe_original: String,
+    /// 这两个位置的挂载引用。它与上面两组路径**同属「路径」那一组**：一起改、一起
+    /// 按保存按钮、一起丢弃，不走自动保存（用户 2026-09-25 定的：路径打一半就被
+    /// 写下去等于误伤）。
+    pub(in crate::ui) game_dir_mount: MountRef,
+    pub(in crate::ui) game_dir_mount_original: MountRef,
+    pub(in crate::ui) exe_mount: MountRef,
+    pub(in crate::ui) exe_mount_original: MountRef,
     /// exe 的额外参数。跟 exe 路径一样留着原值:没改就不发,免得打断一次
     /// 正在跑的游戏(daemon 那边是按字段 patch 的)。
     pub(in crate::ui) launch_args: String,
@@ -123,6 +166,10 @@ impl Draft {
             game_dir_original: game.game_dir.clone(),
             exe: game.exe.clone(),
             exe_original: game.exe.clone(),
+            game_dir_mount: game.game_dir_mount.clone(),
+            game_dir_mount_original: game.game_dir_mount.clone(),
+            exe_mount: game.exe_mount.clone(),
+            exe_mount_original: game.exe_mount.clone(),
             launch_args: game.launch_args.join(" "),
             launch_args_original: game.launch_args.join(" "),
             save_paths: game.save_paths.clone(),
@@ -182,6 +229,18 @@ impl Draft {
         self.save_paths != self.save_paths_original
     }
 
+    /// 「路径」那一组（根目录 / exe / 两个挂载引用）有没有改动。
+    ///
+    /// 这一组归「保存」按钮管：不打按钮就不落盘，离开页面直接丢弃（用户 2026-09-25
+    /// 改的主意 —— 路径打到一半就被自动保存写下去，daemon 会拒、界面会弹错，真写错
+    /// 一次就把这一款指到别的目录去了）。
+    pub(in crate::ui) fn path_group_changed(&self) -> bool {
+        self.game_dir_changed()
+            || self.exe_changed()
+            || self.game_dir_mount != self.game_dir_mount_original
+            || self.exe_mount != self.exe_mount_original
+    }
+
     /// 页面上看得见的那些值,是否已经和「已存值」一样。
     ///
     /// 比较时**故意忽略 `*_original`**:它们是"服务端有什么"的书签,不是页面内容。
@@ -191,20 +250,37 @@ impl Draft {
         let stored = Draft::from_game(game);
         self.exe.trim() == stored.exe.trim()
             && self.game_dir.trim() == stored.game_dir.trim()
+            && self.game_dir_mount == stored.game_dir_mount
+            && self.exe_mount == stored.exe_mount
             && self.launch_args.trim() == stored.launch_args.trim()
             && self.save_paths == stored.save_paths
             && profile_from_draft(self).ok() == profile_from_draft(&stored).ok()
     }
 }
 
-/// 一笔在路上的自动保存:带走了哪份草稿(以及它属于哪个游戏)。
+/// 一笔保存**写的是哪一组**。三组各自独立：
 ///
-/// 成功之后要把 `*_original` 推进到**带走的这份**上(不是手上这份 —— 用户可能又改过
-/// 了):它代表"服务端现在有的值",下一次自动保存据此只发改过的字段。少推进这一下,
-/// 游戏盘一没挂载就会连"改个锐度"都存不进去。
+/// - `Auto`：缩放、启动方式、自动追踪、额外参数……改一下就防抖写回；
+/// - `Paths`：「路径」组（根目录 / exe / 两个挂载引用），**只有按保存按钮才写**；
+/// - `Saves`：「存档位置」组，同样按按钮才写。
+///
+/// 用户 2026-09-25 改的主意：路径与存档位置打到一半就被自动保存写下去会误伤
+/// （daemon 会拒、界面弹错，真写错一次就把这一款指到别处了）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SaveScope {
+    Auto,
+    Paths,
+    Saves,
+}
+
+/// 一笔在路上的保存:带走了哪份草稿(以及它属于哪个游戏)、写的是哪一组。
+///
+/// 成功之后要把**那一组**的 `*_original` 推进到带走的这份上(不是手上这份 —— 用户
+/// 可能又改过了):它代表"服务端现在有的值",下一次保存据此只发改过的字段。
 #[derive(Debug, Clone)]
 pub(in crate::ui) struct SaveAttempt {
     pub(in crate::ui) draft: Draft,
+    pub(in crate::ui) scope: SaveScope,
 }
 
 #[cfg(test)]
@@ -229,5 +305,50 @@ mod tests {
         let mut padded = Draft::from_game(&game);
         padded.exe = format!("  {}  ", game.exe);
         assert!(!padded.exe_changed());
+    }
+
+    /// 挂载引用那两栏：盘号是身份（空 = 不用引用），相对目录空是合法的（磁盘根）。
+    #[test]
+    fn a_mount_needs_a_disk_and_may_have_an_empty_relative() {
+        assert!(MountRef::default().is_unset());
+        assert!(MountRef::default().to_json().is_none());
+
+        let root_of_disk = MountRef {
+            disk: " AAAA-1111 ".into(),
+            relative: String::new(),
+        };
+        assert!(!root_of_disk.is_unset());
+        assert_eq!(
+            root_of_disk.to_json().unwrap(),
+            serde_json::json!({ "disk": "AAAA-1111", "relative": "" }),
+            "两头都要 trim 过再发"
+        );
+
+        // 只有相对目录 = 没有身份，等于没填。
+        let dangling = MountRef {
+            disk: "  ".into(),
+            relative: "g/game.exe".into(),
+        };
+        assert!(dangling.is_unset());
+    }
+
+    /// 路径那一组（根目录 / exe / 两个引用）一起进「保存路径」按钮，其中任何一样变了
+    /// 都算"有未保存的改动"。
+    #[test]
+    fn the_path_group_notices_a_reference_edit_only() {
+        let mut game = ui_game();
+        game.exe_mount = MountRef {
+            disk: "AAAA-1111".into(),
+            relative: "g/game.exe".into(),
+        };
+        let mut draft = Draft::from_game(&game);
+        assert!(!draft.path_group_changed());
+
+        // 只动盘号（路径一个字没改）也要算改动 —— 否则按钮点不亮，用户改了个寂寞。
+        draft.exe_mount = MountRef {
+            disk: "BBBB-2222".into(),
+            relative: "g/game.exe".into(),
+        };
+        assert!(draft.path_group_changed());
     }
 }

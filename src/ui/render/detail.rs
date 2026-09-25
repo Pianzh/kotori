@@ -44,6 +44,22 @@ pub(super) fn push_detail(ui: &mut Ui) {
         app.draft.as_ref().map(|d| d.direct_launch).unwrap_or(false),
         |v| w.set_game_direct_launch(v),
     );
+    // 两组"按按钮才保存"的按钮状态：有未保存的改动才点亮（保存中由 `saving` 一起管）。
+    push_bool(
+        w.get_path_dirty(),
+        app.draft.as_ref().is_some_and(|d| d.path_group_changed()),
+        |v| w.set_path_dirty(v),
+    );
+    // 挂载引用这台机器能不能用：Linux 读得到 `/proc/self/mountinfo`，Windows 读不到
+    // （那两栏照旧显示、能填能清，只是不生效，见 `pages/game-settings.slint`）。
+    push_bool(w.get_mount_supported(), cfg!(target_os = "linux"), |v| {
+        w.set_mount_supported(v)
+    });
+    push_bool(
+        w.get_saves_dirty(),
+        app.draft.as_ref().is_some_and(|d| d.save_paths_changed()),
+        |v| w.set_saves_dirty(v),
+    );
     push_bool(
         w.get_game_auto_watch(),
         app.draft.as_ref().map(|d| d.auto_watch).unwrap_or(false),
@@ -165,6 +181,11 @@ fn game_detail(game: &UiGame) -> GameDetail {
     GameDetail {
         game_dir: game.game_dir.clone().into(),
         exe: game.exe.clone().into(),
+        // 挂载引用（盘号 + 磁盘内相对目录）。空盘号 = 这一栏不用引用。
+        game_dir_disk: game.game_dir_mount.disk.clone().into(),
+        game_dir_relative: game.game_dir_mount.relative.clone().into(),
+        exe_disk: game.exe_mount.disk.clone().into(),
+        exe_relative: game.exe_mount.relative.clone().into(),
         ratio: ratio_label(game.scale_ratio).into(),
         algo: ScaleAlgorithm::ALL
             .iter()

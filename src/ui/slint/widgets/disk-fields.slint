@@ -1,0 +1,36 @@
+// 「盘号 / 磁盘内相对目录」两个并排的输入框（用户 2026-09-25 定的手填栏）。
+//
+// **盘号空 = 这个位置不用挂载引用**，就走上一条路径栏里的绝对路径。相对目录的基准是
+// **文件系统根**、不是挂载点（bind / btrfs 子卷时前面还要带上子卷前缀），所以
+// placeholder 里给一个照着抄的例子，比写"相对路径"有用。
+
+import { Tokens } from "../theme.slint";
+import { TextField } from "controls.slint";
+
+export component DiskFields inherits HorizontalLayout {
+    in-out property <string> disk;
+    in-out property <string> relative;
+    callback disk-edited(string);
+    callback relative-edited(string);
+
+    spacing: 6px;
+    alignment: center;
+
+    TextField {
+        field-width: 150px;
+        text <=> root.disk;
+        edited(text) => { root.disk-edited(text); }
+        placeholder: "盘号 UUID";
+    }
+    Text {
+        text: "/";
+        color: Tokens.text-3;
+        vertical-alignment: center;
+    }
+    TextField {
+        field-width: 150px;
+        text <=> root.relative;
+        edited(text) => { root.relative-edited(text); }
+        placeholder: "Games/某游戏";
+    }
+}

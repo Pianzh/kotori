@@ -7,12 +7,12 @@ use crate::ui::test_support::{sync_payload, sync_status_fixture, ui_game};
 ///
 /// 串了目标的话,用户会在另一个框里看到刚挑的路径 —— 而那种错误在编译期完全看不出来。
 #[test]
-fn a_picked_path_lands_on_its_own_field_and_schedules_a_save() {
+fn a_picked_path_lands_on_its_own_field_and_asks_where_the_disk_is() {
     let (mut app, _task) = App::new();
     app.games = vec![ui_game()];
     app.update(Message::GameSelected("demo".into()));
 
-    // 单游戏页:游戏根目录 → 草稿 + 推给页面的令牌 + 一次自动保存。
+    // 单游戏页:游戏根目录 → 草稿 + 推给页面的令牌 + 认一次盘(填挂载那两栏)。
     let generation = app.autosave_generation;
     app.apply_picked_path(PathTarget::GameDir, Path::new("/games/other"));
     let draft = app.draft.as_ref().unwrap();
@@ -22,7 +22,12 @@ fn a_picked_path_lands_on_its_own_field_and_schedules_a_save() {
         app.picked_path.as_ref().map(|(t, v)| (*t, v.as_str())),
         Some((PathTarget::GameDir, "/games/other"))
     );
-    assert_eq!(app.autosave_generation, generation + 1);
+    // ⚠ 2026-09-25 起「路径」那一组**不再自动保存**（改归「保存路径」按钮）：挑回来
+    // 只是改草稿 + 认一次盘，世代不许动 —— 动了就等于又把它写下去了。
+    assert_eq!(
+        app.autosave_generation, generation,
+        "路径挑回来不该排自动保存"
+    );
 
     // 存档行的相对路径:挑游戏目录里面的位置 → 存成相对的。
     app.draft.as_mut().unwrap().save_paths = vec![SavePathDraft {

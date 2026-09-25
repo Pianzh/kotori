@@ -17,10 +17,15 @@ export component GameLaunchGroup inherits VerticalLayout {
     in property <bool> game-auto-watch: false;
     // 自动追踪盯的进程名(写进配置);空 = 按 exe 文件名认。
     in-out property <string> process-name: "";
+    // exe 的额外参数(存的是 argv,页面上拼成一行)。它从「路径」组搬过来的
+    // (用户 2026-09-25):那一组的改动改成按按钮保存,而它仍然归**自动保存** ——
+    // 写错了只是启动时多带一个参数,不会像路径那样把这一款指到别处去。
+    in-out property <string> launch-args: "";
 
     callback direct-launch-toggled(bool);
     callback auto-watch-toggled(bool);
     callback process-name-changed(string);
+    callback launch-args-changed(string);
 
     // ── 启动方式 ─────────────────────────────────────────────
         RevealItem {
@@ -42,6 +47,17 @@ export component GameLaunchGroup inherits VerticalLayout {
                         // 不能 <=> 双向链;点了发消息,新值下一帧推回来。
                         checked: root.game-direct-launch;
                         toggled => { root.direct-launch-toggled(self.checked); }
+                    }
+                }
+                Divider { }
+                CardRow {
+                    title: "启动参数";
+                    description: "传给这个 exe 的额外参数，启动时接在它后面（如 -nojapanese）。参数之间用空格分隔；不需要就留空。";
+                    TextField {
+                        field-width: 340px;
+                        text <=> root.launch-args;
+                        edited(text) => { root.launch-args-changed(text); }
+                        placeholder: "留空＝不带参数";
                     }
                 }
                 Divider { }

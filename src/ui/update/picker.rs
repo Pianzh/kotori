@@ -66,7 +66,8 @@ impl App {
             "已按进程 {} 填好（PID {}），确认后点「添加游戏」",
             row.name, row.pid
         ));
-        // 填好 exe 之后照手打那条路走一遍:问一次云端有没有这一款(见 `model::add`)。
-        self.schedule_match()
+        // 填好 exe 之后照手打那条路走一遍:问一次云端有没有这一款(见 `model::add`)；
+        // 顺带认一次盘，把「盘号 / 相对目录」两栏填好（用户 2026-09-25 定的"中间加一小步"）。
+        Task::batch([self.schedule_match(), self.infer_new_mount(true)])
     }
 }

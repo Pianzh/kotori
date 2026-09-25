@@ -5,7 +5,7 @@
 
 import { Tokens } from "../theme.slint";
 import { Divider, RevealItem } from "../widgets/base.slint";
-import { StdButton } from "../widgets/buttons.slint";
+import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { Group } from "../widgets/card.slint";
 import { SaveRow } from "../widgets/save-row.slint";
 import { SaveItem } from "../types.slint";
@@ -20,6 +20,10 @@ export component GameSavesGroup inherits Rectangle {
     // 与页面双向:行里点开下拉要写上去,浮层选完要写回来。
     in-out property <int> open-save: -1;
     in-out property <int> open-save-kind: 0;
+    // 这一组**不自动保存**（用户 2026-09-25 定的，与「路径」组同一条规矩）：有未保存
+    // 的改动才点亮按钮，保存中禁用（同一时刻只允许一笔写在路上）。
+    in property <bool> dirty: false;
+    in property <bool> saving: false;
 
     callback add-save();
     callback remove-save(int);
@@ -27,6 +31,7 @@ export component GameSavesGroup inherits Rectangle {
     callback path-changed(int, string);
     callback exclude-changed(int, string);
     callback browse-save(int);
+    callback save-saves();
 
     height: group.height;
     group := Group {
@@ -67,6 +72,25 @@ export component GameSavesGroup inherits Rectangle {
                             label: "添加存档位置";
                             button-width: 130px;
                             clicked => { root.add-save(); }
+                        }
+                        Rectangle { horizontal-stretch: 1; background: #00000000; }
+                    }
+                    Divider { }
+                    // ⚠ 存档位置与路径同一条规矩：**不自动保存**，只有这颗按钮落盘。
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        AccentButton {
+                            label: root.saving ? "保存中…" : "保存存档位置";
+                            button-width: 140px;
+                            button-enabled: root.dirty && !root.saving;
+                            clicked => { root.save-saves(); }
+                        }
+                        Text {
+                            text: root.dirty ? "有未保存的改动（离开这一页会丢弃）" : "";
+                            font-size: 11px;
+                            color: Tokens.warn;
+                            vertical-alignment: center;
                         }
                         Rectangle { horizontal-stretch: 1; background: #00000000; }
                     }

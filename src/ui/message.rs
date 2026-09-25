@@ -114,6 +114,14 @@ pub enum Message {
     /// 让位**,运行时缩放也一并停用,见 `ScaleProfile::gamescope_args`。
     GamescopeArgsChanged(String),
     GameDirChanged(String),
+    /// 挂载引用那两栏（盘号 / 磁盘内相对目录）在编辑页被改动。
+    GameDirDiskChanged(String),
+    GameDirRelativeChanged(String),
+    ExeDiskChanged(String),
+    ExeRelativeChanged(String),
+    /// 挑完一条路径之后，daemon 认出它落在哪块盘上 —— 把编辑页草稿里对应那两栏
+    /// 填好（第一个参数：是不是 exe 那一栏）。盘认不出来就是 `None`，什么都不动。
+    MountInferred(bool, Result<Option<MountRef>, String>),
     SavePathKindChanged(usize, String),
     SavePathChanged(usize, String),
     SavePathExcludeChanged(usize, String),
@@ -122,10 +130,17 @@ pub enum Message {
     /// 改一下就自动存一次:这是防抖定时器到点。
     ///
     /// 带着世代号 —— 定时器醒来时它已经过期(用户还在改)就什么都不做,见
-    /// `App::schedule_auto_save`。没有「保存」按钮了,所以这条是唯一的写入入口。
+    /// `App::schedule_auto_save`。它只写"自动那一族"(缩放、启动方式、自动追踪、
+    /// 额外参数),**不含路径与存档位置**。
     AutoSave(u64),
-    /// 一次自动保存的回包。世代号对不上说明这一笔已经过期(用户按过「重置」或又改了),
+    /// 按了「路径」或者「存档位置」那一组下面的保存按钮。
+    ///
+    /// 用户 2026-09-25 改的主意:这两组改一半就自动写下去会误伤(daemon 会拒、界面
+    /// 弹错,真写错一次就把这一款指到别处了),所以只有这一条能把它们落盘。
+    SaveGroup(SaveScope),
+    /// 一次保存的回包。世代号对不上说明这一笔已经过期(用户按过「重置」或又改了),
     /// 那时得拿手上的草稿再存一次,否则配置里留着的是一个用户已经不要的值。
+    /// **写的是哪一组问 `App::save_in_flight`**(那一笔自己记着),回包里不用再带。
     ProfileSaved(u64, Result<(), String>),
     /// 「重置」:回到已保存的设置(没有保存按钮之后,这是填错值的唯一退路)。
     ResetProfile,
@@ -136,6 +151,14 @@ pub enum Message {
     NewNameChanged(String),
     NewGameDirChanged(String),
     NewExeChanged(String),
+    /// 添加页那两栏挂载引用（盘号 / 磁盘内相对目录）。
+    NewGameDirDiskChanged(String),
+    NewGameDirRelativeChanged(String),
+    NewExeDiskChanged(String),
+    NewExeRelativeChanged(String),
+    /// 挑完 exe / 根目录之后 daemon 认出它在哪块盘上 —— 把添加页那两栏自动填好
+    /// （用户 2026-09-25 定的"中间加一小步"）。第一个参数：是不是 exe 那一栏。
+    NewMountInferred(bool, Result<Option<MountRef>, String>),
     CreateRequested,
     CreateFinished(Result<(String, Option<String>), String>),
     /// 添加页的云端匹配:防抖到点(`MatchExeReady` 带回当时那个 exe,已经不是当前值就丢掉)、

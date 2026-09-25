@@ -64,7 +64,13 @@ impl App {
             Message::ExePathChanged(v) => {
                 if let Some(d) = &mut self.draft {
                     d.exe = v;
+                    // 路径改了，旧的外置盘引用跟着作废（与 `update::settings` 里
+                    // `GameDirChanged` 同一条理由：它已经不再指向这条路径了）。
+                    d.exe_mount = MountRef::default();
                 }
+                // ⚠ 路径那一组归页面上的「保存路径」按钮，**不排自动保存** —— 提前返回，
+                // 别掉进下面那句统一的 `schedule_auto_save()`。
+                return Task::none();
             }
             Message::LaunchArgsChanged(v) => {
                 if let Some(d) = &mut self.draft {

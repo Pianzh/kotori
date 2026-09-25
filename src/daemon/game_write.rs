@@ -1,6 +1,8 @@
 //! 写入口:新建一条档案与按字段改一条档案。daemon 是配置的唯一写者,这两个 RPC 是
 //! UI 落盘的唯一两条路(扫描那条在 [`super::game_rpc`] 的 `game.add` 里)。
 
+use serde_json::{Value, json};
+
 use super::protocol::{GamePatch, NewGame};
 use super::*;
 

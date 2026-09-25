@@ -16,6 +16,7 @@ import { Tokens } from "../theme.slint";
 import { Divider, IconButton, RevealItem } from "../widgets/base.slint";
 import { Slider, Switch, TextField } from "../widgets/controls.slint";
 import { PathField } from "../widgets/path-field.slint";
+import { DiskFields } from "../widgets/disk-fields.slint";
 import { DropdownList, Select } from "../widgets/select.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
@@ -45,6 +46,12 @@ export component GameSettingsPage inherits Rectangle {
     in property <[string]> save-kinds;
     in property <bool> show-sharpness: true;
     in property <bool> saving: false;
+    // 「路径」与「存档位置」两组**不自动保存**（用户 2026-09-25 定的）：有未保存的改动
+    // 才点亮各自的按钮，保存中则禁用它（同一时刻只允许一笔写在路上）。
+    in property <bool> path-dirty: false;
+    in property <bool> saves-dirty: false;
+    // 这台机器读不读得到挂载表（Windows 上读不到 ⇒ 引用填了也不生效）。
+    in property <bool> mount-supported: true;
     in property <string> saved-msg: "";
     in property <bool> saved-ok: true;
     in property <bool> confirm-delete: false;
@@ -75,6 +82,14 @@ export component GameSettingsPage inherits Rectangle {
     callback game-dir-changed(string);
     callback exe-changed(string);
     callback launch-args-changed(string);
+    // 挂载引用那两栏（盘号 + 磁盘内相对目录）。
+    callback game-dir-disk-changed(string);
+    callback game-dir-relative-changed(string);
+    callback exe-disk-changed(string);
+    callback exe-relative-changed(string);
+    // 「路径」/「存档位置」两组各自的保存按钮。
+    callback save-paths();
+    callback save-saves();
     callback browse-game-dir();
     callback browse-exe();
     callback browse-save(int);
@@ -109,6 +124,11 @@ export component GameSettingsPage inherits Rectangle {
     // ── 可编辑副本(见文件头) ───────────────────────────────────────────────
     in-out property <string> game-dir: "";
     in-out property <string> exe-path: "";
+    // 挂载引用那两栏(盘号 + 磁盘内相对目录)。盘号空 = 这个位置不用引用。
+    in-out property <string> game-dir-disk: "";
+    in-out property <string> game-dir-relative: "";
+    in-out property <string> exe-disk: "";
+    in-out property <string> exe-relative: "";
     // exe 的额外参数(一行文本,存的时候按空白切成 argv)。
     in-out property <string> launch-args: "";
     in-out property <string> ratio: "";
@@ -128,6 +148,10 @@ export component GameSettingsPage inherits Rectangle {
     function seed-copy() {
         root.game-dir = root.stored.game-dir;
         root.exe-path = root.stored.exe;
+        root.game-dir-disk = root.stored.game-dir-disk;
+        root.game-dir-relative = root.stored.game-dir-relative;
+        root.exe-disk = root.stored.exe-disk;
+        root.exe-relative = root.stored.exe-relative;
         root.launch-args = root.stored.launch-args;
         root.ratio = root.stored.ratio;
         root.algo-index = root.stored.algo;
@@ -199,6 +223,18 @@ export component GameSettingsPage inherits Rectangle {
                             placeholder: "/path/to/game";
                         }
                     }
+                    CardRow {
+                        title: "根目录所在的外置盘";
+                        description: root.mount-supported
+                            ? "盘号是磁盘的 UUID（如 5A3F-2B1C）；相对目录以**磁盘根**为基准（如 Games/某游戏）。盘号留空＝这个位置不用引用，只看上面那个绝对路径。"
+                            : "Windows 上读不到挂载表，这两栏填了也不生效。从别的机器带过来的引用在这里解析不出来（上面的路径会是空的）—— 把这两栏清空、填上真实路径就恢复正常。";
+                        DiskFields {
+                            disk <=> root.game-dir-disk;
+                            relative <=> root.game-dir-relative;
+                            disk-edited(text) => { root.game-dir-disk-changed(text); }
+                            relative-edited(text) => { root.game-dir-relative-changed(text); }
+                        }
+                    }
                     Divider { }
                     CardRow {
                         title: "可执行文件";
@@ -212,15 +248,16 @@ export component GameSettingsPage inherits Rectangle {
                             placeholder: "/path/to/game.exe";
                         }
                     }
-                    Divider { }
                     CardRow {
-                        title: "启动参数";
-                        description: "传给这个 exe 的额外参数，启动时接在它后面（如 -nojapanese）。参数之间用空格分隔；不需要就留空。";
-                        TextField {
-                            field-width: 340px;
-                            text <=> root.launch-args;
-                            edited(text) => { root.launch-args-changed(text); }
-                            placeholder: "留空＝不带参数";
+                        title: "可执行文件所在的外置盘";
+                        description: root.mount-supported
+                            ? "同上：盘号留空＝不用引用。盘不在时这一款照样能在库里留着，只是启动会明确报「未挂载」。"
+                            : "Windows 上不生效，清空这两栏即可回到绝对路径。";
+                        DiskFields {
+                            disk <=> root.exe-disk;
+                            relative <=> root.exe-relative;
+                            disk-edited(text) => { root.exe-disk-changed(text); }
+                            relative-edited(text) => { root.exe-relative-changed(text); }
                         }
                     }
                     if root.path-hint != "" : VerticalLayout {
@@ -235,6 +272,26 @@ export component GameSettingsPage inherits Rectangle {
                             }
                         }
                     }
+                    Divider { }
+                    // ⚠ 路径这一组**不自动保存**（用户 2026-09-25 改的主意）：打到一半
+                    //   就被写下去会误伤（daemon 会拒、界面弹错，真写错一次就指到别处了）。
+                    HorizontalLayout {
+                        padding: 12px;
+                        spacing: 10px;
+                        AccentButton {
+                            label: root.saving ? "保存中…" : "保存路径";
+                            button-width: 120px;
+                            button-enabled: root.path-dirty && !root.saving;
+                            clicked => { root.save-paths(); }
+                        }
+                        Text {
+                            text: root.path-dirty ? "有未保存的路径改动（离开这一页会丢弃）" : "";
+                            font-size: 11px;
+                            color: Tokens.warn;
+                            vertical-alignment: center;
+                        }
+                        Rectangle { horizontal-stretch: 1; background: #00000000; }
+                    }
                 }
             }
 
@@ -246,6 +303,8 @@ export component GameSettingsPage inherits Rectangle {
                 direct-launch-toggled(v) => { root.direct-launch-toggled(v); }
                 auto-watch-toggled(v) => { root.auto-watch-toggled(v); }
                 process-name-changed(v) => { root.process-name-changed(v); }
+                launch-args <=> root.launch-args;
+                launch-args-changed(v) => { root.launch-args-changed(v); }
             }
 
             // ── 缩放 ──────────────────────────────────────────────────
@@ -354,6 +413,9 @@ export component GameSettingsPage inherits Rectangle {
                     path-changed(index, text) => { root.save-path-changed(index, text); }
                     exclude-changed(index, text) => { root.save-exclude-changed(index, text); }
                     browse-save(index) => { root.browse-save(index); }
+                    dirty: root.saves-dirty;
+                    saving: root.saving;
+                    save-saves => { root.save-saves(); }
                 }
             }
 

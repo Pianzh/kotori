@@ -86,6 +86,12 @@ export component AppWindow inherits Window {
     in-out property <string> new-name: "";
     in-out property <string> new-game-dir: "";
     in-out property <string> new-exe: "";
+    // 挂载引用（盘号 + 磁盘内相对目录）：挑完目录或 exe 之后由 daemon 识别一次自动
+    // 填好（用户 2026-09-25 定的交互），也可以自己填；盘号空 = 不用引用。
+    in-out property <string> new-game-dir-disk: "";
+    in-out property <string> new-game-dir-relative: "";
+    in-out property <string> new-exe-disk: "";
+    in-out property <string> new-exe-relative: "";
     in-out property <bool> creating: false;
     in-out property <string> create-message: "";
     in-out property <bool> create-message-ok: true;
@@ -93,6 +99,10 @@ export component AppWindow inherits Window {
     callback new-name-changed(string);
     callback new-game-dir-changed(string);
     callback new-exe-changed(string);
+    callback new-game-dir-disk-changed(string);
+    callback new-game-dir-relative-changed(string);
+    callback new-exe-disk-changed(string);
+    callback new-exe-relative-changed(string);
     callback create-requested();
 
     // ── 单个游戏 ──────────────────────────────────────────────────────────
@@ -104,6 +114,13 @@ export component AppWindow inherits Window {
     in-out property <[string]> save-kinds: [];
     in-out property <bool> show-sharpness: true;
     in-out property <bool> saving: false;
+    // 「路径」与「存档位置」这两组**不自动保存**（用户 2026-09-25 定的）：有未保存的
+    // 改动才点亮各自的保存按钮，保存中则禁用它（同一时刻只允许一笔写在路上）。
+    in-out property <bool> path-dirty: false;
+    in-out property <bool> saves-dirty: false;
+    // 这台机器上的挂载引用能不能用（读得到挂载表才算）。Windows 上为 false：那两栏
+    // 照旧显示、照旧能填能清（否则从 Linux 带过来的引用在那边没法自救），只是不生效。
+    in-out property <bool> mount-supported: true;
     in-out property <string> saved-message: "";
     in-out property <bool> saved-ok: true;
     in-out property <bool> confirm-delete: false;
@@ -124,13 +141,21 @@ export component AppWindow inherits Window {
     in-out property <bool> detail-sync-busy: false;
 
     callback back();
-    // 没有「保存」按钮了:改动由宿主防抖后自动写回(见 ui/app.rs 的 schedule_auto_save)。
+    // 其余改动由宿主防抖后自动写回(见 ui/app.rs 的 schedule_auto_save);**路径与
+    // 存档位置这两组不在此列** —— 它们只有各自的保存按钮能落盘。
     callback reset();
     callback delete-requested();
     callback delete-cancelled();
     callback delete-confirmed();
     callback game-dir-changed(string);
     callback exe-changed(string);
+    callback game-dir-disk-changed(string);
+    callback game-dir-relative-changed(string);
+    callback exe-disk-changed(string);
+    callback exe-relative-changed(string);
+    // 「路径」/「存档位置」两组各自的保存按钮。
+    callback save-paths();
+    callback save-saves();
     callback launch-args-changed(string);
     callback ratio-changed(string);
     callback algo-picked(int);
@@ -323,6 +348,9 @@ export component AppWindow inherits Window {
                             save-kinds: root.save-kinds;
                             show-sharpness: root.show-sharpness;
                             saving: root.saving;
+                            path-dirty: root.path-dirty;
+                            saves-dirty: root.saves-dirty;
+                            mount-supported: root.mount-supported;
                             saved-msg: root.saved-message;
                             saved-ok: root.saved-ok;
                             confirm-delete: root.confirm-delete;
@@ -349,6 +377,12 @@ export component AppWindow inherits Window {
                             game-dir-changed(text) => { root.game-dir-changed(text); }
                             exe-changed(text) => { root.exe-changed(text); }
                             launch-args-changed(text) => { root.launch-args-changed(text); }
+                            game-dir-disk-changed(text) => { root.game-dir-disk-changed(text); }
+                            game-dir-relative-changed(text) => { root.game-dir-relative-changed(text); }
+                            exe-disk-changed(text) => { root.exe-disk-changed(text); }
+                            exe-relative-changed(text) => { root.exe-relative-changed(text); }
+                            save-paths => { root.save-paths(); }
+                            save-saves => { root.save-saves(); }
                             browse-game-dir => { root.browse-game-dir(); }
                             browse-exe => { root.browse-exe(); }
                             browse-save(index) => { root.browse-save(index); }
@@ -378,6 +412,11 @@ export component AppWindow inherits Window {
                             new-name <=> root.new-name;
                             new-game-dir <=> root.new-game-dir;
                             new-exe <=> root.new-exe;
+                            new-game-dir-disk <=> root.new-game-dir-disk;
+                            new-game-dir-relative <=> root.new-game-dir-relative;
+                            new-exe-disk <=> root.new-exe-disk;
+                            new-exe-relative <=> root.new-exe-relative;
+                            mount-supported: root.mount-supported;
                             creating: root.creating;
                             message: root.create-message;
                             message-ok: root.create-message-ok;
@@ -386,6 +425,10 @@ export component AppWindow inherits Window {
                             name-changed(text) => { root.new-name-changed(text); }
                             game-dir-changed(text) => { root.new-game-dir-changed(text); }
                             exe-changed(text) => { root.new-exe-changed(text); }
+                            game-dir-disk-changed(text) => { root.new-game-dir-disk-changed(text); }
+                            game-dir-relative-changed(text) => { root.new-game-dir-relative-changed(text); }
+                            exe-disk-changed(text) => { root.new-exe-disk-changed(text); }
+                            exe-relative-changed(text) => { root.new-exe-relative-changed(text); }
                             browse-game-dir => { root.browse-new-game-dir(); }
                             browse-exe => { root.browse-new-exe(); }
                             create-requested => { root.create-requested(); }

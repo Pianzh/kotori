@@ -347,6 +347,7 @@ impl App {
                 }
                 self.begin_auto_save()
             }
+            Message::SaveGroup(scope) => self.begin_save(scope),
             Message::ProfileSaved(generation, result) => {
                 let Some(attempt) = self.save_in_flight.take() else {
                     // 一笔只回一次,理论上到不了这儿;真到了也别让界面永远停在"保存中"。
@@ -354,6 +355,8 @@ impl App {
                     return Task::none();
                 };
                 self.saving = false;
+                // 写的是哪一组由**那一笔自己**说了算（回包里不带，见 `Message`）。
+                let scope = attempt.scope;
                 // 用户可能已经翻到别的游戏去了:回包只能落在它自己那一份草稿上,
                 // 否则会把别人的 `*_original` 写成这个游戏的值。
                 let same_game = self.selected.as_deref() == Some(attempt.draft.game_id.as_str());
@@ -362,14 +365,32 @@ impl App {
                     Ok(()) => {
                         if same_game {
                             if let Some(draft) = self.draft.as_mut() {
-                                // 服务端现在有的就是这一笔带过去的东西 ⇒ 把这些书签
-                                // 推进过去,下一次只发改过的字段(游戏盘没挂载时也
-                                // 不会因为重发旧路径而白报错)。
-                                draft.game_dir_original = attempt.draft.game_dir.clone();
-                                draft.exe_original = attempt.draft.exe.clone();
-                                draft.save_paths_original = attempt.draft.save_paths.clone();
+                                // 服务端现在有的就是这一笔带过去的东西 ⇒ 把**这一组**
+                                // 的书签推进过去,下一次只发改过的字段(游戏盘没挂载时
+                                // 也不会因为重发旧路径而白报错)。另外两组没动过,别碰。
+                                match scope {
+                                    SaveScope::Auto => {}
+                                    SaveScope::Paths => {
+                                        draft.game_dir_original = attempt.draft.game_dir.clone();
+                                        draft.exe_original = attempt.draft.exe.clone();
+                                        draft.game_dir_mount_original =
+                                            attempt.draft.game_dir_mount.clone();
+                                        draft.exe_mount_original = attempt.draft.exe_mount.clone();
+                                    }
+                                    SaveScope::Saves => {
+                                        draft.save_paths_original =
+                                            attempt.draft.save_paths.clone();
+                                    }
+                                }
                             }
-                            self.report_saved("已自动保存", true);
+                            self.report_saved(
+                                if scope == SaveScope::Auto {
+                                    "已自动保存"
+                                } else {
+                                    "已保存"
+                                },
+                                true,
+                            );
                         }
                     }
                     Err(e) => {
@@ -378,7 +399,7 @@ impl App {
                             self.report_saved(format!("保存失败: {e}"), false);
                         } else {
                             // 已经离开那一页了,别把失败吞掉 —— 挂到顶部的错误条上。
-                            self.error = Some(format!("自动保存失败: {e}"));
+                            self.error = Some(format!("保存失败: {e}"));
                         }
                     }
                 }
@@ -388,7 +409,10 @@ impl App {
                 // 回来。⚠ **不能只看 `same_game`**:切到另一款之后,新款那笔编辑会因为
                 // "上一笔还在路上"被退回,这里若不补发就再也没人发它了 —— B 的修改就是
                 // 这样丢的(BUG-18)。
-                if generation != self.autosave_generation {
+                //
+                // ⚠ **只有自动那一族才补发**:路径与存档位置是按钮驱动的,补发等于又把它
+                // 变回自动保存(用户 2026-09-25 明确不要那个)。
+                if scope == SaveScope::Auto && generation != self.autosave_generation {
                     return self.begin_auto_save();
                 }
                 // 存完把库读一遍:列表与"已存值"要跟上,否则退出这一页再进来看到的是旧的。

@@ -27,6 +27,12 @@ export struct GameItem {
 export struct GameDetail {
     game-dir: string,
     exe: string,
+    // 挂载引用：盘号 + 磁盘内相对目录。**盘号空 = 不用引用**，这个位置就走上
+    // 面那个绝对路径；盘不在时上面两栏是空的，只有这里还指着那块盘。
+    game-dir-disk: string,
+    game-dir-relative: string,
+    exe-disk: string,
+    exe-relative: string,
     ratio: string,
     algo: int,
     sharpness: int,

@@ -54,6 +54,8 @@ pub(super) async fn create_game(
     name: String,
     exe_path: String,
     game_dir: String,
+    game_dir_mount: &MountRef,
+    exe_mount: &MountRef,
 ) -> Result<(String, Option<String>), String> {
     let mut params = vec![
         ("name", Value::String(name)),
@@ -62,6 +64,14 @@ pub(super) async fn create_game(
     let game_dir = game_dir.trim();
     if !game_dir.is_empty() {
         params.push(("game_dir", Value::String(game_dir.to_string())));
+    }
+    // 挂载引用只在填了盘号时发：带引用的一条**不要求路径此刻存在**（盘可能在别的
+    // 机器上），daemon 那边就是这么放行的（见 `daemon/game_write.rs`）。
+    if let Some(mount) = game_dir_mount.to_json() {
+        params.push(("game_dir_mount", mount));
+    }
+    if let Some(mount) = exe_mount.to_json() {
+        params.push(("exe_mount", mount));
     }
 
     let value = crate::rpc::call(socket, "game.create", Some(crate::rpc::params(params))).await?;
@@ -245,60 +255,93 @@ fn exe_is_missing_on_purpose(draft: &Draft) -> bool {
     draft.exe_changed() && draft.exe.trim().is_empty()
 }
 
-/// Persist the whole edit form through the daemon, which is the single writer
-/// of the config file.
-pub(super) async fn save_profile(draft: Draft) -> Result<(), String> {
-    let profile = profile_from_draft(&draft)?;
-
-    if exe_is_missing_on_purpose(&draft) {
+/// 「路径」组的补丁。**只发真的改过的那几栏** —— 键不出现表示"别动这个字段"，
+/// daemon 据此决定要不要顺手识别一次盘（见 `daemon/game_write.rs`）：用户只清了盘号、
+/// 没动路径时，我们要的正是"别再自动填回来"。
+fn path_params(draft: &Draft, params: &mut Vec<(&'static str, Value)>) -> Result<(), String> {
+    if exe_is_missing_on_purpose(draft) {
         return Err("可执行文件路径不能为空".to_string());
     }
-
-    let mut params = vec![
-        ("id", Value::String(draft.game_id.clone())),
-        (
-            "profile",
-            serde_json::to_value(&profile).map_err(|e| e.to_string())?,
-        ),
-    ];
-    // Only send paths that actually changed: the daemon rejects a path that
-    // does not exist, and a game on an unmounted drive must not block a scale
-    // edit.
+    // 盘号是身份:只填相对目录、不填盘号，那段路径无所依附 —— 拦在本地，别麻烦 daemon。
+    for (label, mount) in [
+        ("游戏根目录", &draft.game_dir_mount),
+        ("可执行文件", &draft.exe_mount),
+    ] {
+        if mount.disk.trim().is_empty() && !mount.relative.trim().is_empty() {
+            return Err(format!("{label}填了相对目录，但盘号是空的"));
+        }
+    }
     if draft.game_dir_changed() {
         params.push(("game_dir", Value::String(draft.game_dir.trim().to_string())));
     }
     if draft.exe_changed() {
         params.push(("exe_path", Value::String(draft.exe.trim().to_string())));
     }
-    // 额外参数按空白切成 argv —— 和 gamescope 自由参数同一条规则(见 `split_args`)。
-    if draft.launch_args_changed() {
-        let args = split_args(&draft.launch_args);
+    // `null` = 用户明确说"这一栏不用引用了"；键不出现 = 让 daemon 自己识别一次。
+    if draft.game_dir_mount != draft.game_dir_mount_original {
         params.push((
-            "launch_args",
-            serde_json::to_value(args).map_err(|e| e.to_string())?,
+            "game_dir_mount",
+            draft.game_dir_mount.to_json().unwrap_or(Value::Null),
         ));
     }
-    if draft.save_paths_changed() {
+    if draft.exe_mount != draft.exe_mount_original {
+        params.push((
+            "exe_mount",
+            draft.exe_mount.to_json().unwrap_or(Value::Null),
+        ));
+    }
+    Ok(())
+}
+
+/// Persist the edit form through the daemon, which is the single writer of the
+/// config file.
+///
+/// `scope` 决定写哪一组（见 [`SaveScope`]）：`Paths` 与 `Saves` 只在用户按了那个
+/// 按钮时才会走到这里，`Auto` 是防抖之后自动来的那一族。
+pub(super) async fn save_profile(draft: Draft, scope: SaveScope) -> Result<(), String> {
+    let mut params = vec![("id", Value::String(draft.game_id.clone()))];
+
+    if scope == SaveScope::Paths {
+        path_params(&draft, &mut params)?;
+    }
+
+    if scope == SaveScope::Saves && draft.save_paths_changed() {
         params.push(("save_paths", save_paths_to_json(&draft.save_paths)));
     }
-    if draft.direct_launch != draft.direct_launch_original {
-        params.push(("direct_launch", Value::Bool(draft.direct_launch)));
-    }
-    if draft.auto_watch != draft.auto_watch_original {
-        params.push(("auto_watch", Value::Bool(draft.auto_watch)));
-    }
-    if draft.process_name_changed() {
-        // 空 = 回到"按 exe 文件名认"。daemon 那边的 `double_option` 要求**显式 null**
-        // 才是"清掉"(键不出现 = 别动这个字段),所以这里必须发 Null 而不是空串。
-        let name = draft.process_name.trim();
+
+    if scope == SaveScope::Auto {
+        let profile = profile_from_draft(&draft)?;
         params.push((
-            "process_name",
-            if name.is_empty() {
-                Value::Null
-            } else {
-                Value::String(name.to_string())
-            },
+            "profile",
+            serde_json::to_value(&profile).map_err(|e| e.to_string())?,
         ));
+        // 额外参数按空白切成 argv —— 和 gamescope 自由参数同一条规则(见 `split_args`)。
+        if draft.launch_args_changed() {
+            let args = split_args(&draft.launch_args);
+            params.push((
+                "launch_args",
+                serde_json::to_value(args).map_err(|e| e.to_string())?,
+            ));
+        }
+        if draft.direct_launch != draft.direct_launch_original {
+            params.push(("direct_launch", Value::Bool(draft.direct_launch)));
+        }
+        if draft.auto_watch != draft.auto_watch_original {
+            params.push(("auto_watch", Value::Bool(draft.auto_watch)));
+        }
+        if draft.process_name_changed() {
+            // 空 = 回到"按 exe 文件名认"。daemon 那边的 `double_option` 要求**显式 null**
+            // 才是"清掉"(键不出现 = 别动这个字段),所以这里必须发 Null 而不是空串。
+            let name = draft.process_name.trim();
+            params.push((
+                "process_name",
+                if name.is_empty() {
+                    Value::Null
+                } else {
+                    Value::String(name.to_string())
+                },
+            ));
+        }
     }
 
     crate::rpc::call(
@@ -308,6 +351,14 @@ pub(super) async fn save_profile(draft: Draft) -> Result<(), String> {
     )
     .await?;
     Ok(())
+}
+
+/// 问 daemon：这条路径落在哪块盘上。答"认不出"就是 `None` —— 那不是错误，只是这个
+/// 位置没有可用的挂载引用（照旧走绝对路径）。
+pub(super) async fn mount_infer(socket: &Path, path: &str) -> Result<Option<MountRef>, String> {
+    let params = crate::rpc::params(vec![("path", Value::String(path.to_string()))]);
+    let value = crate::rpc::call(socket, "mount.infer", Some(params)).await?;
+    Ok(value.get("mount").and_then(parse_mount))
 }
 
 #[cfg(test)]
@@ -331,5 +382,51 @@ mod tests {
         let mut cleared = Draft::from_game(&ui_game());
         cleared.exe.clear();
         assert!(exe_is_missing_on_purpose(&cleared));
+    }
+
+    /// 「路径」那一组按按钮保存时，补丁里**只出现真的改过的栏** —— 键不出现＝别动它，
+    /// 这是"用户清掉的引用不会被 daemon 重新填回来"的关键（见 `daemon/game_write.rs`）。
+    #[test]
+    fn the_path_patch_carries_only_what_changed() {
+        let mut game = ui_game();
+        game.exe_mount = MountRef {
+            disk: "AAAA-1111".into(),
+            relative: "g/game.exe".into(),
+        };
+
+        // 一个字都没改：一个键都不发。
+        let mut params = Vec::new();
+        path_params(&Draft::from_game(&game), &mut params).unwrap();
+        assert!(params.is_empty(), "{params:?}");
+
+        // 清掉引用：发 `null` 明说"不用了"，**不发路径**（发了 daemon 会顺手重新识别
+        // 一次，刚清掉的引用就又回来了）。
+        let mut draft = Draft::from_game(&game);
+        draft.exe_mount = MountRef::default();
+        let mut params = Vec::new();
+        path_params(&draft, &mut params).unwrap();
+        assert_eq!(params.len(), 1, "{params:?}");
+        assert_eq!(params[0].0, "exe_mount");
+        assert!(params[0].1.is_null(), "{params:?}");
+
+        // 换了 exe 路径：只发路径那一栏；引用那一栏不出现 ⇒ daemon 自己识别一次。
+        let mut draft = Draft::from_game(&game);
+        draft.exe = "/games/demo/other.exe".into();
+        let mut params = Vec::new();
+        path_params(&draft, &mut params).unwrap();
+        assert_eq!(params.len(), 1, "{params:?}");
+        assert_eq!(params[0].0, "exe_path");
+    }
+
+    #[test]
+    fn a_relative_directory_without_a_disk_is_refused_locally() {
+        let mut draft = Draft::from_game(&ui_game());
+        draft.exe_mount = MountRef {
+            disk: "   ".into(),
+            relative: "g/game.exe".into(),
+        };
+        let mut params = Vec::new();
+        let error = path_params(&draft, &mut params).unwrap_err();
+        assert!(error.contains("盘号"), "{error}");
     }
 }

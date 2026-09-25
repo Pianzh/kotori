@@ -24,6 +24,11 @@ pub(super) fn is_settings_message(message: &Message) -> bool {
             | Message::ClearWinePrefix
             | Message::WinePrefixSaved(..)
             | Message::GameDirChanged(..)
+            | Message::GameDirDiskChanged(..)
+            | Message::GameDirRelativeChanged(..)
+            | Message::ExeDiskChanged(..)
+            | Message::ExeRelativeChanged(..)
+            | Message::MountInferred(..)
             | Message::DirectLaunchToggled(..)
             | Message::AutoWatchToggled(..)
             | Message::ProcessNameChanged(..)
@@ -168,12 +173,54 @@ impl App {
                 }
                 self.schedule_auto_save()
             }
+            // ⚠ 「路径」这一组**不排自动保存**（用户 2026-09-25 改的主意）：它归页面上
+            // 那颗「保存路径」按钮。改路径时顺手把旧的外置盘引用清掉 —— 它已经不再指向
+            // 这条路径了；想留着就自己重填，或者在盘上让 daemon 保存时重新识别一次。
             Message::GameDirChanged(value) => {
                 if let Some(draft) = &mut self.draft {
                     draft.game_dir = value;
+                    draft.game_dir_mount = MountRef::default();
                 }
-                self.schedule_auto_save()
+                Task::none()
             }
+            Message::GameDirDiskChanged(value) => {
+                if let Some(draft) = &mut self.draft {
+                    draft.game_dir_mount.disk = value;
+                }
+                Task::none()
+            }
+            Message::GameDirRelativeChanged(value) => {
+                if let Some(draft) = &mut self.draft {
+                    draft.game_dir_mount.relative = value;
+                }
+                Task::none()
+            }
+            Message::ExeDiskChanged(value) => {
+                if let Some(draft) = &mut self.draft {
+                    draft.exe_mount.disk = value;
+                }
+                Task::none()
+            }
+            Message::ExeRelativeChanged(value) => {
+                if let Some(draft) = &mut self.draft {
+                    draft.exe_mount.relative = value;
+                }
+                Task::none()
+            }
+            // 挑完路径之后认出来的盘引用：写进草稿那两栏，按钮随之亮起（按了才落盘）。
+            Message::MountInferred(for_exe, result) => {
+                if let Ok(Some(mount)) = result
+                    && let Some(draft) = &mut self.draft
+                {
+                    if for_exe {
+                        draft.exe_mount = mount;
+                    } else {
+                        draft.game_dir_mount = mount;
+                    }
+                }
+                Task::none()
+            }
+            // ⚠ 存档位置与路径同一条规矩：这里只改草稿，落盘归那颗按钮。
             Message::SavePathKindChanged(index, kind) => {
                 if let Some(entry) = self
                     .draft
@@ -182,7 +229,7 @@ impl App {
                 {
                     entry.kind = kind;
                 }
-                self.schedule_auto_save()
+                Task::none()
             }
             Message::SavePathChanged(index, value) => {
                 if let Some(draft) = self.draft.as_mut()
@@ -200,7 +247,7 @@ impl App {
                         entry.path = rewritten;
                     }
                 }
-                self.schedule_auto_save()
+                Task::none()
             }
             Message::SavePathExcludeChanged(index, value) => {
                 if let Some(entry) = self
@@ -210,7 +257,7 @@ impl App {
                 {
                     entry.exclude = value;
                 }
-                self.schedule_auto_save()
+                Task::none()
             }
             Message::AddSavePath => {
                 if let Some(draft) = &mut self.draft {
@@ -222,7 +269,7 @@ impl App {
                         exclude: String::new(),
                     });
                 }
-                self.schedule_auto_save()
+                Task::none()
             }
             Message::RemoveSavePath(index) => {
                 if let Some(draft) = &mut self.draft
@@ -230,7 +277,7 @@ impl App {
                 {
                     draft.save_paths.remove(index);
                 }
-                self.schedule_auto_save()
+                Task::none()
             }
             Message::Tick => {
                 let socket = self.daemon_socket.clone();

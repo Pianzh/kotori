@@ -152,6 +152,9 @@ mod test_support {
             name: "Demo Game".into(),
             game_dir: "/games/demo".into(),
             exe: "/games/demo/game.exe".into(),
+            // 默认不带挂载引用（盘号空 = 走绝对路径）。
+            game_dir_mount: MountRef::default(),
+            exe_mount: MountRef::default(),
             launch_args: Vec::new(),
             save_paths: Vec::new(),
             auto_watch: false,

@@ -17,6 +17,7 @@ import { AccentButton, StdButton } from "../widgets/buttons.slint";
 import { ProcessPickerState } from "../widgets/process-picker.slint";
 import { CloudPickerState } from "../widgets/cloud-picker.slint";
 import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
+import { DiskFields } from "../widgets/disk-fields.slint";
 import { AddMatchItem } from "../types.slint";
 
 export global AddMatchBoard {
@@ -53,6 +54,14 @@ export component AddPage inherits ScrollView {
     in-out property <string> new-name: "";
     in-out property <string> new-game-dir: "";
     in-out property <string> new-exe: "";
+    // 挂载引用（盘号 + 磁盘内相对目录）：挑完目录/exe 之后由 daemon 识别一次自动
+    // 填好（用户 2026-09-25 定的），也可以自己填。盘号空 = 这个位置不用引用。
+    in-out property <string> new-game-dir-disk: "";
+    in-out property <string> new-game-dir-relative: "";
+    in-out property <string> new-exe-disk: "";
+    in-out property <string> new-exe-relative: "";
+    // 这台机器读不读得到挂载表（Windows 上读不到 ⇒ 引用填了也不生效）。
+    in property <bool> mount-supported: true;
     in property <bool> creating: false;
     // 成功与失败都走这一行(Rust 决定措辞):空串表示还没动作。
     in property <string> message: "";
@@ -64,6 +73,10 @@ export component AddPage inherits ScrollView {
     callback name-changed(string);
     callback game-dir-changed(string);
     callback exe-changed(string);
+    callback game-dir-disk-changed(string);
+    callback game-dir-relative-changed(string);
+    callback exe-disk-changed(string);
+    callback exe-relative-changed(string);
     callback browse-game-dir();
     callback browse-exe();
     callback create-requested();
@@ -124,6 +137,18 @@ export component AddPage inherits ScrollView {
                         browse-enabled: root.browse-enabled;
                         browse-clicked => { root.browse-exe(); }
                         placeholder: "/path/to/game.exe";
+                    }
+                }
+                CardRow {
+                    title: "exe 所在的外置盘";
+                    description: root.mount-supported
+                        ? "挑完 exe 之后这里会自动填好（在盘上才填）。盘号是磁盘 UUID，相对目录以**磁盘根**为基准；留空＝不用引用。"
+                        : "Windows 上不生效（读不到挂载表）；留空即可，这一条会按上面的绝对路径走。";
+                    DiskFields {
+                        disk <=> root.new-exe-disk;
+                        relative <=> root.new-exe-relative;
+                        disk-edited(text) => { root.exe-disk-changed(text); }
+                        relative-edited(text) => { root.exe-relative-changed(text); }
                     }
                 }
                 Divider { }
@@ -204,6 +229,18 @@ export component AddPage inherits ScrollView {
                         browse-enabled: root.browse-enabled;
                         browse-clicked => { root.browse-game-dir(); }
                         placeholder: "/path/to/game";
+                    }
+                }
+                CardRow {
+                    title: "根目录所在的外置盘";
+                    description: root.mount-supported
+                        ? "同上：留空＝不用引用，这一栏就只看上面那个绝对路径。"
+                        : "Windows 上不生效；留空即可。";
+                    DiskFields {
+                        disk <=> root.new-game-dir-disk;
+                        relative <=> root.new-game-dir-relative;
+                        disk-edited(text) => { root.game-dir-disk-changed(text); }
+                        relative-edited(text) => { root.game-dir-relative-changed(text); }
                     }
                 }
                 Divider { }

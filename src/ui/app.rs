@@ -43,6 +43,12 @@ pub struct App {
     pub(super) new_name: String,
     pub(super) new_game_dir: String,
     pub(super) new_exe: String,
+    /// 添加页那两栏挂载引用（盘号 + 磁盘内相对目录）。挑完 exe / 根目录之后由 daemon
+    /// 认一次盘、自动填好（用户 2026-09-25 定的"中间加一小步"）；盘号空 = 不用引用。
+    pub(super) new_game_dir_disk: String,
+    pub(super) new_game_dir_relative: String,
+    pub(super) new_exe_disk: String,
+    pub(super) new_exe_relative: String,
     /// exe 联动**自动填过**的根目录与名字:字段为空、或者还等于上次自动填的值时,
     /// 才跟着新 exe 重填 —— 用户自己改过的值不动(用户 2026-09-19:"如果不对再由
     /// 用户自行修改")。
@@ -138,6 +144,10 @@ impl App {
                 new_name: String::new(),
                 new_game_dir: String::new(),
                 new_exe: String::new(),
+                new_game_dir_disk: String::new(),
+                new_game_dir_relative: String::new(),
+                new_exe_disk: String::new(),
+                new_exe_relative: String::new(),
                 auto_filled_dir: String::new(),
                 auto_filled_name: String::new(),
                 creating: false,
@@ -253,22 +263,31 @@ impl App {
     /// **同一时刻只允许一笔**:daemon 并发处理请求,两次全量写若重叠,后到的旧快照会
     /// 把新的盖掉。所以这里见到在路上的就退回 —— 不用担心丢掉这一次,在路上的那笔回来
     /// 时世代必然已经变了(见 `Message::ProfileSaved`),它会自己再存一遍。
+    ///
+    /// 按按钮那一组走同一条通道(`SaveGroup`);按钮在 `saving` 时是禁用的,所以
+    /// "点了没反应"这件事不会发生。
     pub(super) fn begin_auto_save(&mut self) -> Task<Message> {
+        self.begin_save(SaveScope::Auto)
+    }
+
+    pub(super) fn begin_save(&mut self, scope: SaveScope) -> Task<Message> {
         let Some(draft) = self.draft.clone() else {
             return Task::none();
         };
         if self.save_in_flight.is_some() {
-            tracing::debug!("上一笔自动保存还没回来，这一次等它");
+            tracing::debug!("上一笔保存还没回来，这一次等它");
             return Task::none();
         }
         self.saving = true;
         let generation = self.autosave_generation;
         self.save_in_flight = Some(SaveAttempt {
             draft: draft.clone(),
+            scope,
         });
-        Task::perform(async move { save_profile(draft).await }, move |result| {
-            Message::ProfileSaved(generation, result)
-        })
+        Task::perform(
+            async move { save_profile(draft, scope).await },
+            move |result| Message::ProfileSaved(generation, result),
+        )
     }
 
     /// 单游戏设置页底部那行小字:说一句话,并说明它是好消息还是坏消息。
@@ -377,83 +396,6 @@ impl App {
         let user = crate::wine::windows_user_dir(&prefix);
         user.is_dir().then_some(user)
     }
-
-    /// 对话框里挑回来的路径,填进对应的那个框。
-    ///
-    /// 单游戏设置页的目标还要多做一件事:值写进 `draft`、按改动自动保存,同时记下这次
-    /// 填的是什么 —— 那些输入框由**页面自己**持有,Rust 平时不往里写(见
-    /// `game-settings.slint` 的文件头),所以 `render` 要靠这条记录推一次。
-    pub(super) fn apply_picked_path(&mut self, target: PathTarget, picked: &Path) -> Task<Message> {
-        let text = picked.display().to_string();
-
-        match target {
-            PathTarget::NewGameDir => self.new_game_dir = text,
-            // 浏览 exe 也必须触发联动 —— 走 `set_new_exe`,别直接赋值(见那里的说明);
-            // 顺带排一次云端匹配(手打那条路走的是 `NewExeChanged`)。
-            PathTarget::NewExe => {
-                self.set_new_exe(text);
-                return self.schedule_match();
-            }
-            PathTarget::WinePrefix => {
-                self.wine_prefix_input = text;
-                // 用户亲手选的路径不许被随后回来的 `wine.status` 盖掉。
-                self.wine_prefix_dirty = true;
-            }
-            // 两个"程序位置"是 `[sync]` 里的设置项，所以它们和 bucket 那些一样是**表单
-            // 的一部分**（随「保存设置」一起提交），只是另有一个浏览按钮帮着填。
-            PathTarget::RcloneBinary => {
-                self.sync_form.rclone_binary = text;
-                self.sync_form.settings_dirty = true;
-            }
-            PathTarget::KopiaBinary => {
-                self.sync_form.kopia_binary = text;
-                self.sync_form.settings_dirty = true;
-            }
-            PathTarget::GameDir | PathTarget::Exe => {
-                let Some(draft) = self.draft.as_mut() else {
-                    return Task::none();
-                };
-                if target == PathTarget::GameDir {
-                    draft.game_dir = text.clone();
-                } else {
-                    draft.exe = text.clone();
-                }
-                self.picked_path = Some((target, text));
-                return self.schedule_auto_save();
-            }
-            PathTarget::SavePath(index) => {
-                // 挑回来的路径**自己**说明它属于哪一类(相对 → 令牌 → 绝对),
-                // 所以这里顺手把类型也改对,再按那一类翻译。
-                //
-                // 从前是拿**当前选中的类型**去翻译,类型与路径不符就报错、什么都不改 ——
-                // 而真 Windows 上挑回来的必然是 `C:\Users\…`,当时那个 windows 分支只认
-                // wine 的 `drive_c/users/…` 形状,于是"点浏览没反应"(BUG-REPORT
-                // 「存档位置的浏览有问题」)。顺序与取舍见 `wine::portable_save_path`。
-                let (kind, value) = {
-                    let Some(draft) = self.draft.as_ref() else {
-                        return Task::none();
-                    };
-                    if draft.save_paths.get(index).is_none() {
-                        return Task::none();
-                    }
-                    let (kind, text) =
-                        crate::wine::portable_save_path(Path::new(draft.game_dir.trim()), picked);
-                    (kind.as_str().to_string(), text)
-                };
-                if let Some(entry) = self
-                    .draft
-                    .as_mut()
-                    .and_then(|draft| draft.save_paths.get_mut(index))
-                {
-                    entry.kind = kind;
-                    entry.path = value.clone();
-                }
-                self.picked_path = Some((target, value));
-                return self.schedule_auto_save();
-            }
-        }
-        Task::none()
-    }
 }
 
 /// 一个输入框里的目录(不存在、或者还空着就是 `None`)。
@@ -469,6 +411,9 @@ fn parent_dir(text: &str) -> Option<PathBuf> {
         .map(Path::to_path_buf)
         .filter(|path| path.is_dir())
 }
+
+/// 从对话框挑回来的路径怎么落到各处（以及挑完顺手认一次盘）。
+mod picker;
 
 #[cfg(test)]
 mod tests;
