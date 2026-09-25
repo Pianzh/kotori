@@ -140,8 +140,14 @@ fn updating_a_game_to_another_games_exe_is_refused() {
 
     let games = fixture.rpc("game.list", json!({}))["result"]["games"].clone();
     let games = games.as_array().unwrap();
-    let first = games.iter().find(|game| game["id"] == first_id).unwrap();
-    let second = games.iter().find(|game| game["id"] == second_id).unwrap();
+    let first = games
+        .iter()
+        .find(|game| game["id"].as_str() == Some(first_id.as_str()))
+        .unwrap();
+    let second = games
+        .iter()
+        .find(|game| game["id"].as_str() == Some(second_id.as_str()))
+        .unwrap();
     assert_eq!(first["exe_path"], first_exe.to_string_lossy().as_ref());
     assert_eq!(second["exe_path"], second_exe.to_string_lossy().as_ref());
 }

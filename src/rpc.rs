@@ -129,7 +129,7 @@ pub fn params(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::io::Write;
+    use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;
     use std::thread;
 
@@ -142,6 +142,12 @@ mod tests {
         let listener = UnixListener::bind(&path).unwrap();
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
+            let mut byte = [0u8; 1];
+            while stream.read(&mut byte).unwrap_or(0) > 0 {
+                if byte[0] == b'\n' {
+                    break;
+                }
+            }
             stream.write_all(body).unwrap();
         });
 
