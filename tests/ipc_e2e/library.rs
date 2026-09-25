@@ -5,6 +5,72 @@ use serde_json::json;
 use crate::fixture::Fixture;
 use crate::helpers::assert_is_error;
 
+/// 一条"盘不在这台机器上"的档案：**只给引用、不给路径**也能建起来（用户 2026-09-25：
+/// "盘不在时允许新增，大不了就是报错打不开，这是正常的"）。同时钉住两件事：
+/// `mount.infer` 对不存在的路径答"认不出"，以及 `game.list` 把引用原样交回来。
+#[test]
+fn a_game_can_be_created_from_a_reference_alone() {
+    let mut fixture = Fixture::new("mount-reference");
+    fixture.start();
+
+    // 路径故意不存在：这台机器上没有那块盘。
+    let response = fixture.rpc(
+        "game.create",
+        json!({
+            "name": "Mounted",
+            "exe_path": "",
+            "exe_mount": { "disk": "AAAA-1111", "relative": "Games/mounted/game.exe" },
+            "game_dir_mount": { "disk": "AAAA-1111", "relative": "Games/mounted" },
+        }),
+    );
+    assert_eq!(response["result"]["name"], "Mounted", "{response}");
+    let id = response["result"]["id"].as_str().unwrap().to_string();
+
+    // 列表里引用还在，两栏路径是空的（盘没挂载 ⇒ 解析不出来，绝不回退旧路径）。
+    let games = fixture.rpc("game.list", json!({}))["result"]["games"].clone();
+    let game = games
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|game| game["id"].as_str() == Some(id.as_str()))
+        .expect("新建的那一款该在列表里");
+    assert_eq!(game["exe_mount"]["disk"], "AAAA-1111", "{game}");
+    assert_eq!(game["exe_mount"]["relative"], "Games/mounted/game.exe");
+    assert_eq!(game["exe_path"], "", "{game}");
+    assert!(
+        game["location_error"].is_string(),
+        "盘不在时该如实说一句，而不是装作没事: {game}"
+    );
+
+    // `mount.infer` 对不存在的路径答"认不出"（不是报错）。
+    let inferred = fixture.rpc(
+        "mount.infer",
+        json!({ "path": fixture.dir.join("nowhere").display().to_string() }),
+    );
+    assert!(inferred["result"]["mount"].is_null(), "{inferred}");
+}
+
+/// 反过来：**没有引用**时一条不存在的路径照旧被拒 —— 否则拼错一个字母就会建出一条
+/// 永远打不开的档案。
+#[test]
+fn a_game_without_a_reference_still_needs_a_real_exe() {
+    let mut fixture = Fixture::new("mount-required");
+    fixture.start();
+
+    let response = fixture.rpc(
+        "game.create",
+        json!({ "name": "Ghost", "exe_path": fixture.dir.join("nowhere.exe").display().to_string() }),
+    );
+    assert_is_error(&response, -32000);
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("可执行文件不存在"),
+        "{response}"
+    );
+}
+
 #[test]
 fn library_entries_are_managed_over_ipc() {
     let mut fixture = Fixture::new("library");

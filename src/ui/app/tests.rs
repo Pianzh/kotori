@@ -330,3 +330,102 @@ fn the_run_button_stops_a_running_game_instead_of_launching_it_again() {
     app.running.clear();
     assert_eq!(run_action(&app.running, "demo"), RunAction::Launch);
 }
+
+/// 「路径」与「存档位置」两组**不打按钮就不落盘**（用户 2026-09-25 定的）：翻到别的
+/// 游戏再回来，改动应当原样消失（草稿按服务端那份重建），而不是偷偷留在草稿里 ——
+/// 路径打到一半被写下去会误伤（daemon 会拒、界面弹错，真写错一次就指到别处了）。
+#[test]
+fn an_unsaved_path_edit_is_dropped_when_leaving_the_page() {
+    let (mut app, _task) = App::new();
+    app.games = vec![
+        ui_game(),
+        UiGame {
+            id: "other".into(),
+            name: "Other".into(),
+            ..ui_game()
+        },
+    ];
+    app.update(Message::GameSelected("demo".into()));
+    app.update(Message::ExePathChanged("/games/demo/typo.exe".into()));
+
+    let draft = app.draft.as_ref().expect("选中的游戏有草稿");
+    assert!(draft.path_group_changed(), "改了 exe 该算未保存");
+    assert!(app.save_in_flight.is_none(), "而且不许有人偷偷去存它");
+
+    // 翻走再回来：那半截路径不该留下。
+    app.update(Message::BackToList);
+    app.update(Message::GameSelected("demo".into()));
+    let draft = app.draft.as_ref().unwrap();
+    assert_eq!(draft.exe, ui_game().exe);
+    assert!(!draft.path_group_changed());
+}
+
+/// 点「保存路径」才真的发一笔，而且发出去的是 `Paths` 那一组（不是自动保存那一族）。
+#[test]
+fn the_path_button_sends_the_path_group() {
+    let (mut app, _task) = App::new();
+    app.games = vec![ui_game()];
+    app.update(Message::GameSelected("demo".into()));
+    app.update(Message::ExePathChanged("/games/demo/other.exe".into()));
+
+    let task = app.update(Message::SaveGroup(SaveScope::Paths));
+    assert_eq!(task.into_effects().len(), 1, "该发一笔 RPC");
+    let attempt = app.save_in_flight.as_ref().expect("在路上的那一笔");
+    assert_eq!(attempt.scope, SaveScope::Paths);
+    assert_eq!(attempt.draft.exe, "/games/demo/other.exe");
+}
+
+/// 挑完路径认出来的盘引用会填进**添加页**那两栏（用户 2026-09-25 定的"中间加一小步"：
+/// 在点「添加游戏」之前就看得见）。认不出来时什么都不动 —— 那不是错误。
+#[test]
+fn an_inferred_mount_lands_in_the_add_form() {
+    let (mut app, _task) = App::new();
+
+    app.update(Message::NewMountInferred(
+        true,
+        Ok(Some(MountRef {
+            disk: "AAAA-1111".into(),
+            relative: "Games/demo/game.exe".into(),
+        })),
+    ));
+    assert_eq!(app.new_exe_disk, "AAAA-1111");
+    assert_eq!(app.new_exe_relative, "Games/demo/game.exe");
+    assert!(app.new_game_dir_disk.is_empty(), "根目录那一栏不该被动");
+
+    // 根目录那一栏是另一条（`for_exe = false`）。
+    app.update(Message::NewMountInferred(
+        false,
+        Ok(Some(MountRef {
+            disk: "BBBB-2222".into(),
+            relative: "Games/demo".into(),
+        })),
+    ));
+    assert_eq!(app.new_game_dir_disk, "BBBB-2222");
+    assert_eq!(app.new_exe_disk, "AAAA-1111", "exe 那一栏保持原样");
+
+    // 认不出来（不在挂载盘上 / 盘不在）什么都不填。
+    let (mut app, _task) = App::new();
+    app.update(Message::NewMountInferred(true, Ok(None)));
+    app.update(Message::NewMountInferred(false, Err("boom".into())));
+    assert!(app.new_exe_disk.is_empty() && app.new_game_dir_disk.is_empty());
+}
+
+/// 编辑页的同一步：引用写进草稿（按钮随之亮起），但**不落盘** —— 要用户按那颗按钮。
+#[test]
+fn an_inferred_mount_lands_in_the_draft_without_saving() {
+    let (mut app, _task) = App::new();
+    app.games = vec![ui_game()];
+    app.update(Message::GameSelected("demo".into()));
+
+    app.update(Message::MountInferred(
+        true,
+        Ok(Some(MountRef {
+            disk: "AAAA-1111".into(),
+            relative: "Games/demo/game.exe".into(),
+        })),
+    ));
+    let draft = app.draft.as_ref().unwrap();
+    assert_eq!(draft.exe_mount.disk, "AAAA-1111");
+    assert!(draft.path_group_changed(), "按钮该亮起来");
+    assert!(app.save_in_flight.is_none(), "但不许自己写下去");
+}

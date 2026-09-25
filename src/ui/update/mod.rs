@@ -251,6 +251,11 @@ impl App {
             m @ (Message::NewNameChanged(..)
             | Message::NewGameDirChanged(..)
             | Message::NewExeChanged(..)
+            | Message::NewGameDirDiskChanged(..)
+            | Message::NewGameDirRelativeChanged(..)
+            | Message::NewExeDiskChanged(..)
+            | Message::NewExeRelativeChanged(..)
+            | Message::NewMountInferred(..)
             | Message::CreateRequested
             | Message::CreateFinished(..)
             | Message::MatchExeReady(..)
