@@ -65,10 +65,19 @@ fn round_trip(engine: &str) {
         2,
         "versions lost after restart: {response}"
     );
+    // 云端落点在两个引擎上**叫法不同**：rclone 是目录名（= 游戏 id），kopia 是 `game:`
+    // 标签值（= 身份 id，一个 UUID）。所以别硬写 `contract` —— 问云端一次，拿它给的 id
+    // 当 key。⚠ 这正是 `PLAN-cloud-identity.md` §13.5 警告过的那件事：拿本机 id 当云端
+    // 落点用。（rclone 那条恰好在两个 id 相同时是对的，所以只有 kopia 会红。）
+    let key = fixture.rpc("sync.cloud_games", json!({}))["result"]["games"][0]["id"]
+        .as_str()
+        .expect("云端应该有这一款")
+        .to_string();
+
     // ── 删一版：别的版本和**词条**都不动 ──────────────────────────────────
     let response = fixture.rpc(
         "sync.delete_version",
-        json!({"key":"contract", "version":first}),
+        json!({"key": &key, "version": first.clone()}),
     );
     assert_eq!(response["result"]["ok"], true, "{engine}: {response}");
     assert_eq!(response["result"]["left"], 1, "{engine}: {response}");
@@ -80,7 +89,7 @@ fn round_trip(engine: &str) {
     );
 
     // ── 删词条：连存档一起，云端从此不认得这一款 ─────────────────────────
-    let response = fixture.rpc("sync.delete_identity", json!({"key":"contract"}));
+    let response = fixture.rpc("sync.delete_identity", json!({"key": &key}));
     assert_eq!(response["result"]["ok"], true, "{engine}: {response}");
     assert_eq!(response["result"]["removed"], 1, "{engine}: {response}");
     assert_eq!(
