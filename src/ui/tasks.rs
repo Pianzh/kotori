@@ -237,12 +237,20 @@ pub(super) async fn remove_game(socket: &Path, game_id: &str) -> Result<(), Stri
     Ok(())
 }
 
+/// 保存该不该被"exe 是空的"拦下来:**只有用户这次真把它改空了**才算错。
+///
+/// 盘没挂载时 daemon 解析出来就是空路径(见 `Draft` 里那段注释),而那一栏原本也是
+/// 空的 —— 用户什么都没动,不该因此连改个锐度、改个名字都存不进去。
+fn exe_is_missing_on_purpose(draft: &Draft) -> bool {
+    draft.exe_changed() && draft.exe.trim().is_empty()
+}
+
 /// Persist the whole edit form through the daemon, which is the single writer
 /// of the config file.
 pub(super) async fn save_profile(draft: Draft) -> Result<(), String> {
     let profile = profile_from_draft(&draft)?;
 
-    if draft.exe.trim().is_empty() {
+    if exe_is_missing_on_purpose(&draft) {
         return Err("可执行文件路径不能为空".to_string());
     }
 
@@ -300,4 +308,28 @@ pub(super) async fn save_profile(draft: Draft) -> Result<(), String> {
     )
     .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ui::test_support::ui_game;
+
+    #[test]
+    fn an_unresolved_empty_exe_does_not_block_saving() {
+        // 盘没挂载:显示层给的就是空路径,原值也是空 —— 用户一个字都没改。
+        let mut unmounted = Draft::from_game(&ui_game());
+        unmounted.exe.clear();
+        unmounted.exe_original.clear();
+        assert!(!unmounted.exe_changed());
+        assert!(
+            !exe_is_missing_on_purpose(&unmounted),
+            "盘不在不该把人挡在保存外面"
+        );
+
+        // 原来是别的路径、被用户清空 —— 这一种才拦。
+        let mut cleared = Draft::from_game(&ui_game());
+        cleared.exe.clear();
+        assert!(exe_is_missing_on_purpose(&cleared));
+    }
 }
