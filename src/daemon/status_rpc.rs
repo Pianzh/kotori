@@ -162,7 +162,9 @@ impl Daemon {
     }
 
     pub(super) async fn rpc_wine_status(&self) -> Result<Value, String> {
-        let config = self.config.read().await;
+        // 快照同上：`detect_prefixes` 要跑外部程序（几秒），而这里一个字都不改配置 ——
+        // 拿着一把只读锁去等它，只会把要写配置的请求白白堵在后面。
+        let config = self.config.read().await.clone();
         let detected = crate::wine::detect_prefixes(Path::new(""));
         Ok(json!({
             "configured": config.wine.prefix,

@@ -81,6 +81,64 @@ pub(super) fn daemon_at(keyring: Keyring) -> (Daemon, PathBuf) {
     )
 }
 
+/// `sync.status` 不许把**配置读锁**跨着 `await` 持有 —— 那会和写请求形成**自死锁**。
+///
+/// 用户 2026-09-26 报的"点『给这一款新建一条』之后卡在启动中"就是它（整台 daemon 一起
+/// 僵住）。交错是这样的：`sync.status` 先拿到配置读锁，然后带着它去读云端索引
+/// （`cloud_index_view`），而那一步自己**还要再取一次**读锁；此时写请求（`sync.resolve`）
+/// 在写锁上排队，tokio 读写锁的公平性让那次**新的读**也排在写者后面 —— 读者等的是自己
+/// 手里的锁，两边都回不来，之后所有读配置的请求一起排队。
+///
+/// 这条测试把那个窗口**撑成确定的**：读者的路上有一把同步锁（`records`），测试先把它攥住，
+/// 读者就停在"已经持有读锁"的状态上；这时放写请求进来（它会排在写锁上），最后松开那把
+/// 同步锁。修复前：读者继续往前走、去取第二次读锁、排在写者后面 —— 死锁成立。
+/// `timeout` 收口，所以它只会失败，不会把 CI 挂住。
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sync_status_does_not_hold_the_config_lock_across_its_await() {
+    let fake = FakeTool::new("sync-status-lock");
+    let (daemon, _path) = daemon_at(fake.keyring());
+    let daemon = std::sync::Arc::new(daemon);
+
+    // ① 攥住 `records`：`sync.status` 会停在它上面 —— 那一刻它已经拿着配置读锁。
+    let held = daemon.sync.records.lock().unwrap();
+
+    // ② 让读者跑起来，并给它足够时间停在那把锁上。
+    let reader = {
+        let daemon = daemon.clone();
+        tokio::spawn(async move { daemon.rpc_sync_status().await })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // ③ 放一个写请求进来：它会在配置写锁上排队。
+    let writer = {
+        let daemon = daemon.clone();
+        tokio::spawn(async move {
+            daemon
+                .mutate_config(|config| {
+                    config.sync.enabled = !config.sync.enabled;
+                    Ok(Value::Null)
+                })
+                .await
+        })
+    };
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+
+    // ④ 松开：读者继续走，去取它那第二次读锁 —— 修复前这里就再也回不来了。
+    drop(held);
+
+    let finished = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let _ = reader.await;
+        let _ = writer.await;
+    })
+    .await;
+
+    assert!(
+        finished.is_ok(),
+        "sync.status 与写请求撞在一起时死锁了：配置读锁被跨着 await 持有"
+    );
+}
+
 // 假 secret-tool(FakeTool)是 shell 脚本,Unix 限定——Windows 的密钥环后端
 // 还没实现,这两条在 Windows 上 spawn 不出来(os error 193)。
 #[cfg(unix)]

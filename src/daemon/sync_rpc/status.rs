@@ -9,7 +9,12 @@ use super::*;
 impl Daemon {
     /// Everything the settings page needs, with no secret values in it.
     pub(in crate::daemon) async fn rpc_sync_status(&self) -> Result<Value, String> {
-        let config = self.config.read().await;
+        // ⚠ **拿快照，不是拿读锁**：下面还要去读云端索引（`cloud_index_view`），而它自己
+        // 也要再取一次配置读锁。把读锁跨着那个 `await` 持有会**自己等自己** —— tokio 的
+        // 读写锁是公平的：一旦有写者（用户点「给这一款新建一条」时的 `sync.resolve`）在
+        // 排队，这次新的读请求也得排在那个写者后面，而写者正等着我们手里的读锁。整台
+        // daemon 就此僵住（2026-09-26 用户报的"点新建之后卡在启动中"）。
+        let config = self.config.read().await.clone();
         let settings = config.sync.clone();
         let rclone =
             sync::find_rclone(&settings.rclone_binary).map(|p| p.to_string_lossy().to_string());
