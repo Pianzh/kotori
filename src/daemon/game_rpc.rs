@@ -202,6 +202,12 @@ impl Daemon {
             .await
             .map_err(|e| e.to_string())?;
 
+        // 档案里「游戏分辨率」空着时,让 gamescope 告诉我们游戏自己画的是多大,探到
+        // 就填进档案(见 `scale_probe`)。**本次启动不生效** —— 命令行早发出去了,
+        // 这个数是留给下一次启动的;探测在后台跑,启动该多快还多快。
+        #[cfg(unix)]
+        self.spawn_resolution_probe(id, session.clone());
+
         Ok(json!({
             "session_id": session.session_id,
             "gamescope_pid": session.gamescope_pid,

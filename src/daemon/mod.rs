@@ -17,6 +17,10 @@ mod game_write;
 mod index_refresh;
 mod ipc;
 mod protocol;
+// 「游戏分辨率」的自动探测:读窗口那半在 `scale::x11`(只有 unix 有 gamescope),
+// 这里只管把探到的数写回档案。
+#[cfg(unix)]
+mod scale_probe;
 mod scale_rpc;
 mod status_rpc;
 mod sync_rpc;

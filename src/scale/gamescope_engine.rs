@@ -10,6 +10,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{RwLock, broadcast};
 
@@ -26,6 +27,13 @@ use crate::scale::{
 /// Only the daemon subscribes, and it handles each event in a spawned task, so
 /// this never has to be deep.
 const EVENT_BUFFER: usize = 64;
+
+/// 自动探测游戏分辨率:多久问一次、最多问多久(用户 2026-09-26 定:30 秒)。
+///
+/// 窗口是游戏自己起的,慢的 wine 前缀要好几秒才画出来,所以不能只问一次;30 秒
+/// 是耐心的上限 —— 会话一走就立刻收工,不必等满(见 `probe_game_resolution`)。
+const PROBE_POLL: Duration = Duration::from_millis(500);
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 /// The gamescope backend: runs a game inside a nested gamescope.
 ///
 /// Named for what it drives rather than for a desktop, because that is what it is:
@@ -96,6 +104,70 @@ impl GamescopeScaleEngine {
             .ok()
             .flatten()
             .or_else(|| Some(Settings::for_algorithm(&session.profile.algorithm)))
+    }
+
+    /// 问 gamescope:这一局游戏自己画的是多大。
+    ///
+    /// 这是「游戏分辨率」自动填充的**读**那一半(写档案是 `daemon::scale_probe` 的
+    /// 事):档案里空着时,谁启动的这一局谁就顺手把这个数问出来。
+    ///
+    /// 规则(用户 2026-09-26 定):
+    ///
+    /// * 每 [`PROBE_POLL`] 读一次,最多 [`PROBE_TIMEOUT`];
+    /// * 要**连着两次读到同一个尺寸**才算数 —— 一次可能是窗口正在建立的中间态;
+    /// * 会话一走(游戏退出、用户点停止)立刻收工返回 `None`:30 秒里用户完全可能
+    ///   把游戏关掉,那时候这一局的窗口已经没了,没什么可填;
+    /// * 读不到就是 `None`。探测失败不该让任何人难受,档案保持原样。
+    ///
+    /// 自由参数模式(`free_form`)照样探:那是"怎么启动"的选择,与游戏自己画多大
+    /// 无关,而档案里那个空着的字段一样需要填。
+    pub async fn probe_game_resolution(&self, session: &ScaleSession) -> Option<(u32, u32)> {
+        // 只有 kotori 自己启动、并且走 gamescope 的那一局才有得问:直接启动的没有
+        // gamescope,观测会话连启动都不是我们做的。
+        if session.direct || session.watch_only {
+            return None;
+        }
+        let pid = session.gamescope_pid?;
+
+        // 兜底认人用的名字。拿不到名字也不拦着 —— 焦点属性那条路与它无关。
+        let exe_name = session
+            .exe_path
+            .as_deref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        let deadline = tokio::time::Instant::now() + PROBE_TIMEOUT;
+        let mut display: Option<GamescopeDisplay> = None;
+        let mut last: Option<(u32, u32)> = None;
+        loop {
+            if !self.sessions.read().await.contains_key(&session.session_id) {
+                return None; // 这一局已经结束
+            }
+            if display.is_none() {
+                display = GamescopeDisplay::discover(pid).ok().flatten();
+            }
+            let size = match &display {
+                Some(open) => open.game_window_size(&exe_name),
+                // gamescope 还没起来(它的 Xwayland 还没建好):继续等。
+                None => Ok(None),
+            };
+            match size {
+                Ok(Some(size)) => {
+                    if last == Some(size) {
+                        return Some(size);
+                    }
+                    last = Some(size);
+                }
+                Ok(None) => {}
+                // 读不动了(gamescope 走了、X 连接断了):下一轮重新找一遍。
+                Err(_) => display = None,
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return None;
+            }
+            tokio::time::sleep(PROBE_POLL).await;
+        }
     }
 
     /// Run one runtime scaling action against the live gamescopes.

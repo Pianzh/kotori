@@ -216,11 +216,15 @@ pub enum X11Error {
 
 x11rb::atom_manager! {
     /// The root-window properties gamescope watches, plus its pid for discovery.
+    ///
+    /// `GAMESCOPE_FOCUSED_WINDOW` 是这里唯一**只读**的一个:gamescope 自己往里写
+    /// 当前聚焦的窗口 id,kotori 靠它认出"游戏自己画的是多大"(见 `x11_probe.rs`)。
     pub GamescopeAtoms: GamescopeAtomsCookie {
         GAMESCOPE_NEW_SCALING_FILTER,
         GAMESCOPE_NEW_SCALING_SCALER,
         GAMESCOPE_FSR_SHARPNESS,
         GAMESCOPE_PID,
+        GAMESCOPE_FOCUSED_WINDOW,
     }
 }
 
@@ -414,6 +418,11 @@ pub fn display_numbers(dir: &Path) -> Vec<u32> {
     numbers.dedup();
     numbers
 }
+
+// 读路径(游戏窗口几何)与写路径(滤镜/缩放/锐度)各住一个文件 —— 见各文件开头。
+// ⚠ 文件模块的子模块默认要在同名目录下,所以这里同样用 #[path] 指过去。
+#[path = "x11_probe.rs"]
+mod probe;
 
 #[cfg(test)]
 // ⚠ 文件模块的子模块默认要在同名目录下，测试就住在同一个目录里，用 #[path] 指过去。
