@@ -226,14 +226,16 @@ jobs:
           bug 走流程。**仍然可能有大量未验证的 bug** —— 这一版就是拿来验的。'
               ;;
           esac
-          gh release create "$GITHUB_REF_NAME" dist/* "${ARGS[@]}" \
-            --notes "### 下载哪个
+          # ⚠ 这段说明是**双引号里的字符串**,反引号必须转义成 \` —— 不转义的话 shell 会
+          #    把它当命令替换执行:**文件名会被吃掉**(v0.0.5 就是这么发出去的:下载说明成了
+          #    "-  —— 解压即用",谁也看不出该下哪个文件)。提成变量也方便本地跑一遍看结果。
+          NOTES="### 下载哪个
 
-          - `kotori-windows-x64.zip` —— **解压即用**。MSVC 运行库已静态链接进
-            `kotori.exe`,不需要另装 VC++ 可再发行组件;包里内置了 `kopia.exe`
-            (Apache-2.0)做云存档同步,放在 `kotori.exe` 旁边,kotori 自己会找到它。
-          - `kotori-linux-x86_64.tar.zst` / `kotori-linux-aarch64.tar.zst` —— 需要系统里
-            已有 gamescope 与 wine(见 README)。解包后 `kotori` 即是全部。
+          - \`kotori-windows-x64.zip\` —— **解压即用**。MSVC 运行库已静态链接进
+            \`kotori.exe\`,不需要另装 VC++ 可再发行组件;包里内置了 \`kopia.exe\`
+            (Apache-2.0)做云存档同步,放在 \`kotori.exe\` 旁边,kotori 自己会找到它。
+          - \`kotori-linux-x86_64.tar.zst\` / \`kotori-linux-aarch64.tar.zst\` —— 需要系统里
+            已有 gamescope 与 wine(见 README)。解包后 \`kotori\` 即是全部。
 
           ### 源码
 
@@ -241,3 +243,4 @@ jobs:
           随包的 kopia 是独立程序(Apache-2.0),取自
           https://github.com/kopia/kopia/releases 。
           ${NOTES_EXTRA}"
+          gh release create "$GITHUB_REF_NAME" dist/* "${ARGS[@]}" --notes "$NOTES"
