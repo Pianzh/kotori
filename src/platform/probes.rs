@@ -14,10 +14,10 @@ use super::distro::{Distro, Package};
 use super::{Check, Level, PROBE_TIMEOUT, State};
 use crate::util::exec::Quiet;
 
-// Linux 专有:这是"kotori 自己把游戏拉起来再缩放"那条路上的东西,Windows 版不走那条路。
+// Linux 专有:这是"Kotori 自己把游戏拉起来再缩放"那条路上的东西,Windows 版不走那条路。
 #[cfg(unix)]
 pub(super) async fn gamescope(distro: &Distro) -> Check {
-    const IMPACT: &str = "没有它就启动不了游戏:kotori 是用 gamescope 把 wine 拉起来的,\
+    const IMPACT: &str = "没有它就启动不了游戏:Kotori 是用 gamescope 把 wine 拉起来的,\
                           缩放增强(FSR / 整数缩放 / 锐度)也全靠它";
     let install = distro.install(Package::same("gamescope"));
     match run("gamescope", &["--version"]).await {

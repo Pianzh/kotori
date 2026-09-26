@@ -95,7 +95,7 @@ export component GameScaleAdvancedGroup inherits Rectangle {
     in-out property <string> ratio: "";
     in-out property <string> output-w: "";
     in-out property <string> output-h: "";
-    // 手写的 gamescope 参数,空 = 由 kotori 按上面那几项拼。
+    // 手写的 gamescope 参数,空 = 由 Kotori 按上面那几项拼。
     in-out property <string> gamescope-args: "";
 
     callback internal-w-changed(string);
@@ -113,7 +113,7 @@ export component GameScaleAdvancedGroup inherits Rectangle {
     group := Group {
                     CardRow {
                         title: "gamescope 参数（自定义）";
-                        description: "填了它，下面三项以及上面的缩放算法、锐度、全屏、帧率就全部让位：kotori 一个参数都不发，只用你写的这一行（游戏命令仍由 kotori 接在后面）。参数之间用空格分隔，写法请对着 gamescope --help 自己核对。这一模式下 kotori 不再发任何缩放参数，缩放操作不起作用。";
+                        description: "填了它，下面三项以及上面的缩放算法、锐度、全屏、帧率就全部让位：Kotori 一个参数都不发，只用你写的这一行（游戏命令仍由 Kotori 接在后面）。参数之间用空格分隔，写法请对着 gamescope --help 自己核对。这一模式下 Kotori 不再发任何缩放参数，缩放操作不起作用。";
                         TextField {
                             field-width: 300px;
                             text <=> root.gamescope-args;

@@ -38,7 +38,7 @@ impl ConfigSource {
         if self.pinned {
             "由环境变量 KOTORI_CONFIG 指定"
         } else if self.is_portable() {
-            "便携（kotori 同目录）"
+            "便携（Kotori 同目录）"
         } else {
             "平台默认目录"
         }

@@ -176,7 +176,7 @@ export component SyncPage inherits ScrollView {
                 Divider { }
                 CardRow {
                     title: "rclone 程序位置";
-                    description: "rclone 可执行文件在哪。填目录或完整路径都行；留空＝由 kotori 自己去找。把 rclone 放在一个目录里、不想动 PATH 的人用这一项。";
+                    description: "rclone 可执行文件在哪。填目录或完整路径都行；留空＝由 Kotori 自己去找。把 rclone 放在一个目录里、不想动 PATH 的人用这一项。";
                     VerticalLayout {
                         spacing: 4px;
                         PathField {
@@ -198,7 +198,7 @@ export component SyncPage inherits ScrollView {
                 Divider { }
                 CardRow {
                     title: "kopia 程序位置";
-                    description: "kopia 可执行文件在哪。填目录或完整路径都行；留空＝由 kotori 自己去找（先看 KOTORI_KOPIA 环境变量，再看 kotori 自己的目录，最后 PATH）。";
+                    description: "kopia 可执行文件在哪。填目录或完整路径都行；留空＝由 Kotori 自己去找（先看 KOTORI_KOPIA 环境变量，再看 Kotori 自己的目录，最后 PATH）。";
                     VerticalLayout {
                         spacing: 4px;
                         PathField {
@@ -224,7 +224,7 @@ export component SyncPage inherits ScrollView {
                     // 它 2026-09-18 曾被搬到最下面「凭据」组里,而那一组的按钮是「保存凭据」
                     // —— 那颗**不存桶名**(凭据进密钥环、桶名进 config),于是"填在下面、
                     // 存在上面"变成一个人人都会踩的坑。它现在就在自己的保存按钮上面一行。
-                    description: "Backblaze 控制台(B2 Cloud Storage → Buckets → Create a Bucket)里你自己建的桶的名字:全局唯一,重名要换一个;类型选 Private——存档不该公开可读。它不是凭据:只能访问这个桶的 keyID / applicationKey 在凭据区填。bucket 是整个桶,下面那行 prefix 是桶里归 kotori 独占的目录(<bucket>/<prefix>/…),桶里放别的东西不冲突,kotori 只碰自己 prefix 下的路径。⚠ 随本组最下面的「保存设置」一起保存。";
+                    description: "Backblaze 控制台(B2 Cloud Storage → Buckets → Create a Bucket)里你自己建的桶的名字:全局唯一,重名要换一个;类型选 Private——存档不该公开可读。它不是凭据:只能访问这个桶的 keyID / applicationKey 在凭据区填。bucket 是整个桶,下面那行 prefix 是桶里归 Kotori 独占的目录(<bucket>/<prefix>/…),桶里放别的东西不冲突,Kotori 只碰自己 prefix 下的路径。⚠ 随本组最下面的「保存设置」一起保存。";
                     TextField {
                         field-width: 220px;
                         text <=> SyncBoard.bucket;
@@ -235,12 +235,12 @@ export component SyncPage inherits ScrollView {
                 Divider { }
                 CardRow {
                     title: "prefix";
-                    description: "bucket 里归 kotori 独占的目录(bucket 在上面那一行填),bucket 里的其他东西我们一律不碰。";
+                    description: "bucket 里归 Kotori 独占的目录(bucket 在上面那一行填),bucket 里的其他东西我们一律不碰。";
                     TextField {
                         field-width: 220px;
                         text <=> SyncBoard.prefix;
                         edited(text) => { SyncBoard.field(2, text); }
-                        placeholder: "kotori";
+                        placeholder: "Kotori";
                     }
                 }
                 Divider { }

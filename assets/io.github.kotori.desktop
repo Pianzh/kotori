@@ -5,7 +5,7 @@
 # what you get, silently.
 [Desktop Entry]
 Type=Application
-Name=kotori
+Name=Kotori
 Comment=Galgame manager: launching, upscaling and cloud saves
 Comment[zh_CN]=Galgame 集中管理器：启动、缩放增强、云存档
 Exec=kotori ui

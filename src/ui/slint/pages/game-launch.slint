@@ -64,7 +64,7 @@ export component GameLaunchGroup inherits VerticalLayout {
                 VerticalLayout {
                     padding: 16px;
                     Text {
-                        text: "上面这条路管的是 kotori 怎么把它跑起来。游戏不是从这里启动的,下面「自动追踪」照样算数。";
+                        text: "上面这条路管的是 Kotori 怎么把它跑起来。游戏不是从这里启动的,下面「自动追踪」照样算数。";
                         font-size: 11px;
                         color: Tokens.text-3;
                         wrap: word-wrap;
@@ -89,7 +89,7 @@ export component GameLaunchGroup inherits VerticalLayout {
             Group {
                 CardRow {
                     title: "自动追踪";
-                    description: "不必从 kotori 启动:双击图标 / 启动器 / Steam 拉起来的那一局,kotori 也会盯住进程,游戏退出后照常上传存档(状态栏显示成「仅观测」)。";
+                    description: "不必从 Kotori 启动:双击图标 / 启动器 / Steam 拉起来的那一局,Kotori 也会盯住进程,游戏退出后照常上传存档(状态栏显示成「仅观测」)。";
                     Switch {
                         checked: root.game-auto-watch;
                         toggled => { root.auto-watch-toggled(self.checked); }

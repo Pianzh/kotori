@@ -239,7 +239,7 @@ jobs:
 
           ### 源码
 
-          GPL-3.0:https://github.com/Pianzh/kotori —— 本仓库就是这些二进制对应的源码。
+          GPL-3.0:https://github.com/Pianzh/Kotori —— 本仓库就是这些二进制对应的源码。
           随包的 kopia 是独立程序(Apache-2.0),取自
           https://github.com/kopia/kopia/releases 。
           ${NOTES_EXTRA}"
