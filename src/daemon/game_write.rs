@@ -277,6 +277,16 @@ impl Daemon {
 
             // 每款一个的云同步开关（见 `GameConfig::sync_enabled`）。
             if let Some(sync_enabled) = patch.sync_enabled {
+                // ⚠ **开得起来的前提是有存档位置**（用户 2026-09-26 定的规则：身份是身份，
+                // 路径是路径）。没有路径就没有东西可同步 —— 那条路上一次上传都不会发生，
+                // 而"启动前那一问"也就不该为一个注定同步不了的东西弹出来。界面把开关置灰
+                // （见 `ui::render::detail`），这里再兜一次：绕过界面也开不起来。
+                if sync_enabled && game.save_paths.is_empty() {
+                    return Err(format!(
+                        "「{}」还没有配置存档位置，开不了云同步（先在「存档位置」里填好）",
+                        game.name
+                    ));
+                }
                 game.sync_enabled = sync_enabled;
                 // **手动重新打开 = 重新开始**（用户 2026-09-24："之后我不论开关云同步都不会
                 // 再次弹窗，这也是问题"）：把上次那份结论（已确认 / 已拒绝）清掉，下一次启动

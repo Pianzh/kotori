@@ -104,6 +104,17 @@ pub(super) fn push_detail(ui: &mut Ui) {
     push_bool(board.get_participating(), participating, |v| {
         board.set_participating(v)
     });
+    // 「路径没填就开不了」：参与云同步以**存档位置**为前提（用户 2026-09-26 定的规则：
+    // 身份是身份，路径是路径）。界面据此把那颗开关置灰，daemon 那边再兜一次
+    // （见 `rpc_game_update`）—— 客户端绕过去也开不起来。
+    let paths_configured = app
+        .selected_game()
+        .is_some_and(|game| !game.save_paths.is_empty());
+    push_bool(
+        board.get_paths_configured(),
+        paths_configured,
+        |v| board.set_paths_configured(v),
+    );
     // 「当前绑定」那一行：名字为主，下面是摘要 —— 文案由 `model::cloud::identity_label`
     // 统一生成（启动那一问里那条候选用的也是它，用户 2026-09-24 要的"同一个函数"）。
     let label = app

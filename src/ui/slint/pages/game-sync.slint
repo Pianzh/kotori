@@ -23,6 +23,10 @@ export global GameSyncBoard {
     in-out property <string> bound-summary: "";
     /// 正等着确认"新建一条云端身份"（两段式：先点、再确认）。
     in-out property <bool> new-pending: false;
+    /// 这一款**填了**存档位置没有。没填就开不了上面那颗「参与云同步」（用户 2026-09-26
+    /// 定的规则：**身份是身份，路径是路径** —— 路径没填，同步按钮打不开；身份没填照样
+    /// 能开，代价是启动时会弹那一问）。允许"只填身份不填路径"。
+    in-out property <bool> paths-configured: true;
 
     callback toggled(bool);
     /// 「绑定云端存档…」/「更改绑定…」：打开云端清单挑一条 —— 清单里**置顶第一条**就是
@@ -93,8 +97,13 @@ export component GameSyncGroup inherits Rectangle {
                     Divider { }
                     CardRow {
                         title: "参与云同步";
-                        description: "关掉之后这一款不再自动同步(启动前不取回、退出后不上传),随时能再打开;「立即同步」这类手动动作不受它限制。";
+                        description: GameSyncBoard.paths-configured
+                            ? "关掉之后这一款不再自动同步(启动前不取回、退出后不上传),随时能再打开;「立即同步」这类手动动作不受它限制。"
+                            : "先在上面「存档位置」里填好这一款存在哪,才能参与云同步 —— 没有存档位置就没有东西可同步。";
                         Switch {
+                            // 没填路径就打不开；但**已经开着的仍然能关** —— 否则用户会被卡在
+                            // 一个关不掉的开关上，而历史配置里确实有"空路径 + 开着"这种状态。
+                            enabled: GameSyncBoard.paths-configured || GameSyncBoard.participating;
                             checked <=> GameSyncBoard.participating;
                             toggled => { GameSyncBoard.toggled(GameSyncBoard.participating); }
                         }

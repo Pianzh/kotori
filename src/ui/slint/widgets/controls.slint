@@ -9,6 +9,10 @@ import { Tokens } from "../theme.slint";
 // Win11 开关:关 = 描边胶囊 + 白点;开 = accent 填充 + 黑点。
 export component Switch inherits Rectangle {
     in-out property <bool> checked: false;
+    /// 关掉的开关**点不动**，外观也淡一档。用在「参与云同步」上：这一款还没填存档位置时
+    /// 就是这种状态 —— 没有路径就没有东西可同步（用户 2026-09-26 定的规则：**身份是身份，
+    /// 路径是路径**）。daemon 那边同样会拒（见 `rpc_game_update`），这里只是不让用户白点。
+    in property <bool> enabled: true;
     callback toggled();
 
     width: 40px;
@@ -17,8 +21,10 @@ export component Switch inherits Rectangle {
     background: checked ? Tokens.accent : #ffffff00;
     border-width: checked ? 0px : 1px;
     border-color: #ffffff6b;
+    opacity: enabled ? 1.0 : 0.45;
     animate background { duration: 150ms; easing: ease-in-out; }
     animate border-width { duration: 150ms; }
+    animate opacity { duration: 150ms; }
 
     Rectangle {
         width: 12px;
@@ -32,6 +38,7 @@ export component Switch inherits Rectangle {
     }
 
     ta := TouchArea {
+        enabled: root.enabled;
         mouse-cursor: pointer;
         clicked => { root.checked = !root.checked; root.toggled(); }
     }
