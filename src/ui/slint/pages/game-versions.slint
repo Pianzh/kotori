@@ -1,23 +1,28 @@
-// 这一款的云端存档：当前绑的那条身份在云端存了哪几版，以及"用哪一版替换本机"。
+// 这一款的云端存档：当前绑的那条身份在云端存了哪几版，以及"用哪一版替换本机 / 删掉哪一版 /
+// 清空这一款 / 把这一款从云端抹掉"。
 //
 // 入口是单游戏页云存档组里那条**身份**（整条可点，见 `game-sync.slint`）。这一页是
 // **整页盖**在那一页上面的（不是浮层，也不是又一次窗口级下钻）：它与单游戏页共用
 // `game-open` 那个状态，关掉就回到原样，左侧导航一动不动。
 //
-// ⚠ 版本列表排**最上面**（进这一页就是来看它的）；身份那一条退到最下面 —— 它是"这些存档
-// 属于谁"的注脚，不是这一页的主角。
+// ⚠ 版本列表排**最上面**（进这一页就是来看它的）；身份那一条退到下面 —— 它是"这些存档
+// 属于谁"的注脚，不是这一页的主角。最后才是"整款"的那两颗破坏性按钮：最不常用、也最
+// 不该被手滑碰到，所以压在最底下。
 //
 // 状态与回调走一个全局（照 `GameSyncBoard`）：单游戏页那串属性是经 `app.slint` 一路
 // 转发下来的，而那一层已经不替新东西转发（见 `state/sync-board.slint` 的文件头）。
 //
-// ⚠ 替换是**破坏性**的：用云端某一版盖掉本机存档目录，不能撤销。所以每一颗「替换」都
-// 要过一道居中弹窗；弹窗里那句"想留一手就先点一次「立即同步」"是给用户的自保出路
-// （与单游戏页那颗「恢复」下面的说明同一套说法）。
+// ⚠ 这一页上的**四件事都是破坏性**的（覆盖本机存档目录、删云端一版、清空这一款、
+// 抹掉整条词条），所以四颗按钮全都要过那道居中弹窗。弹窗只有**一个**：要问哪件事、那几
+// 行字说什么，全由 Rust 按当前动作拼好（`model/versions.rs` 的 `confirm_*`）—— 条件与
+// 文案不进 `.slint`，那样才测得到。
 
 import { ScrollView } from "std-widgets.slint";
 import { Tokens } from "../theme.slint";
-import { CardRow, Group } from "../widgets/card.slint";
+import { Divider } from "../widgets/base.slint";
+import { CardRow, Group, SectionTitle } from "../widgets/card.slint";
 import { AccentButton, StdButton } from "../widgets/buttons.slint";
+import { ConfirmDialog } from "../widgets/confirm-dialog.slint";
 import { CloudVersionItem } from "../types.slint";
 
 export global GameVersionsBoard {
@@ -34,19 +39,38 @@ export global GameVersionsBoard {
     in-out property <bool> ok: true;
     /// 这一款身份下的每一版，**最新在前**。
     in-out property <[CloudVersionItem]> rows: [];
-    /// 正等着二次确认的那一版（版本名）。空串 = 没有弹窗。
-    in-out property <string> pending: "";
-    /// 替换在路上（挡住连点第二下）。
+    /// 正等着二次确认的那件事。那几行字（标题 / 明细 / 后果 / 确认按钮）全在 Rust 里拼好
+    /// 推下来，界面只管画 —— 四种动作（替换 / 删一版 / 清空这一款 / 抹掉词条）共用这一个
+    /// 弹窗（见 `model/versions.rs`）。
+    in-out property <bool> confirm-open: false;
+    in-out property <string> confirm-title: "";
+    /// 具体哪一版，或者"这一款现在有几版"。空串就不画这一行。
+    in-out property <string> confirm-detail: "";
+    in-out property <string> confirm-body: "";
+    in-out property <string> confirm-label: "确定";
+    /// 确认那颗按钮要不要走警示色（三个删除动作要，替换不要）。
+    in-out property <bool> confirm-danger: false;
+    /// 请求在路上（挡住连点第二下）。
     in-out property <bool> busy: false;
 
     callback back();
-    /// 某一行的「替换」：先记下是哪一版，弹窗由 `pending` 驱动。
+    /// 某一行的「替换」/「删除」：先记下是哪一版，弹窗由 `confirm-*` 驱动。
     callback replace(string);
-    callback replace-confirmed();
-    callback replace-cancelled();
+    callback delete(string);
+    /// 页尾那两颗"整款"按钮：清空这一款的云端存档 / 把这一款从云端抹掉。
+    callback clear-versions();
+    callback forget-identity();
+    /// 弹窗那两颗（四种动作共用）。
+    callback confirmed();
+    callback cancelled();
     /// 绑定 / 换绑 —— 与身份条上那颗是同一件事（这里也放一颗，免得为了换绑还要退出去）。
     callback rebind-requested();
 }
+
+// 这两个名字只为**测试**取：`ElementHandle` 只按类型名查，而这一页盖着的单游戏设置页里
+// `SectionTitle` / `Group` 有一堆，量出来的是别人的坐标（照 `game-sync.slint` 的 `IdentityRow`）。
+component CleanupTitle inherits SectionTitle { }
+component CleanupGroup inherits Group { }
 
 export component GameVersionsPage inherits Rectangle {
     width: 100%;
@@ -144,6 +168,18 @@ export component GameVersionsPage inherits Rectangle {
                         }
                         VerticalLayout {
                             alignment: center;
+                            // 「删除」在左、「替换」在右：右边那一位是这一行更常用的动作
+                            // （进这一页多半是想取回某一版），破坏性的那颗退开一点。
+                            StdButton {
+                                label: "删除";
+                                button-width: 64px;
+                                danger: true;
+                                button-enabled: !GameVersionsBoard.busy;
+                                clicked => { GameVersionsBoard.delete(version.name); }
+                            }
+                        }
+                        VerticalLayout {
+                            alignment: center;
                             StdButton {
                                 label: "替换";
                                 button-width: 76px;
@@ -166,7 +202,7 @@ export component GameVersionsPage inherits Rectangle {
                 }
             }
 
-            // ── 这些存档属于谁（注脚：排在最下面）──────────────────────────
+            // ── 这些存档属于谁（注脚）──────────────────────────────────────
             VerticalLayout {
                 padding-top: 26px;
                 Group {
@@ -183,6 +219,52 @@ export component GameVersionsPage inherits Rectangle {
                     }
                 }
             }
+
+            // ── 整款的清理（最不常用、也最该离手远一点，所以压在最底下）──────────
+            // 没绑定就没有"这一款的云端词条"可清，整块不画。
+            //
+            // ⚠ 外壳必须是这种"**不许被拉伸**"的 `Rectangle`（`RevealItem` 就是这个形状，
+            //    见 `widgets/base.slint`：它显式写了 `vertical-stretch: 0` +
+            //    `height: layout.preferred-height`）。直接写成
+            //    `if … : VerticalLayout { 标题 + 卡片 }` 时，外层布局会把多余的高度摊给里面
+            //    那个 `Text` —— 标题那行的盒子被撑到 600 多 px，文字画在盒子顶部，于是标题和
+            //    卡片之间空出一大截（用户 2026-09-26 看截图一眼就是这个；无头那边量到
+            //    608.5px，`window_test/versions.rs` 有断言钉着）。
+            if GameVersionsBoard.bound : Rectangle {
+                vertical-stretch: 0;
+                height: block.preferred-height;
+                background: #00000000;
+                block := VerticalLayout {
+                    padding-top: 26px;
+                    spacing: 8px;
+                    CleanupTitle { text: "云端清理"; }
+                    CleanupGroup {
+                        CardRow {
+                            title: "清空这一款的云端存档";
+                            description: "云端这条身份下的所有存档都删掉，身份留着 —— 以后同步还是传到同一条。本机的存档不动。";
+                            StdButton {
+                                label: "清空存档";
+                                button-width: 96px;
+                                danger: true;
+                                button-enabled: !GameVersionsBoard.busy;
+                                clicked => { GameVersionsBoard.clear-versions(); }
+                            }
+                        }
+                        Divider { }
+                        CardRow {
+                            title: "把这一款从云端抹掉";
+                            description: "云端这条身份连它的全部存档一起删掉，不留没人认领的数据。本机还绑着它 —— 下次同步会在云端新建一条。";
+                            StdButton {
+                                label: "删掉云端词条";
+                                button-width: 128px;
+                                danger: true;
+                                button-enabled: !GameVersionsBoard.busy;
+                                clicked => { GameVersionsBoard.forget-identity(); }
+                            }
+                        }
+                    }
+                }
+            }
             // ⚠ 吃掉剩余的高度：没有它，`ScrollView` 里的多余空间会被摊到别的元素之间，
             // 那几行存档就被推到窗口最下面去了（`games.slint` / `sync.slint` / `settings.slint`
             // 的末尾都有这一条，这一页漏了 —— 用户看截图时一眼就是这个）。
@@ -190,74 +272,20 @@ export component GameVersionsPage inherits Rectangle {
         }
     }
 
-    // ── 「替换」的二次确认：居中弹窗 ──────────────────────────────────────
-    // ⚠ 覆盖本机存档不能撤销，所以每一颗「替换」都要过这一道，不做就地确认。
-    if GameVersionsBoard.pending != "" : Rectangle {
+    // ── 二次确认（四种动作共用那一个弹窗，见 `widgets/confirm-dialog.slint`）────
+    // ⚠ 这四件事都不可撤销（覆盖本机存档 / 删云端一版 / 清空这一款 / 抹掉整条词条），所以
+    // 都要过这一道，不做就地确认。文案与那个按钮的警示色由 Rust 推下来（`confirm-*`）。
+    ConfirmDialog {
         width: 100%;
         height: 100%;
-
-        // 遮罩：点空白 = 取消。
-        Rectangle {
-            width: 100%;
-            height: 100%;
-            background: #00000073;
-            TouchArea {
-                mouse-cursor: pointer;
-                clicked => { GameVersionsBoard.replace-cancelled(); }
-            }
-        }
-
-        card := Rectangle {
-            width: 460px;
-            // 高度跟着内容走（写死高度时内容一少，布局会把余量摊到各项之间，像散架）。
-            height: min(body.preferred-height + 48px, root.height - 40px);
-            x: (root.width - self.width) / 2;
-            y: (root.height - self.height) / 2;
-            border-radius: Tokens.radius-card;
-            background: Tokens.flyout;
-            border-width: 1px;
-            border-color: Tokens.flyout-stroke;
-
-            body := VerticalLayout {
-                x: 24px;
-                y: 24px;
-                width: parent.width - 48px;
-                spacing: 10px;
-
-                Text {
-                    text: "用这一版替换本机的存档？";
-                    font-size: 16px;
-                    font-weight: 600;
-                    color: Tokens.text;
-                }
-                Text {
-                    text: GameVersionsBoard.pending;
-                    font-size: 12px;
-                    color: Tokens.text-2;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: "本机现在的进度会被盖掉，这一步不能撤销。想留一手，就先点一次「立即同步」，把当前状态也传到云端。";
-                    font-size: 12px;
-                    color: Tokens.text-3;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    StdButton {
-                        label: "取消";
-                        button-width: 76px;
-                        clicked => { GameVersionsBoard.replace-cancelled(); }
-                    }
-                    AccentButton {
-                        label: "用这一版覆盖";
-                        button-width: 132px;
-                        button-enabled: !GameVersionsBoard.busy;
-                        clicked => { GameVersionsBoard.replace-confirmed(); }
-                    }
-                }
-            }
-        }
+        open: GameVersionsBoard.confirm-open;
+        title: GameVersionsBoard.confirm-title;
+        detail: GameVersionsBoard.confirm-detail;
+        body: GameVersionsBoard.confirm-body;
+        confirm-label: GameVersionsBoard.confirm-label;
+        danger: GameVersionsBoard.confirm-danger;
+        busy: GameVersionsBoard.busy;
+        confirmed => { GameVersionsBoard.confirmed(); }
+        cancelled => { GameVersionsBoard.cancelled(); }
     }
 }

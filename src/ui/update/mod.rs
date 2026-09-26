@@ -31,6 +31,8 @@ impl App {
                 // 那一层覆盖跟着"当前这一款"走：切页 / 回库 / 删条目时都不能留着，
                 // 否则下次进另一款，它带着上一款的版本直接盖上来。
                 self.versions.closed();
+                // 「云端存档」那两层覆盖同理（切页之后再切回来是另一份清单）。
+                self.cloud_version.closed();
                 self.error = None;
                 if tab == Tab::Cloud {
                     return self.cloud_entered();
@@ -324,19 +326,34 @@ impl App {
             | Message::CloudScan
             | Message::CloudScanned(..)
             | Message::CloudSearch(..)
-            | Message::CloudToggle(..)
+            | Message::CloudOpenGame(..)
             | Message::CloudBack
-            | Message::CloudVersionsLoaded(..)) => self.update_cloud(m),
+            | Message::CloudVersionsLoaded(..)
+            | Message::CloudDeleteVersions
+            | Message::CloudDeleteIdentity
+            | Message::CloudDeleteConfirmed
+            | Message::CloudDeleteCancelled
+            | Message::CloudDeleted(..)
+            | Message::CloudVersionOpened(..)
+            | Message::CloudVersionClosed
+            | Message::CloudVersionDeleteRequested
+            | Message::CloudVersionConfirmed
+            | Message::CloudVersionCancelled
+            | Message::CloudVersionDeleted(..)) => self.update_cloud(m),
 
             // ── 单游戏页那一页「这一款的云端存档」（处理在 `update::update_versions`） ──
-            // 与上面那一族分开：那一页只读，这一页能覆盖本机存档，是**写**动作。
+            // 与上面那一族分开：那一页只读，这一页能覆盖本机存档、还能删云端的东西，是**写**动作。
             m @ (Message::GameVersionsOpened
             | Message::GameVersionsClosed
             | Message::GameVersionsLoaded(..)
-            | Message::GameVersionsReplace(..)
-            | Message::GameVersionsReplaceCancelled
-            | Message::GameVersionsReplaceConfirmed
-            | Message::GameVersionsReplaced(..)) => self.update_versions(m),
+            | Message::GameVersionsReplaceVersion(..)
+            | Message::GameVersionsDeleteVersion(..)
+            | Message::GameVersionsClearVersions
+            | Message::GameVersionsForgetIdentity
+            | Message::GameVersionsConfirmed
+            | Message::GameVersionsCancelled
+            | Message::GameVersionsReplaced(..)
+            | Message::GameVersionsDeleted(..)) => self.update_versions(m),
 
             // ── 服务、wine 与单游戏设置（处理在 `update::update_settings`） ──
             // 这一族有哪些变体由 `is_settings_message` 说了算（它就在 handler 旁边，

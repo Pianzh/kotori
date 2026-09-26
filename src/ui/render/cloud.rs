@@ -25,6 +25,7 @@ pub(super) fn push_cloud(ui: &mut Ui) {
     push_bool(board.get_versions_loading(), cloud.versions_loading, |v| {
         board.set_versions_loading(v)
     });
+    push_bool(board.get_busy(), cloud.busy, |v| board.set_busy(v));
 
     // ── 列表 ──
     let visible = cloud.visible();
@@ -88,4 +89,8 @@ pub(super) fn push_cloud(ui: &mut Ui) {
         })
         .collect();
     push_model(&ui.cloud_versions, versions);
+
+    // 详情页最下面那两颗"整款"删除的二次确认（措辞见 `model::confirm`）。
+    let values = ConfirmValues::of(cloud.pending(), cloud.versions.len());
+    push_cloud_confirm(&board, &values);
 }

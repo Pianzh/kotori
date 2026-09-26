@@ -40,12 +40,15 @@ fn center(element: &i_slint_backend_testing::ElementHandle) -> LogicalPosition {
     LogicalPosition::new(origin.x + size.width / 2.0, origin.y + size.height / 2.0)
 }
 
-#[test]
-fn a_click_lands_on_the_control_under_the_pointer() {
+/// 一个空壳 `Ui`：后端的窗口 + 空的几份模型，够点任何一页的按钮了。
+///
+/// ⚠ `init_no_event_loop` 在这里只调用一次；它**不能**被 `Once` 缓存（测试后端是按线程注册
+/// 的，缓存会让第二个测试线程拿不到它而回退到 winit，于是本地假绿、CI 真红）——所以这个
+/// 帮手是"每个测试各建一次窗口"，不是共享一个窗口。
+fn bare_ui() -> Ui {
     i_slint_backend_testing::init_no_event_loop();
 
     let window = AppWindow::new().expect("测试后端应该能建窗口");
-    let handle = window.as_weak();
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
         .expect("建一个 tokio runtime 只为拿 Handle");
@@ -58,7 +61,7 @@ fn a_click_lands_on_the_control_under_the_pointer() {
         .global::<ProcessPickerState>()
         .set_rows(process_rows.clone().into());
 
-    let mut ui = Ui {
+    Ui {
         app: App::new().0,
         window,
         runtime: runtime.handle().clone(),
@@ -73,7 +76,13 @@ fn a_click_lands_on_the_control_under_the_pointer() {
         saves_built: Vec::new(),
         saves_seed: 0,
         detail_seed: 0,
-    };
+    }
+}
+
+#[test]
+fn a_click_lands_on_the_control_under_the_pointer() {
+    let mut ui = bare_ui();
+    let handle = ui.window.as_weak();
     ui.app.games = vec![ui_game()];
     render(&mut ui);
     crate::ui::driver::install_state(ui);
@@ -127,38 +136,8 @@ fn a_click_lands_on_the_control_under_the_pointer() {
 ///   ② 点右边那颗「更改绑定…」⇒ 走它自己的动作,**不许**顺带进那一页。
 #[test]
 fn the_identity_row_opens_the_versions_page_but_its_button_still_wins() {
-    i_slint_backend_testing::init_no_event_loop();
-
-    let window = AppWindow::new().expect("测试后端应该能建窗口");
-    let handle = window.as_weak();
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("建一个 tokio runtime 只为拿 Handle");
-    let games = Rc::new(VecModel::<GameItem>::default());
-    let saves = Rc::new(VecModel::<SaveItem>::default());
-    let process_rows = Rc::new(VecModel::<ProcessPickRow>::default());
-    window.set_games(games.clone().into());
-    window.set_saves(saves.clone().into());
-    window
-        .global::<ProcessPickerState>()
-        .set_rows(process_rows.clone().into());
-
-    let mut ui = Ui {
-        app: App::new().0,
-        window,
-        runtime: runtime.handle().clone(),
-        games,
-        saves,
-        cloud_rows: Rc::new(VecModel::default()),
-        cloud_versions: Rc::new(VecModel::default()),
-        game_version_rows: Rc::new(VecModel::default()),
-        add_match_rows: Rc::new(VecModel::default()),
-        cloud_pick_rows: Rc::new(VecModel::default()),
-        process_rows,
-        saves_built: Vec::new(),
-        saves_seed: 0,
-        detail_seed: 0,
-    };
+    let mut ui = bare_ui();
+    let handle = ui.window.as_weak();
     ui.app.games = vec![ui_game()];
     // 进单游戏页,并把窗口撑高 —— 云存档组在页面最底下,`ElementHandle` 只看得到
     // 没被裁掉的部分(同 `window_test` 里那段)。
@@ -219,4 +198,104 @@ fn the_identity_row_opens_the_versions_page_but_its_button_still_wins() {
         "点「更改绑定…」要真的打开云端清单 —— 事件被整条的 TouchArea 抢走了"
     );
     assert!(!open, "点按钮不该顺带进版本页");
+}
+
+/// 「云端存档」页：**两层**的"整条点得进去"。
+///
+/// 用户 2026-09-26 要的就是这个形状：列表里每一款整条可点（不再有「看每一版」那颗按钮），
+/// 进去看它每一版（条目化的卡片，也是整条可点）—— 点某一版就进**一个存档的管理页**。
+///
+/// 与上面两条同一个道理：垫底的 `TouchArea` 声明错位置就变成"点了没反应"，而几何断言查不出
+/// 这一类 —— 这里用真的指针事件走完整条 dispatch + render。
+///
+/// ⚠ 这一页是"管理云端的工具"：两层里都不该出现任何本机动作（覆盖本机那些在单游戏设置那页）。
+#[test]
+fn the_cloud_rows_open_their_detail_and_each_version_opens_its_own_page() {
+    let mut ui = bare_ui();
+    let handle = ui.window.as_weak();
+    ui.app.tab = Tab::Cloud;
+    ui.window.set_tab(2);
+    ui.app.cloud.rows = vec![CloudGameRow {
+        cloud_key: "demo-key".into(),
+        cloud_id: "8f2c1234".into(),
+        name: "示例游戏".into(),
+        machines: 2,
+        versions: 1,
+        latest: Some("20260911T101500Z".into()),
+        size: 4096,
+        exe_paths: vec!["/games/demo/game.exe".into()],
+        local_id: "demo".into(),
+        local_name: "示例游戏".into(),
+        rejected: false,
+    }];
+    ui.app.cloud.indexed = true;
+    // 两份模型都指到 `Ui` 持有的那一份上（否则 `push_model` 写的那份窗口看不见）。
+    ui.window
+        .global::<CloudBoard>()
+        .set_rows(ui.cloud_rows.clone().into());
+    ui.window
+        .global::<CloudBoard>()
+        .set_versions(ui.cloud_versions.clone().into());
+    ui.window
+        .window()
+        .set_size(slint::LogicalSize::new(1120.0, 1600.0));
+    render(&mut ui);
+    crate::ui::driver::install_state(ui);
+    let window = handle.upgrade().expect("窗口还在");
+    crate::ui::wire::install_callbacks(&window);
+
+    // ① 点列表里那一款的**空白处**（名字那一块）：进这一款的详情。
+    let row =
+        i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, "CloudGameRow")
+            .next()
+            .expect("云端存档列表里应该有那一款");
+    let row_left = row.absolute_position().x;
+    let row_middle = row.absolute_position().y + row.size().height / 2.0;
+    click(&window, LogicalPosition::new(row_left + 40.0, row_middle));
+    let (open, name) = with_ui(|ui| {
+        (
+            ui.app.cloud.open.clone(),
+            ui.app.cloud.opened().map(|row| row.name.clone()),
+        )
+    });
+    assert_eq!(open.as_deref(), Some("demo-key"), "点整条要进这一款的详情");
+    assert_eq!(name.as_deref(), Some("示例游戏"));
+
+    // 那一下真的发过一次 `sync.cloud_versions`，但测试里没有 daemon、回包不会来 —— 直接把
+    // 这一版铺上，好让下一层点得着。
+    with_ui(|ui| {
+        ui.app.cloud.versions_loaded(
+            "demo-key",
+            vec![CloudVersionRow {
+                name: "20260911T101500Z".into(),
+                size: 4096,
+                time: String::new(),
+            }],
+        );
+        render(ui);
+    });
+
+    // ② 点某一版那一行：进"一个存档的管理页"。
+    // ⚠ 坐标必须**重新量**：上面那次 render 之后旧句柄已经失效（失效句柄的几何全是 0，
+    //    拿它算坐标会点到窗口角上）—— 这条在 `IdentityRow` 那条测试里踩过。
+    let entry =
+        i_slint_backend_testing::ElementHandle::find_by_element_type_name(&window, "VersionEntry")
+            .next()
+            .expect("详情里应该有那一版");
+    let entry_left = entry.absolute_position().x;
+    let entry_middle = entry.absolute_position().y + entry.size().height / 2.0;
+    click(
+        &window,
+        LogicalPosition::new(entry_left + 40.0, entry_middle),
+    );
+    let (open, key, version) = with_ui(|ui| {
+        (
+            ui.app.cloud_version.open,
+            ui.app.cloud_version.key.clone(),
+            ui.app.cloud_version.version.clone(),
+        )
+    });
+    assert!(open, "点某一版要进它的管理页");
+    assert_eq!(key, "demo-key", "删的时候按云端落点认人");
+    assert_eq!(version, "20260911T101500Z");
 }

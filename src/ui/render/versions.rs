@@ -58,11 +58,11 @@ pub(super) fn push_versions(ui: &mut Ui) {
     );
     push_bool(board.get_ok(), versions.ok, |v| board.set_ok(v));
     push_bool(board.get_busy(), versions.busy, |v| board.set_busy(v));
-    push_str(
-        board.get_pending(),
-        versions.pending.as_deref().unwrap_or(""),
-        |v| board.set_pending(v),
-    );
+
+    // 弹窗那几行字全在 Rust 里拼（见 `model::confirm`）：四种动作共用那一个弹窗组件，
+    // 所以界面只管画，条件与文案一个字都不进 `.slint`。
+    let values = ConfirmValues::of(versions.pending(), versions.rows.len());
+    push_versions_confirm(&board, &values);
 
     let rows: Vec<CloudVersionItem> = versions
         .rows

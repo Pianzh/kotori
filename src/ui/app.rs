@@ -8,6 +8,8 @@ pub struct App {
     pub(super) games: Vec<UiGame>,
     /// 「云端存档」那一块（云端有哪几款、每款几版、点开的那一款有哪几版）。
     pub(super) cloud: CloudState,
+    /// 再下一层：**一个存档**的管理页（现在只有删除）。它只碰云端，与 `versions` 分开。
+    pub(super) cloud_version: CloudVersionState,
     pub(super) daemon_socket: PathBuf,
     pub(super) daemon_connected: Option<bool>,
     pub(super) loading: bool,
@@ -126,6 +128,7 @@ impl App {
                 tab: Tab::Games,
                 games: Vec::new(),
                 cloud: CloudState::default(),
+                cloud_version: CloudVersionState::default(),
                 sync_ask: None,
                 sync_ask_hidden: false,
                 sync_new_pending: false,

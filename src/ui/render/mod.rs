@@ -16,6 +16,10 @@ use slint::{Model, ModelRc, SharedString, VecModel};
 
 use add::push_add;
 use cloud::push_cloud;
+use cloud_version::push_cloud_version;
+use confirm::{
+    ConfirmValues, push_cloud_confirm, push_cloud_version_confirm, push_versions_confirm,
+};
 use detail::push_detail;
 use games::push_games;
 use settings::push_settings;
@@ -24,6 +28,8 @@ use versions::push_versions;
 
 mod add;
 mod cloud;
+mod cloud_version;
+mod confirm;
 mod detail;
 mod games;
 mod settings;
@@ -46,6 +52,7 @@ pub(super) fn render(ui: &mut Ui) {
     push_add(ui);
     push_sync(ui);
     push_cloud(ui);
+    push_cloud_version(ui);
     push_sync_ask(ui);
     push_versions(ui);
     push_settings(ui);

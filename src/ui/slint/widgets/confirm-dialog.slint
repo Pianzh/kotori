@@ -1,0 +1,107 @@
+// 「这件事不可撤销，真要干吗？」—— 居中弹窗。
+//
+// 三个地方共用它：单游戏设置那页的云端存档（替换 / 删一版 / 清空 / 抹掉词条）、云端存档页里
+// 一款详情底部的两颗"整款"删除、以及一个存档的管理页（删这一版）。
+//
+// ⚠ 那几行字（标题 / 明细 / 后果 / 确认按钮的字）**一个字都不在这里**：全在 Rust 里按当前
+//    动作拼好推下来（`model/confirm.rs`）。同一件事在三个入口上必须说同一句话，而这里只是
+//    一层皮；把文案放这儿，三份就会各自漂移，也没法测。
+//
+// 用法：`ConfirmDialog { open: X.confirm-open; title: X.confirm-title; … confirmed => { X.confirmed(); } }`
+// 放在页面根节点上，`width: 100%; height: 100%` —— 它要盖住整页（含页面自己的滚动区）。
+
+import { Tokens } from "../theme.slint";
+import { AccentButton, StdButton } from "buttons.slint";
+
+export component ConfirmDialog inherits Rectangle {
+    in property <bool> open: false;
+    in property <string> title: "";
+    /// 具体是哪一样东西（版本名 / "现在有几版"）。空串就不画这一行。
+    in property <string> detail: "";
+    in property <string> body: "";
+    in property <string> confirm-label: "确定";
+    /// 确认那颗按钮要不要走警示色（删除要，替换不要）。
+    in property <bool> danger: false;
+    /// 有请求在飞：确认那颗按钮灰着。
+    in property <bool> busy: false;
+
+    callback confirmed();
+    callback cancelled();
+
+    if open : Rectangle {
+        width: 100%;
+        height: 100%;
+
+        // 遮罩：点空白 = 取消。它也是"挡住下面所有点击"的那一层。
+        Rectangle {
+            width: 100%;
+            height: 100%;
+            background: #00000073;
+            TouchArea {
+                mouse-cursor: pointer;
+                clicked => { root.cancelled(); }
+            }
+        }
+
+        card := Rectangle {
+            width: 460px;
+            // 高度跟着内容走（写死高度时内容一少，布局会把余量摊到各项之间，像散架）。
+            height: min(inner.preferred-height + 48px, root.height - 40px);
+            x: (root.width - self.width) / 2;
+            y: (root.height - self.height) / 2;
+            border-radius: Tokens.radius-card;
+            background: Tokens.flyout;
+            border-width: 1px;
+            border-color: Tokens.flyout-stroke;
+
+            inner := VerticalLayout {
+                x: 24px;
+                y: 24px;
+                width: parent.width - 48px;
+                spacing: 10px;
+
+                Text {
+                    text: root.title;
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Tokens.text;
+                }
+                if root.detail != "" : Text {
+                    text: root.detail;
+                    font-size: 12px;
+                    color: Tokens.text-2;
+                    wrap: word-wrap;
+                }
+                Text {
+                    text: root.body;
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    StdButton {
+                        label: "取消";
+                        button-width: 76px;
+                        clicked => { root.cancelled(); }
+                    }
+                    // 删除那三件事用警示色那颗（同一种形状，只是文字与描边变红）；替换用强调色。
+                    if root.danger : StdButton {
+                        label: root.confirm-label;
+                        button-width: 132px;
+                        danger: true;
+                        button-enabled: !root.busy;
+                        clicked => { root.confirmed(); }
+                    }
+                    if !root.danger : AccentButton {
+                        label: root.confirm-label;
+                        button-width: 132px;
+                        button-enabled: !root.busy;
+                        clicked => { root.confirmed(); }
+                    }
+                }
+            }
+        }
+    }
+}

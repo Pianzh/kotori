@@ -48,6 +48,11 @@ export component StdButton inherits Rectangle {
     in property <length> button-width: 100px;
     // 见上面 AccentButton 的说明:这个属性不能叫 `enabled`。
     in property <bool> button-enabled: true;
+    /// 破坏性动作(删除 / 清空 / 抹掉):文字与描边走警示色,别的照旧。
+    ///
+    /// 只染这两处、不动底色:一整片红在深色界面上太吵,而"这一颗要删东西"这件事
+    /// 靠文字与描边就说得清(确认那一步还有弹窗兜着)。
+    in property <bool> danger: false;
     callback clicked();
 
     height: 32px;
@@ -56,7 +61,9 @@ export component StdButton inherits Rectangle {
     opacity: button-enabled ? 1 : 0.45;
     background: ta.pressed ? #ffffff08 : (ta.has-hover ? Tokens.control-hi : Tokens.control);
     border-width: 1px;
-    border-color: ta.pressed ? #ffffff0f : #ffffff17;
+    border-color: root.danger
+        ? (ta.pressed ? #ef9a9a66 : (ta.has-hover ? #ef9a9a59 : #ef9a9a33))
+        : (ta.pressed ? #ffffff0f : #ffffff17);
     transform-scale-x: ta.pressed ? 97% : 100%;
     transform-scale-y: ta.pressed ? 97% : 100%;
     animate background { duration: 100ms; }
@@ -69,7 +76,7 @@ export component StdButton inherits Rectangle {
         Text {
             text: root.label;
             font-size: 14px;
-            color: Tokens.text;
+            color: root.danger ? Tokens.danger : Tokens.text;
             vertical-alignment: center;
         }
     }

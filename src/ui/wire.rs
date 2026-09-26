@@ -242,18 +242,35 @@ pub(super) fn install_callbacks(window: &AppWindow) {
     ask.on_pair_requested(|| dispatch(Message::SyncAskPairRequested));
     ask.on_bind_found(|| dispatch(Message::SyncAskBindFound));
     // 「云端存档」页：刷新读索引、深度扫描读所有卡、点开一款再问一次版本、搜索是本地过滤。
+    // 这一页是**管理云端的工具**：整条可点进详情、详情里每一版也可点、最下面能删整款 ——
+    // 全都不碰本机（本机 ↔ 云端的交互在单游戏设置那页，见下一块）。
     let cloud = window.global::<CloudBoard>();
     cloud.on_refresh(|| dispatch(Message::CloudRefresh));
     cloud.on_scan(|| dispatch(Message::CloudScan));
     cloud.on_search_changed(|text| dispatch(Message::CloudSearch(one_line(&text))));
-    cloud.on_toggle(|key| dispatch(Message::CloudToggle(key.to_string())));
+    cloud.on_open_game(|key| dispatch(Message::CloudOpenGame(key.to_string())));
+    cloud.on_open_version(|name| dispatch(Message::CloudVersionOpened(name.to_string())));
+    cloud.on_delete_versions(|| dispatch(Message::CloudDeleteVersions));
+    cloud.on_delete_identity(|| dispatch(Message::CloudDeleteIdentity));
+    cloud.on_confirmed(|| dispatch(Message::CloudDeleteConfirmed));
+    cloud.on_cancelled(|| dispatch(Message::CloudDeleteCancelled));
     cloud.on_back(|| dispatch(Message::CloudBack));
+    // 再下一层：一个存档的管理页（现在只有删除）。
+    let cloud_version = window.global::<CloudVersionBoard>();
+    cloud_version.on_back(|| dispatch(Message::CloudVersionClosed));
+    cloud_version.on_delete(|| dispatch(Message::CloudVersionDeleteRequested));
+    cloud_version.on_confirmed(|| dispatch(Message::CloudVersionConfirmed));
+    cloud_version.on_cancelled(|| dispatch(Message::CloudVersionCancelled));
     // 单游戏页那一页「这一款的云端存档」：状态在一个全局里（见 `pages/game-versions.slint`）。
     let versions = window.global::<GameVersionsBoard>();
     versions.on_back(|| dispatch(Message::GameVersionsClosed));
-    versions.on_replace(|name| dispatch(Message::GameVersionsReplace(name.to_string())));
-    versions.on_replace_confirmed(|| dispatch(Message::GameVersionsReplaceConfirmed));
-    versions.on_replace_cancelled(|| dispatch(Message::GameVersionsReplaceCancelled));
+    versions.on_replace(|name| dispatch(Message::GameVersionsReplaceVersion(name.to_string())));
+    versions.on_delete(|name| dispatch(Message::GameVersionsDeleteVersion(name.to_string())));
+    versions.on_clear_versions(|| dispatch(Message::GameVersionsClearVersions));
+    versions.on_forget_identity(|| dispatch(Message::GameVersionsForgetIdentity));
+    // 四种动作共用同一个弹窗，确认/取消都不带载荷（要办什么记在状态里）。
+    versions.on_confirmed(|| dispatch(Message::GameVersionsConfirmed));
+    versions.on_cancelled(|| dispatch(Message::GameVersionsCancelled));
     // 那一页里的「更改绑定…」与身份条上那颗是同一件事，走同一条消息。
     versions.on_rebind_requested(|| dispatch(Message::SyncRebindRequested));
     // 身份条**整条可点**：进去看这一款在云端存了哪几版。

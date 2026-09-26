@@ -278,3 +278,50 @@ pub(in crate::ui) async fn sync_restore(
     let value = crate::rpc::call(socket, "sync.restore", Some(params)).await?;
     Ok(describe_sync_outcome(&value["game"]))
 }
+
+/// 删掉云端某一款的**某一版**。
+///
+/// 参数是**云端落点**（与 [`cloud_versions`] 同一把尺子），不是本机 id —— 云端有、本机
+/// 没有的游戏也要能删它的版本。回包里带着"还剩几版"，所以那句话由这里拼好交给界面。
+pub(in crate::ui) async fn sync_delete_version(
+    socket: &Path,
+    cloud_key: String,
+    version: String,
+) -> Result<String, String> {
+    let params = crate::rpc::params([
+        ("key", Value::String(cloud_key)),
+        ("version", Value::String(version)),
+    ]);
+    let value = crate::rpc::call(socket, "sync.delete_version", Some(params)).await?;
+    let left = value.get("left").and_then(Value::as_u64).unwrap_or(0);
+    Ok(format!("已删掉云端那一版，这一款还剩 {left} 版"))
+}
+
+/// 清空云端某一款的**所有存档**（身份留着，下次同步还传到同一条）。
+pub(in crate::ui) async fn sync_clear_versions(
+    socket: &Path,
+    cloud_key: String,
+) -> Result<String, String> {
+    let params = crate::rpc::params([("key", Value::String(cloud_key))]);
+    let value = crate::rpc::call(socket, "sync.delete_versions", Some(params)).await?;
+    let removed = value.get("removed").and_then(Value::as_u64).unwrap_or(0);
+    Ok(format!(
+        "已清空这一款的云端存档（删掉 {removed} 版），身份留着"
+    ))
+}
+
+/// 把某一款从云端**抹掉**：身份连它的全部存档一起（不留孤儿数据）。
+///
+/// 那句话里特意说清"本机还绑着它" —— 这一步只动云端，本机的绑定一个字都没改（用户
+/// 2026-09-25 拍的是"连存档一起删"，没说要顺带解绑）。
+pub(in crate::ui) async fn sync_forget_identity(
+    socket: &Path,
+    cloud_key: String,
+) -> Result<String, String> {
+    let params = crate::rpc::params([("key", Value::String(cloud_key))]);
+    let value = crate::rpc::call(socket, "sync.delete_identity", Some(params)).await?;
+    let removed = value.get("removed").and_then(Value::as_u64).unwrap_or(0);
+    Ok(format!(
+        "已把这一款从云端抹掉（{removed} 版存档连身份一起）；本机还绑着它，下次同步会按原来的身份在云端新建"
+    ))
+}

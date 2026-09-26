@@ -1,7 +1,12 @@
 //! 「云端存档」这一页的消息：读索引、深度扫描、搜索、点开看版本。
 //!
-//! 从 `update/sync.rs` 拆出来：那边的设置与凭据本身就是一整块，而这一块**只读云端**、
+//! 从 `update/sync.rs` 拆出来：那边的设置与凭据本身就是一整块，而这一块**只跟云端打交道**、
 //! 一个字都不改本机配置 —— 语义上就该分开。
+//!
+//! ⚠ 这一页对云端是**能删的**（用户 2026-09-26 定了分工：这里是"管理云端的工具"，平等处理
+//! 云端所有游戏，不关心本机有没有装上它）：清单里点开某一款 → 看它每一版 → 每一版再点进去
+//! 就是一个存档的管理页（现在只有删除）。"本机 ↔ 云端"的交互（上传 / 取回 / 覆盖本机）不在
+//! 这里，在单游戏设置那页（`update/versions.rs`）。
 //!
 //! 两条读路径的代价差得很远，所以分成两颗按钮：
 //!   * 「刷新」读**索引**（一次读，便宜）；
@@ -51,6 +56,8 @@ impl App {
                         self.cloud.msg = Some(cloud_summary(&reply));
                         self.cloud.ok = true;
                         self.cloud.loaded(reply);
+                        // 清单整份换过了：两层详情都可能已经不成立。
+                        self.cloud_version.closed();
                     }
                     Err(e) => {
                         self.cloud.ok = false;
@@ -79,6 +86,7 @@ impl App {
                         let trouble = reply.trouble_label();
                         self.cloud.ok = true;
                         self.cloud.loaded(reply);
+                        self.cloud_version.closed();
                         // 深度扫描还会顺手把指纹唯一命中的绑上（`sync.pairing` 干的），
                         // 所以这句话里要提一句"配对了没有"。
                         let mut message = match self.cloud.matched() {
@@ -105,11 +113,13 @@ impl App {
                 self.cloud.search = text;
                 Task::none()
             }
-            Message::CloudToggle(key) => {
-                // 收起来不用问云端 —— 这个判断在模型里（`CloudState::toggle`），有单测。
-                if !self.cloud.toggle(&key) {
+            Message::CloudOpenGame(key) => {
+                // 值不值得问云端由模型判（重复点同一款不再问），有单测。
+                if !self.cloud.open(&key) {
                     return Task::none();
                 }
+                // 换一款就把再下一层那个"某一个存档"的页面收掉（它属于上一款）。
+                self.cloud_version.closed();
                 let socket = self.daemon_socket.clone();
                 let asked = key.clone();
                 Task::perform(
@@ -129,6 +139,96 @@ impl App {
             }
             Message::CloudBack => {
                 self.cloud.back();
+                self.cloud_version.closed();
+                Task::none()
+            }
+            // ── 这一款详情页底部那两颗"整款"按钮（纯云上的管理，不碰本机） ──
+            Message::CloudDeleteVersions => {
+                self.cloud.delete_requested(Confirmation::ClearVersions);
+                Task::none()
+            }
+            Message::CloudDeleteIdentity => {
+                self.cloud.delete_requested(Confirmation::ForgetIdentity);
+                Task::none()
+            }
+            Message::CloudDeleteCancelled => {
+                self.cloud.cancelled();
+                Task::none()
+            }
+            Message::CloudDeleteConfirmed => {
+                let Some(action) = self.cloud.confirmed() else {
+                    return Task::none();
+                };
+                // 两颗按钮都按**点开的那一款**动手；列表上按不到它们（弹窗只在详情里）。
+                let Some(key) = self.cloud.open.clone() else {
+                    return Task::none();
+                };
+                let socket = self.daemon_socket.clone();
+                match action {
+                    Confirmation::ClearVersions => Task::perform(
+                        async move { sync_clear_versions(&socket, key).await },
+                        Message::CloudDeleted,
+                    ),
+                    Confirmation::ForgetIdentity => Task::perform(
+                        async move { sync_forget_identity(&socket, key).await },
+                        Message::CloudDeleted,
+                    ),
+                    // 别的动作不会从这一页发出来（`delete_requested` 只接受这两个）。
+                    _ => unreachable!("这一页只发得出那两颗\"整款\"删除"),
+                }
+            }
+            Message::CloudDeleted(result) => {
+                self.cloud.deleted(result);
+                Task::none()
+            }
+            // ── 再下一层：一个存档的管理页（现在只有删除） ──
+            Message::CloudVersionOpened(version) => {
+                // 那一版得在手上这份列表里（页面上的每一个条目都来自它）；找不到就当没点。
+                let Some(row) = self
+                    .cloud
+                    .versions
+                    .iter()
+                    .find(|row| row.name == version)
+                    .cloned()
+                else {
+                    return Task::none();
+                };
+                let (Some(game_name), Some(key)) = (
+                    self.cloud.opened().map(|row| row.name.clone()),
+                    self.cloud.open.clone(),
+                ) else {
+                    return Task::none();
+                };
+                self.cloud_version.opened(&game_name, &key, &row);
+                Task::none()
+            }
+            Message::CloudVersionClosed => {
+                self.cloud_version.closed();
+                Task::none()
+            }
+            Message::CloudVersionDeleteRequested => {
+                self.cloud_version.requested();
+                Task::none()
+            }
+            Message::CloudVersionCancelled => {
+                self.cloud_version.cancelled();
+                Task::none()
+            }
+            Message::CloudVersionConfirmed => {
+                let Some((key, version)) = self.cloud_version.confirmed() else {
+                    return Task::none();
+                };
+                let socket = self.daemon_socket.clone();
+                Task::perform(
+                    async move { sync_delete_version(&socket, key, version).await },
+                    Message::CloudVersionDeleted,
+                )
+            }
+            Message::CloudVersionDeleted(result) => {
+                // 成了：那一页自己收掉，结果写在外层那一页上（用户被送回去时看得见）。
+                if let Some((version, summary)) = self.cloud_version.deleted(result) {
+                    self.cloud.forget_version(&version, summary);
+                }
                 Task::none()
             }
             // 委派是按变体名精确列的：漏一个就会走到这里，测试会立刻炸。

@@ -20,11 +20,12 @@ import { ProcessPicker, ProcessPickerState } from "widgets/process-picker.slint"
 import { CloudPickerDialog, CloudPickerState } from "widgets/cloud-picker.slint";
 import { SyncAskDialog, SyncAskState } from "widgets/sync-ask.slint";
 import { CloudPage, CloudBoard } from "pages/cloud.slint";
+import { CloudVersionBoard } from "pages/cloud-version.slint";
 import { GameSyncBoard } from "pages/game-sync.slint";
 import { GameVersionsBoard } from "pages/game-versions.slint";
 import { SyncBoard } from "state/sync-board.slint";
 // 再导出一次是**给 Rust 看的**:只有主文件导出过的全局才生成 `window.global::<…>()`。
-export { ProcessPickerState, SyncAskState, CloudBoard, AddMatchBoard, CloudPickerState, GameSyncBoard, GameVersionsBoard, SyncBoard }
+export { ProcessPickerState, SyncAskState, CloudBoard, CloudVersionBoard, AddMatchBoard, CloudPickerState, GameSyncBoard, GameVersionsBoard, SyncBoard }
 
 export component AppWindow inherits Window {
     title: "Kotori";
@@ -374,7 +375,9 @@ export component AppWindow inherits Window {
                             create-requested => { root.create-requested(); }
                         }
 
-                        if root.tab == 2 : CloudPage { }
+                        if root.tab == 2 : CloudPage {
+                            width: 100%; height: 100%;
+                        }
 
                         if root.tab == 3 : SyncPage {
                             width: 100%; height: 100%;

@@ -7,6 +7,8 @@
 //! 不去遍历每一张身份卡。索引还没建过时（`indexed == false`）页面要提示去点一次「深度
 //! 扫描云端」——那才是读所有卡的那条慢路。
 
+use super::confirm::Confirmation;
+
 /// 云端的一款游戏（`sync.cloud_list` 的一行）。
 ///
 /// ⚠ `cloud_key` 是**云端落点**（rclone 是目录名，kopia 是 `game:` 标签值），不是本机
@@ -193,6 +195,12 @@ pub struct CloudState {
     /// 点开那一款的版本，最旧在前。
     pub versions: Vec<CloudVersionRow>,
     pub versions_loading: bool,
+    /// 正等着二次确认的那件事（详情页底部那两颗"整款"按钮）。`None` = 没有弹窗。
+    pending: Option<Confirmation>,
+    /// 已经在路上的那件事：结果回来时要说对是哪一件事失败。
+    inflight: Option<Confirmation>,
+    /// 删除在路上（挡住连点第二下）。
+    pub busy: bool,
 }
 
 impl Default for CloudState {
@@ -210,6 +218,9 @@ impl Default for CloudState {
             open: None,
             versions: Vec::new(),
             versions_loading: false,
+            pending: None,
+            inflight: None,
+            busy: false,
         }
     }
 }
@@ -237,19 +248,24 @@ impl CloudState {
         self.rows.iter().find(|row| row.cloud_key == key)
     }
 
-    /// 点一下某一款：开着的那一款收起来，别的换成它。
+    /// 点开某一款：记下落点，并标成"正在读它的版本"。
     ///
-    /// 返回 `true` 表示**要去云端问一次版本**——收起来不用问，这是这个函数唯一的判断。
-    pub(in crate::ui) fn toggle(&mut self, key: &str) -> bool {
+    /// 返回 `true` = 要去云端问一次版本。**重复点同一款不会再问**（回包乱序的保护见
+    /// `versions_loaded`）。
+    ///
+    /// 这里以前是"点一下展开、再点一下收起"（`toggle`）；用户 2026-09-26 定的是**进去是一整
+    /// 页**，回来走「返回」，所以"收起"那一支没有存在的余地了 —— 列表上没有"开着的那一款"
+    /// 可点。
+    pub(in crate::ui) fn open(&mut self, key: &str) -> bool {
         if self.open.as_deref() == Some(key) {
-            self.open = None;
-            self.versions.clear();
-            self.versions_loading = false;
             return false;
         }
         self.open = Some(key.to_string());
         self.versions.clear();
         self.versions_loading = true;
+        // 换一款就把上一款的弹窗/忙收掉（它属于上一款）。
+        self.pending = None;
+        self.busy = false;
         true
     }
 
@@ -258,6 +274,95 @@ impl CloudState {
         self.open = None;
         self.versions.clear();
         self.versions_loading = false;
+        self.pending = None;
+        self.busy = false;
+    }
+
+    /// 点开的那一款，**可变**（删完之后要把表里那一行的数字改对）。
+    fn open_row_mut(&mut self) -> Option<&mut CloudGameRow> {
+        let key = self.open.clone()?;
+        self.rows.iter_mut().find(|row| row.cloud_key == key)
+    }
+
+    /// 点了详情页底部那两颗"整款"按钮：只记下要问哪一件事，真正的动作等确认。
+    pub(in crate::ui) fn delete_requested(&mut self, action: Confirmation) {
+        self.pending = Some(action);
+        self.msg = None;
+        self.ok = true;
+    }
+
+    pub(in crate::ui) fn cancelled(&mut self) {
+        self.pending = None;
+    }
+
+    /// 确认了：把这件事交出去，界面进入忙。
+    pub(in crate::ui) fn confirmed(&mut self) -> Option<Confirmation> {
+        let action = self.pending.take()?;
+        self.busy = true;
+        self.ok = true;
+        self.msg = Some(format!("正在{}…", action.verb()));
+        self.inflight = Some(action.clone());
+        Some(action)
+    }
+
+    /// 删完了（成或不成）：顺手把本地这一份**改对**，不等下一次刷新。
+    pub(in crate::ui) fn deleted(&mut self, result: Result<String, String>) {
+        let action = self.inflight.take();
+        self.busy = false;
+        match result {
+            Ok(summary) => {
+                self.ok = true;
+                self.msg = Some(summary);
+                self.after_delete(action.as_ref());
+            }
+            Err(error) => {
+                self.ok = false;
+                let verb = action.as_ref().map_or("删除", Confirmation::verb);
+                self.msg = Some(format!("{verb}失败: {error}"));
+            }
+        }
+    }
+
+    /// 删成之后本地怎么改：清空 → 详情里那几版空掉、表里那一款的版数改成 0；抹掉词条 →
+    /// 这一款在云端整个没了，退回列表并把它从表里拿掉。
+    ///
+    /// 不等下一次刷新：这一页就摆在用户眼前，删完还挂着旧数字是最刺眼的一种错。
+    fn after_delete(&mut self, action: Option<&Confirmation>) {
+        match action {
+            Some(Confirmation::ClearVersions) => {
+                self.versions.clear();
+                self.versions_loading = false;
+                if let Some(row) = self.open_row_mut() {
+                    row.versions = 0;
+                }
+            }
+            Some(Confirmation::ForgetIdentity) => {
+                let gone = self.open.take();
+                self.versions.clear();
+                self.versions_loading = false;
+                if let Some(key) = gone {
+                    self.rows.retain(|row| row.cloud_key != key);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// 在**再下一层**（一个存档的管理页）删掉了某一版：那一行从详情列表里拿掉、表里那一款
+    /// 的版数减一，并在这里说一句结果 —— 用户被送回这一页时看得见。
+    pub(in crate::ui) fn forget_version(&mut self, version: &str, summary: String) {
+        self.versions.retain(|row| row.name != version);
+        self.versions_loading = false;
+        if let Some(row) = self.open_row_mut() {
+            row.versions = row.versions.saturating_sub(1);
+        }
+        self.ok = true;
+        self.msg = Some(summary);
+    }
+
+    /// 弹窗现在要问的那件事。
+    pub(in crate::ui) fn pending(&self) -> Option<&Confirmation> {
+        self.pending.as_ref()
     }
 
     /// 某一款的版本回来了。
@@ -295,170 +400,14 @@ impl CloudState {
         self.open = None;
         self.versions.clear();
         self.versions_loading = false;
+        self.pending = None;
+        self.busy = false;
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn row(key: &str, name: &str, local: &str) -> CloudGameRow {
-        CloudGameRow {
-            cloud_key: key.to_string(),
-            cloud_id: format!("id-{key}"),
-            name: name.to_string(),
-            machines: 2,
-            versions: 3,
-            latest: Some("20260911T101500Z".to_string()),
-            size: 4096,
-            exe_paths: vec![format!("/games/{key}/game.exe")],
-            local_id: local.to_string(),
-            local_name: if local.is_empty() {
-                String::new()
-            } else {
-                "本机那一款".to_string()
-            },
-            rejected: false,
-        }
-    }
-
-    fn board() -> CloudState {
-        CloudState {
-            rows: vec![
-                row("demo", "示例游戏", "demo"),
-                row("other", "别的一款", ""),
-            ],
-            indexed: true,
-            ..CloudState::default()
-        }
-    }
-
-    /// 「这份清单是什么时候拿到的」是用户 2026-09-23 要的那一句：缓存/刚读到两种说法，
-    /// 时间按本机时区印（长度固定，与跑测试的机器无关）；时间不知道（老回包）时就不印空时间。
-    #[test]
-    fn the_reply_says_when_this_list_was_fetched() {
-        assert!(
-            source_label(true, "20260923T101500Z").starts_with("本机缓存 · "),
-            "{}",
-            source_label(true, "20260923T101500Z")
-        );
-        assert!(
-            source_label(false, "20260923T101500Z").starts_with("刚从云端读的 · "),
-            "{}",
-            source_label(false, "20260923T101500Z")
-        );
-        assert_eq!(source_label(true, ""), "", "不知道时间就别说时间");
-        assert_eq!(trouble_label(None), None, "上一次是好的就别说话");
-        assert_eq!(
-            trouble_label(Some("连不上桶")).as_deref(),
-            Some("上次刷新失败: 连不上桶")
-        );
-    }
-
-    #[test]
-    fn a_new_board_is_quiet_and_not_red() {
-        let fresh = CloudState::default();
-        assert!(fresh.msg.is_none() && fresh.ok);
-        assert!(!fresh.indexed && !fresh.loading && !fresh.scanning);
-        assert!(fresh.visible().is_empty());
-    }
-
-    #[test]
-    fn each_row_says_how_many_versions_and_where_the_machine_stands() {
-        let board = board();
-        assert_eq!(board.rows[0].versions_label(), "3 版");
-        assert_eq!(board.rows[1].local_label(), "本机没有它");
-        assert_eq!(board.rows[0].local_label(), "本机《本机那一款》");
-        // 时间按本机时区印出来（长度固定，与跑测试的机器无关）。
-        assert_eq!(
-            board.rows[0].latest_label().len(),
-            "2026-09-11 18:15 · 4.0 KiB".len()
-        );
-
-        let mut rejected = board.rows[0].clone();
-        rejected.rejected = true;
-        assert_eq!(rejected.local_label(), "你说过不是这一款");
-        // 一版都没有时那句"最近一版"是空的，不是"不知道"。
-        let mut empty = board.rows[0].clone();
-        empty.versions = 0;
-        empty.latest = None;
-        assert_eq!(empty.versions_label(), "还没有存档");
-        assert_eq!(empty.latest_label(), "");
-    }
-
-    #[test]
-    fn sizes_are_written_the_way_people_read_them() {
-        assert_eq!(human_size(0), "0 B");
-        assert_eq!(human_size(512), "512 B");
-        assert_eq!(human_size(4096), "4.0 KiB");
-        assert_eq!(human_size(1024 * 1024), "1.0 MiB");
-        assert_eq!(human_size(3 * 1024 * 1024 * 1024), "3.0 GiB");
-        assert_eq!(CloudVersionRow::default().size_label(), "大小不知道");
-    }
-
-    #[test]
-    fn search_matches_the_name_the_key_and_the_exe_path() {
-        let mut board = board();
-        // 名字、落点、exe 路径都能搜到；大小写不敏感；空串等于不过滤。
-        // （两行的 exe 路径里都有 `game.exe`，所以那条要用带落点的那一段来区分。）
-        for needle in ["示例", "demo", "DEMO", "demo/game.exe"] {
-            board.search = needle.to_string();
-            assert_eq!(board.visible().len(), 1, "{needle}");
-        }
-        board.search = "game.exe".to_string();
-        assert_eq!(board.visible().len(), 2, "两行的 exe 都叫 game.exe");
-        board.search = "  ".to_string();
-        assert_eq!(board.visible().len(), 2, "空串不过滤");
-        board.search = "zzz".to_string();
-        assert!(board.visible().is_empty());
-    }
-
-    #[test]
-    fn a_late_reply_never_lands_under_the_wrong_game() {
-        let mut board = board();
-        board.toggle("demo");
-        board.toggle("other");
-        // 甲的回包后到：必须丢掉，而不是铺到乙底下。
-        board.versions_loaded("demo", vec![CloudVersionRow::default()]);
-        assert!(board.versions.is_empty(), "{:?}", board.versions);
-        assert!(board.versions_loading, "还在等乙的版本");
-
-        board.versions_loaded(
-            "other",
-            vec![CloudVersionRow {
-                name: "20260910T090000Z".into(),
-                size: 128,
-                time: String::new(),
-            }],
-        );
-        assert_eq!(board.versions.len(), 1);
-        assert!(!board.versions_loading);
-        assert_eq!(board.versions[0].size_label(), "128 B");
-
-        // 报错走同一条判据：别人的错不该挂在这一款上。
-        board.versions_failed("demo", "列的途中断了".into());
-        assert!(board.ok && board.msg.is_none());
-        board.versions_failed("other", "列的途中断了".into());
-        assert!(!board.ok && board.versions.is_empty());
-
-        // 「返回」回到列表：开着的那一款与它的版本一起清掉。
-        board.back();
-        assert_eq!(board.open, None);
-        assert!(board.opened().is_none());
-    }
-
-    #[test]
-    fn refreshing_closes_whatever_was_open() {
-        let mut board = board();
-        board.toggle("demo");
-        board.loaded(CloudListReply {
-            indexed: true,
-            rows: vec![row("demo", "示例游戏", "demo")],
-            ..CloudListReply::default()
-        });
-        assert!(board.indexed && !board.loading);
-        assert_eq!(board.open, None, "刚刷新过，那一款可能已经不在了");
-        assert!(board.versions.is_empty());
-        assert!(board.opened().is_none());
-    }
-}
+// ⚠ 这是**文件模块**(`model/cloud.rs` 这种),它的子模块默认要放在同名目录下
+// (`cloud/`);测试就住在同一个目录里,用 `#[path]` 指过去 —— 比为了一个测试文件
+// 专门建目录清楚(照 `sync/cloud.rs`)。
+#[path = "cloud_tests.rs"]
+mod cloud_tests;

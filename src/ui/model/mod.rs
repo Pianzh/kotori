@@ -3,7 +3,9 @@
 //!
 //! 按「这块状态归谁」拆成子模块:本机环境(`environment`)、游戏与它的草稿
 //! (`game`)、添加页的云端匹配(`add`)、云同步(`sync`)、云端存档的浏览(`cloud`)、
-//! 会话与连接参数(`session`)、单游戏页那一页云端版本(`versions`)。每个子模块顶部写清它负责什么、为什么和邻居分开。
+//! 会话与连接参数(`session`)、单游戏页那一页云端版本(`versions`)、云端一个存档的管理页
+//! (`cloud_version`)、破坏性动作的弹窗措辞(`confirm`)。每个子模块顶部写清它负责什么、
+//! 为什么和邻居分开。
 //!
 //! 本文件只是门面:本来 `pub` 的六个类型在这里重新 `pub use`,其余按原来的
 //! `pub(super)` 可见性重导出 —— `crate::ui::model::X` 这些路径照旧可用,调用方
@@ -13,6 +15,8 @@ mod add;
 mod cloud;
 mod cloud_label;
 mod cloud_pick;
+mod cloud_version;
+mod confirm;
 mod environment;
 mod game;
 mod picker;
@@ -28,8 +32,11 @@ pub use sync::{SyncGameRow, SyncStatus};
 
 pub(super) use add::{AddMatch, MATCH_DEBOUNCE, MatchPhase};
 pub(super) use cloud::{CloudGameRow, CloudListReply, CloudState, CloudVersionRow};
+pub(super) use cloud_version::CloudVersionState;
+// `Confirmation` 是三个页面共用的弹窗措辞；它只活在 `crate::ui` 里。
 pub(super) use cloud_label::{identity_label, identity_summary};
 pub(super) use cloud_pick::{CloudPick, CloudPickPurpose};
+pub(in crate::ui) use confirm::Confirmation;
 pub(super) use environment::{EnvCheck, Environment};
 pub(super) use game::{AUTOSAVE_DEBOUNCE, Draft, MountRef, SAVE_PATH_KINDS, SaveAttempt};
 // `SaveScope` 是 `Message` 的载荷之一（`Message` 自己是 `pub(crate)`），所以它得跟着

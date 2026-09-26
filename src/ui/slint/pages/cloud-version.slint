@@ -1,0 +1,154 @@
+// 「一个存档」的管理页：云端存档页里点开某一款 → 看它每一版 → 再点某一版，就是这里。
+//
+// 用户 2026-09-26 定的形态：这一页以后集成**存档管理**（下载 / 备注 / 保留策略之类），
+// **现在只有删除**。而且它只碰云端 —— "本机 ↔ 云端"的动作（覆盖本机、上传）归单游戏设置那
+// 页的云存档，不在这儿（那一页的说明见 `game-versions.slint`）。
+//
+// 与「这一款的云端存档」那页同一个形状：整页盖在云端存档页上面（`CloudVersionBoard.open`），
+// 关掉就回到那一款的版本列表，左侧导航一动不动。文案里那句话由 Rust 拼（`model/confirm.rs`），
+// 所以自己只画结构。
+
+import { ScrollView } from "std-widgets.slint";
+import { Tokens } from "../theme.slint";
+import { CardRow, Group } from "../widgets/card.slint";
+import { StdButton } from "../widgets/buttons.slint";
+import { ConfirmDialog } from "../widgets/confirm-dialog.slint";
+
+export global CloudVersionBoard {
+    in-out property <bool> open: false;
+    /// 这一款叫什么（标题用）。
+    in-out property <string> game-name: "";
+    /// 这一版在桶里的原名字（删就按它认人）。
+    in-out property <string> version: "";
+    /// 给人看的时间与大小。
+    in-out property <string> label: "";
+    in-out property <string> size-label: "";
+    /// 一句话状态（删成没成 / 没删成的原因）。
+    in-out property <string> message: "";
+    in-out property <bool> ok: true;
+    in-out property <bool> busy: false;
+    // 二次确认那几行字（全在 Rust 里按当前动作拼好；见 `model/confirm.rs`）。
+    in-out property <bool> confirm-open: false;
+    in-out property <string> confirm-title: "";
+    in-out property <string> confirm-detail: "";
+    in-out property <string> confirm-body: "";
+    in-out property <string> confirm-label: "确定";
+    in-out property <bool> confirm-danger: true;
+
+    callback back();
+    /// 「删除这一版」：先记下，弹窗由 `confirm-*` 驱动。
+    callback delete();
+    callback confirmed();
+    callback cancelled();
+}
+
+// 两个名字只为**测试**取：`ElementHandle` 只按类型名查，而这一页上下还有别的 `Group`
+// （照 `game-sync.slint` 的 `IdentityRow`）。它们也是"这一页不许被撑开"那条断言的量尺。
+component InfoGroup inherits Group { }
+component ActionGroup inherits Group { }
+
+export component CloudVersionPage inherits Rectangle {
+    width: 100%;
+    height: 100%;
+    // 不透明：它盖在云端存档页上面，底色透明就会看见下面的内容。
+    background: Tokens.base;
+
+    ScrollView {
+        // 见 `games.slint` 里的长注释：fluent 默认关掉拖拽滚动，没有滚轮的机器要靠这一行。
+        mouse-drag-pan-enabled: true;
+
+        VerticalLayout {
+            padding-left: 28px;
+            padding-right: 28px;
+            padding-top: 12px;
+            padding-bottom: 32px;
+            spacing: 0px;
+
+            // ── 头 ────────────────────────────────────────────────────────
+            HorizontalLayout {
+                spacing: 12px;
+                padding-bottom: 18px;
+                StdButton {
+                    label: "← 返回";
+                    button-width: 84px;
+                    clicked => { CloudVersionBoard.back(); }
+                }
+                Text {
+                    text: CloudVersionBoard.game-name + " · 存档管理";
+                    font-size: 18px;
+                    font-weight: 600;
+                    color: Tokens.text;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                    vertical-alignment: center;
+                }
+            }
+
+            // ── 这一版是什么 ───────────────────────────────────────────────
+            InfoGroup {
+                CardRow {
+                    title: CloudVersionBoard.label;
+                    description: "原版本名 " + CloudVersionBoard.version + " · " + CloudVersionBoard.size-label + "（桶里看到的就是这个名字，删也按它认人）";
+                }
+            }
+
+            // ── 这一页现在能做什么 ─────────────────────────────────────────
+            VerticalLayout {
+                padding-top: 18px;
+                spacing: 8px;
+                Text {
+                    text: "这一页以后是这一版存档的管理页（取回、备注、保留策略…），现在只有删除。它只管云端：想把云端某一版弄回本机，去「游戏库 → 单游戏设置 → 云存档」里做。";
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                    wrap: word-wrap;
+                }
+            }
+
+            VerticalLayout {
+                padding-top: 18px;
+                ActionGroup {
+                    CardRow {
+                        title: "删除这一版";
+                        description: "把这一版从云端删掉（会先问你一次）。本机那份存档不受影响。";
+                        StdButton {
+                            label: "删除这一版";
+                            button-width: 108px;
+                            danger: true;
+                            button-enabled: !CloudVersionBoard.busy;
+                            clicked => { CloudVersionBoard.delete(); }
+                        }
+                    }
+                }
+            }
+
+            // ── 一句话状态 ────────────────────────────────────────────────
+            if CloudVersionBoard.message != "" : VerticalLayout {
+                padding-top: 10px;
+                Text {
+                    text: CloudVersionBoard.message;
+                    font-size: 12px;
+                    color: CloudVersionBoard.ok ? Tokens.ok : Tokens.danger;
+                    wrap: word-wrap;
+                }
+            }
+
+            // ⚠ 吃掉剩余的高度：没有它，`ScrollView` 里的多余空间会被摊到别的元素之间。
+            Rectangle { vertical-stretch: 1; background: #00000000; }
+        }
+    }
+
+    // ── 二次确认 ──────────────────────────────────────────────────────────
+    ConfirmDialog {
+        width: 100%;
+        height: 100%;
+        open: CloudVersionBoard.confirm-open;
+        title: CloudVersionBoard.confirm-title;
+        detail: CloudVersionBoard.confirm-detail;
+        body: CloudVersionBoard.confirm-body;
+        confirm-label: CloudVersionBoard.confirm-label;
+        danger: CloudVersionBoard.confirm-danger;
+        busy: CloudVersionBoard.busy;
+        confirmed => { CloudVersionBoard.confirmed(); }
+        cancelled => { CloudVersionBoard.cancelled(); }
+    }
+}

@@ -247,22 +247,44 @@ pub enum Message {
     CloudScanned(Result<CloudListReply, String>),
     /// 搜索框变了（本地过滤，不打网络）。
     CloudSearch(String),
-    /// 点开 / 收起某一款：参数是**云端落点**。
-    CloudToggle(String),
+    /// 点开某一款（整条可点）：参数是**云端落点**。
+    CloudOpenGame(String),
     /// 返回列表。
     CloudBack,
     /// `(云端落点, 这一款的版本明细)`。
     CloudVersionsLoaded(String, Result<Vec<CloudVersionRow>, String>),
+    /// 详情页底部那两颗"整款"按钮（纯云上的管理，不碰本机）：清空这一款的云端存档、
+    /// 把这一款从云端抹掉（词条连存档）。两段式：先点、再确认。
+    CloudDeleteVersions,
+    CloudDeleteIdentity,
+    CloudDeleteConfirmed,
+    CloudDeleteCancelled,
+    CloudDeleted(Result<String, String>),
+    /// 云端存档页再下一层：**一个存档**的管理页（参数是这一版的名字）。
+    CloudVersionOpened(String),
+    CloudVersionClosed,
+    CloudVersionDeleteRequested,
+    CloudVersionConfirmed,
+    CloudVersionCancelled,
+    /// 删完了；成了就是 `Ok(一句话)`（那一版已经没了）。
+    CloudVersionDeleted(Result<String, String>),
     /// 单游戏页那一页「这一款的云端存档」（`update::update_versions`）：点了身份那一条
     /// （整条可点）→ 开页，并按当前这一款去列它那条身份在云端的版本。
     GameVersionsOpened,
     GameVersionsClosed,
     GameVersionsLoaded(Result<Vec<CloudVersionRow>, String>),
     /// 某一行的「替换」：载荷是**版本名**，真正的动作等二次确认。
-    GameVersionsReplace(String),
-    GameVersionsReplaceCancelled,
-    GameVersionsReplaceConfirmed,
+    GameVersionsReplaceVersion(String),
+    /// 某一行的「删除」：同上，删的是云端这一版。
+    GameVersionsDeleteVersion(String),
+    /// 页尾那两颗"整款"按钮：清空这一款的云端存档 / 把这一款从云端抹掉（词条连存档）。
+    GameVersionsClearVersions,
+    GameVersionsForgetIdentity,
+    /// 弹窗那两颗。四种动作共用同一个弹窗，所以确认/取消都不带载荷 —— 要办什么记在状态里。
+    GameVersionsConfirmed,
+    GameVersionsCancelled,
     GameVersionsReplaced(Result<String, String>),
+    GameVersionsDeleted(Result<String, String>),
     SyncMasterPasswordChanged(String),
     SyncUnlock,
     SyncUnlocked(Result<(), String>),
