@@ -36,6 +36,10 @@ export global SyncAskState {
     callback pair-requested();
 }
 
+// 这两个名字只为**测试**量得到（同 `confirm-dialog.slint` 的 `DialogCard` / `DialogFrame`）。
+component AskCard inherits Rectangle { }
+component AskFrame inherits Rectangle { }
+
 export component SyncAskDialog inherits Rectangle {
     width: 100%;
     height: 100%;
@@ -51,12 +55,12 @@ export component SyncAskDialog inherits Rectangle {
         }
     }
 
-    card := Rectangle {
+    card := AskCard {
         width: 480px;
         // 高度**跟着内容走**：写死高度时，内容一少（比如这次没有"疑似找到"那块卡片），
         // `VerticalLayout` 会把余量摊到各项之间，看着就像散架了（用户 2026-09-24 报的排版
         // 问题）。上限照旧别顶出窗口。
-        height: min(body.preferred-height + 48px, root.height - 40px);
+        height: min(frame.height + 48px, root.height - 40px);
         x: (root.width - self.width) / 2;
         y: (root.height - self.height) / 2;
         border-radius: Tokens.radius-card;
@@ -64,84 +68,93 @@ export component SyncAskDialog inherits Rectangle {
         border-width: 1px;
         border-color: Tokens.flyout-stroke;
 
-        body := VerticalLayout {
+        // ⚠ 与 `confirm-dialog.slint` 同一个形状与同一个坑：普通 `Rectangle` 里的布局默认
+        //    **填满父节点**，而卡片的高是按"内容 + 上下各 24px"算的 —— 不自己声明高度，那
+        //    多出来的 24px 就被 `alignment: stretch` 摊到各项之间（用户 2026-09-24 说过的
+        //    "散架"，以及最后一行被顶出卡片）。
+        frame := AskFrame {
             x: 24px;
             y: 24px;
             width: parent.width - 48px;
-            spacing: 10px;
+            height: layout.preferred-height;
+            background: #00000000;
 
-            Text {
-                text: "这一款在云端对不上号";
-                font-size: 16px;
-                font-weight: 600;
-                color: Tokens.text;
-            }
-            Text {
-                text: SyncAskState.game-name;
-                font-size: 13px;
-                color: Tokens.text-2;
-            }
+            layout := VerticalLayout {
+                spacing: 10px;
 
-            // 疑似找到的那一条：名字与摘要由 `identity_label` 生成（与单游戏页同一个函数）。
-            if SyncAskState.cloud-found : Rectangle {
-                background: Tokens.card;
-                border-color: Tokens.stroke;
-                border-width: 1px;
-                border-radius: Tokens.radius-card;
-                height: found.preferred-height;
-                found := VerticalLayout {
-                    padding: 10px;
-                    spacing: 4px;
-                    Text {
-                        text: SyncAskState.cloud-name;
-                        font-size: 13px;
-                        color: Tokens.text;
-                        overflow: elide;
-                    }
-                    Text {
-                        text: SyncAskState.cloud-summary;
-                        font-size: 11px;
-                        color: Tokens.text-3;
-                        wrap: word-wrap;
+                Text {
+                    text: "这一款在云端对不上号";
+                    font-size: 16px;
+                    font-weight: 600;
+                    color: Tokens.text;
+                }
+                Text {
+                    text: SyncAskState.game-name;
+                    font-size: 13px;
+                    color: Tokens.text-2;
+                }
+
+                // 疑似找到的那一条：名字与摘要由 `identity_label` 生成（与单游戏页同一个函数）。
+                if SyncAskState.cloud-found : Rectangle {
+                    background: Tokens.card;
+                    border-color: Tokens.stroke;
+                    border-width: 1px;
+                    border-radius: Tokens.radius-card;
+                    height: found.preferred-height;
+                    found := VerticalLayout {
+                        padding: 10px;
+                        spacing: 4px;
+                        Text {
+                            text: SyncAskState.cloud-name;
+                            font-size: 13px;
+                            color: Tokens.text;
+                            overflow: elide;
+                        }
+                        Text {
+                            text: SyncAskState.cloud-summary;
+                            font-size: 11px;
+                            color: Tokens.text-3;
+                            wrap: word-wrap;
+                        }
                     }
                 }
-            }
 
-            Text {
-                text: SyncAskState.message;
-                font-size: 12px;
-                color: Tokens.text-3;
-                wrap: word-wrap;
-            }
+                Text {
+                    text: SyncAskState.message;
+                    font-size: 12px;
+                    color: Tokens.text-3;
+                    wrap: word-wrap;
+                }
 
-            // "疑似找到"时第一颗是**确定**的动作：就绑这一条 —— 没有模糊的"没问题"
-            // （用户 2026-09-24："不允许没问题出现，我们要么处理好存档问题，要么就直接
-            // 关掉存档"）。
-            if SyncAskState.cloud-found : AccentButton {
-                label: "就绑这一条";
-                button-width: parent.width;
-                clicked => { SyncAskState.bind-found(); }
-            }
-            StdButton {
-                label: "自己挑一条绑上…";
-                button-width: parent.width;
-                clicked => { SyncAskState.pair_requested(); }
-            }
-            StdButton {
-                label: "给这一款新建一条";
-                button-width: parent.width;
-                clicked => { SyncAskState.answered("pair"); }
-            }
-            StdButton {
-                label: "暂时关掉云同步";
-                button-width: parent.width;
-                clicked => { SyncAskState.answered("off"); }
-            }
-            Text {
-                text: "选哪一条都会开始游戏。关掉之后想再打开，去这一款的设置页。";
-                font-size: 11px;
-                color: Tokens.text-3;
-                wrap: word-wrap;
+                // "疑似找到"时第一颗是**确定**的动作：就绑这一条 —— 没有模糊的"没问题"
+                // （用户 2026-09-24："不允许没问题出现，我们要么处理好存档问题，要么就直接
+                // 关掉存档"）。
+                if SyncAskState.cloud-found : AccentButton {
+                    label: "就绑这一条";
+                    button-width: parent.width;
+                    clicked => { SyncAskState.bind-found(); }
+                }
+                StdButton {
+                    label: "自己挑一条绑上…";
+                    button-width: parent.width;
+                    clicked => { SyncAskState.pair_requested(); }
+                }
+                StdButton {
+                    label: "给这一款新建一条";
+                    button-width: parent.width;
+                    clicked => { SyncAskState.answered("pair"); }
+                }
+                StdButton {
+                    label: "暂时关掉云同步";
+                    button-width: parent.width;
+                    clicked => { SyncAskState.answered("off"); }
+                }
+                Text {
+                    text: "选哪一条都会开始游戏。关掉之后想再打开，去这一款的设置页。";
+                    font-size: 11px;
+                    color: Tokens.text-3;
+                    wrap: word-wrap;
+                }
             }
         }
     }

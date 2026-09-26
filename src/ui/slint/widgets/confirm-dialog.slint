@@ -13,6 +13,11 @@
 import { Tokens } from "../theme.slint";
 import { AccentButton, StdButton } from "buttons.slint";
 
+// 这两个名字只为**测试**量得到：`ElementHandle` 只按类型名查，而这一层上有的是 `Rectangle`
+// —— 而"卡片得装得下自己那块内容"这条只能靠量（见 `render/window_test` 里那条断言）。
+component DialogCard inherits Rectangle { }
+component DialogFrame inherits Rectangle { }
+
 export component ConfirmDialog inherits Rectangle {
     in property <bool> open: false;
     in property <string> title: "";
@@ -43,10 +48,10 @@ export component ConfirmDialog inherits Rectangle {
             }
         }
 
-        card := Rectangle {
+        card := DialogCard {
             width: 460px;
             // 高度跟着内容走（写死高度时内容一少，布局会把余量摊到各项之间，像散架）。
-            height: min(inner.preferred-height + 48px, root.height - 40px);
+            height: min(frame.height + 48px, root.height - 40px);
             x: (root.width - self.width) / 2;
             y: (root.height - self.height) / 2;
             border-radius: Tokens.radius-card;
@@ -54,51 +59,62 @@ export component ConfirmDialog inherits Rectangle {
             border-width: 1px;
             border-color: Tokens.flyout-stroke;
 
-            inner := VerticalLayout {
+            // ⚠ 内容那一块**必须自己声明高度**（`height: layout.preferred-height`，与
+            //    `RevealItem` 同一个形状）：普通 `Rectangle` 里的布局默认**填满父节点**，而
+            //    卡片的高是按"内容 + 上下各 24px"算出来的 —— 两边差着那 24px，默认的
+            //    `alignment: stretch` 就把它摊到各项之间、**最后一行（按钮）被顶到卡片外面**
+            //    去（用户 2026-09-26 的截图：所有删除/替换弹窗的按钮都悬在卡片下沿以下）。
+            //    `window_test/cloud.rs` 里有一条断言钉着这件事（卡片底 vs 内容底）。
+            frame := DialogFrame {
                 x: 24px;
                 y: 24px;
                 width: parent.width - 48px;
-                spacing: 10px;
+                height: layout.preferred-height;
+                background: #00000000;
 
-                Text {
-                    text: root.title;
-                    font-size: 16px;
-                    font-weight: 600;
-                    color: Tokens.text;
-                }
-                if root.detail != "" : Text {
-                    text: root.detail;
-                    font-size: 12px;
-                    color: Tokens.text-2;
-                    wrap: word-wrap;
-                }
-                Text {
-                    text: root.body;
-                    font-size: 12px;
-                    color: Tokens.text-3;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    alignment: end;
-                    StdButton {
-                        label: "取消";
-                        button-width: 76px;
-                        clicked => { root.cancelled(); }
+                layout := VerticalLayout {
+                    spacing: 10px;
+
+                    Text {
+                        text: root.title;
+                        font-size: 16px;
+                        font-weight: 600;
+                        color: Tokens.text;
                     }
-                    // 删除那三件事用警示色那颗（同一种形状，只是文字与描边变红）；替换用强调色。
-                    if root.danger : StdButton {
-                        label: root.confirm-label;
-                        button-width: 132px;
-                        danger: true;
-                        button-enabled: !root.busy;
-                        clicked => { root.confirmed(); }
+                    if root.detail != "" : Text {
+                        text: root.detail;
+                        font-size: 12px;
+                        color: Tokens.text-2;
+                        wrap: word-wrap;
                     }
-                    if !root.danger : AccentButton {
-                        label: root.confirm-label;
-                        button-width: 132px;
-                        button-enabled: !root.busy;
-                        clicked => { root.confirmed(); }
+                    Text {
+                        text: root.body;
+                        font-size: 12px;
+                        color: Tokens.text-3;
+                        wrap: word-wrap;
+                    }
+                    HorizontalLayout {
+                        spacing: 8px;
+                        alignment: end;
+                        StdButton {
+                            label: "取消";
+                            button-width: 76px;
+                            clicked => { root.cancelled(); }
+                        }
+                        // 删除那三件事用警示色那颗（同一种形状，只是文字与描边变红）；替换用强调色。
+                        if root.danger : StdButton {
+                            label: root.confirm-label;
+                            button-width: 132px;
+                            danger: true;
+                            button-enabled: !root.busy;
+                            clicked => { root.confirmed(); }
+                        }
+                        if !root.danger : AccentButton {
+                            label: root.confirm-label;
+                            button-width: 132px;
+                            button-enabled: !root.busy;
+                            clicked => { root.confirmed(); }
+                        }
                     }
                 }
             }

@@ -238,3 +238,80 @@ fn the_archive_management_page_renders_and_deletes_through_the_shared_dialog() {
         ui.window.global::<CloudBoard>().get_message()
     );
 }
+
+/// 卡片底边 / 内容底边 / 卡片高。`card` 是卡片那一层，`frame` 是内容那一块。
+///
+/// ⚠ 量的是"内容那一块"而不是"里面最后一颗按钮"：内容块与卡片之间差着 `y: 24px` 的内缩，
+/// 而"按钮看着在里面"不代表最后那个元素也在里面（启动前那一问最后一行是一句说明文字）。
+fn card_and_content(ui: &Ui, card: &str, frame: &str) -> (f32, f32, f32) {
+    let find = |name: &str| {
+        i_slint_backend_testing::ElementHandle::find_by_element_type_name(&ui.window, name)
+            .next()
+            .unwrap_or_else(|| panic!("这一页上找不到 {name}"))
+    };
+    let card = find(card);
+    let frame = find(frame);
+    (
+        card.absolute_position().y + card.size().height,
+        frame.absolute_position().y + frame.size().height,
+        card.size().height,
+    )
+}
+
+/// 删除/替换那个共用弹窗：卡片必须**装得下自己那块内容**。
+///
+/// 用户 2026-09-26 报的：所有删除/替换弹窗里，按钮被画到卡片外面去了（截图里"取消 / 从云端
+/// 抹掉"悬在卡片下沿以下）。根因是**普通 `Rectangle` 里的布局默认填满父节点**，而卡片的高
+/// 是按"内容 + 上下各 24px"算出来的 —— 差的那 24px 被默认的 `alignment: stretch` 摊到各项
+/// 之间，最后一行就被顶出去。宽度那几条断言（`fits`）查不出高度，只能量。
+///
+/// ⚠ 窗口用**默认那个高度**（`app.slint` 的 `preferred-height: 740px`）而不是测试里常用的
+/// 1600：卡片的 `min(内容 + 48px, root.height - 40px)` 只在窗口矮时才顶到上限。
+#[test]
+fn the_confirm_dialog_card_holds_its_content() {
+    let mut ui = ui();
+    show_tab(&mut ui, Tab::Cloud);
+    ui.window
+        .window()
+        .set_size(slint::LogicalSize::new(1120.0, 740.0));
+    ui.app.cloud_version.opened(
+        "示例游戏",
+        "demo-key",
+        &CloudVersionRow {
+            name: "20260911T101500Z".into(),
+            size: 4096,
+            time: String::new(),
+        },
+    );
+    let _ = ui.app.update(Message::CloudVersionDeleteRequested);
+    render(&mut ui);
+
+    let (card_bottom, content_bottom, height) = card_and_content(&ui, "DialogCard", "DialogFrame");
+    assert!(
+        content_bottom <= card_bottom + 1.0,
+        "弹窗内容底边在 {content_bottom}px，卡片底边只到 {card_bottom}px（卡片高 {height}）\
+         —— 内容被顶到卡片外面了"
+    );
+}
+
+/// 启动前那一问是同一个形状的卡片（用户 2026-09-24 在那儿报过一次"散架"），一起钉住。
+///
+/// ⚠ 与上面那条**必须分成两个测试**：Slint 的测试后端一个线程只能注册一次，同一个测试里
+/// 建第二个窗口会炸在 "platform already initialized"。
+#[test]
+fn the_ask_dialog_card_holds_its_content() {
+    let mut ui = ui();
+    ui.app.games = vec![ui_game()];
+    ui.app.sync_ask = Some("demo".into());
+    ui.window
+        .window()
+        .set_size(slint::LogicalSize::new(1120.0, 740.0));
+    render(&mut ui);
+
+    let (card_bottom, content_bottom, height) = card_and_content(&ui, "AskCard", "AskFrame");
+    assert!(
+        content_bottom <= card_bottom + 1.0,
+        "启动前那一问：内容底边在 {content_bottom}px，卡片底边只到 {card_bottom}px\
+         （卡片高 {height}）—— 内容被顶到卡片外面了"
+    );
+}
