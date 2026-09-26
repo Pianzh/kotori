@@ -102,7 +102,20 @@ where
         return Decision::Pull;
     }
 
-    // 3. 未定：按指纹在当前桶里找一次（这是唯一会读云端的一步）。
+    // 3. 问过一次、答案是"关掉这一款"或"以后新建一条"，而且是在**当前这个目标**上问的：
+    //    云端本来就没有它在等的身份，不必再扫一遍 —— 直接按"新建"继续。
+    //
+    //    ⚠ 必须在扫云端**之前**：省下的不只是一次弹窗，还有每次启动都要做的那一次
+    //    云端索引读取（缓存过期时就是一次下载）—— 用户 2026-09-26 报的"卡在启动中"
+    //    就发生在那一段之后，而它每次都白白重来一遍。
+    if matches!(
+        conclusion,
+        Some(Conclusion::New(known) | Conclusion::Declined(known)) if known == signature
+    ) {
+        return Decision::Fresh;
+    }
+
+    // 4. 仍未定：按指纹在当前桶里找一次（这是唯一会读云端的一步）。
     if needs_cloud(game, Some(signature)) {
         match lookup() {
             Found::One {
@@ -127,8 +140,9 @@ where
     ask_or_fresh(conclusion.as_ref(), None)
 }
 
-/// 第 4 步：问一次 —— **除非**他上次就是答"关掉这一款"（那次已经问过了，用户原话：
-/// "如果匹配不上还强制打开就建立新游戏存档位置"）。
+/// 最后一步：问一次 —— **除非**他上次就答过"关掉这一款"或"以后新建一条"（那两次都已经
+/// 问过了，用户原话："如果匹配不上还强制打开就建立新游戏存档位置"）。第 3 步先挡掉了
+/// 当前目标上的那种结论，这里再兜一次"换了目标、结论里那个签名对不上"的边角。
 ///
 /// `found` 是"疑似找到的那一条"（没有就是完全没找到）—— 界面据此分两种说法，用户
 /// 2026-09-24："直接把找到像的和没找到像的打包成函数或者条件，分别显示疑似找到和完全
@@ -268,6 +282,35 @@ mod tests {
                 cloud_key: "demo".into()
             }
         );
+    }
+
+    /// 用户答过"以后新建一条"：**下次启动不再问**，而且**连云端都不去看**。
+    ///
+    /// ⚠ 这是 2026-09-26 那个 bug 的看门测试：写结论的那一端（`apply_decision`）曾经把
+    /// "新建"盖成 `ok:<签名>`（＝"已确认、而且绑着身份"）—— 而身份刚被清空，于是每次
+    /// 启动都重走一遍查云端、再弹一次窗，用户永远建不出档案。
+    #[test]
+    fn a_game_that_answered_new_is_not_asked_again_nor_scanned() {
+        let mut game = game();
+        game.sync_enabled = true;
+        game.cloud_conclusion = Some(Conclusion::fresh(SIG));
+        game.exe_fingerprint = Some("v1:1:aa".into());
+        // `lookup` 一被调用就炸：答过"新建"之后一个字都不该读云端。
+        assert_eq!(
+            decide(&game, Some(SIG), || panic!("答过'新建'就不该再去读云端")),
+            Decision::Fresh
+        );
+
+        // 换了一个桶：上一次那个结论不作数，该重新看一眼云端（哪怕最后还是走"新建"）。
+        let looked = std::cell::Cell::new(false);
+        assert_eq!(
+            decide(&game, Some(OTHER), || {
+                looked.set(true);
+                Found::None
+            }),
+            Decision::Fresh
+        );
+        assert!(looked.get(), "换了目标就该重新查一次");
     }
 
     /// 指纹命中多条：问一次，并把**最像的那一条**带上（现在是取第一条，规则在

@@ -116,7 +116,12 @@ impl Daemon {
                     Ok(Value::Null)
                 })
                 .await?;
-                self.stamp_conclusion(game_id, Conclusion::confirmed(&signature))
+                // ⚠ 这里**不能**盖 `confirmed`：那个结论的意思是"已确认，**而且绑着
+                // 一条身份**"（见 [`Conclusion::Confirmed`]），而上面刚把身份清空 ——
+                // 于是 `confirmed_on` 判它不成立，下一次自检又去查云端、又弹一次窗，
+                // 用户永远建不出这条档案（2026-09-26 报的"点了新建还是被问"）。
+                // 他答的是"以后新建一条"，记下的就该是它：下次自检直接走 Fresh。
+                self.stamp_conclusion(game_id, Conclusion::fresh(&signature))
                     .await
             }
             Decision::Skip | Decision::Pull | Decision::Ask { .. } => Ok(()),

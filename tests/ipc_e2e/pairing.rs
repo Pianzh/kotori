@@ -342,7 +342,7 @@ fn rejecting_a_pairing_sticks() {
 /// 这条路是全流程唯一会打断用户的地方（用户 2026-09-22："云同步（打开游戏）前必须自检"），
 /// 所以两件事都要钉住：问得出来，以及**问过之后不再问**。
 #[test]
-fn the_pre_launch_check_asks_once_and_a_no_sticks() {
+fn the_pre_launch_check_asks_once_and_the_answer_sticks() {
     let mut machine_a = Fixture::new("selfcheck-a");
     let remote = machine_a.enable_fake_sync(true);
     machine_a.start();
@@ -425,5 +425,33 @@ fn the_pre_launch_check_asks_once_and_a_no_sticks() {
     assert!(
         again["result"].get("needs_sync_decision").is_none(),
         "问过一次就不许再问: {again}"
+    );
+
+    // 同一个问题换成"以后新建一条"：这个答案也得粘住。
+    //
+    // ⚠ 这一段的由来（2026-09-26）：写结论的那一端曾经把"新建"盖成 `ok:<签名>`
+    // （"已确认、**而且绑着一条身份**"），可它刚刚把身份清空 —— 于是 `confirmed_on`
+    // 判它不成立，下一次启动又查云端、又弹一次窗，用户永远建不出这条档案。界面那只
+    // "打开同步"的开关会顺手清掉上一次的结论，所以先把开关打开再答。
+    machine_b.rpc("game.update", json!({ "id": "my-copy", "sync_enabled": true }));
+    machine_b.rpc("sync.resolve", json!({ "id": "my-copy", "choice": "pair" }));
+    let written = std::fs::read_to_string(machine_b.config.clone()).unwrap();
+    let conclusion = written
+        .lines()
+        .find(|line| line.starts_with("cloud_conclusion"))
+        .unwrap_or_default();
+    assert!(
+        conclusion.contains("new:"),
+        "要记住『以后新建一条』: {conclusion}"
+    );
+    assert!(
+        !conclusion.contains("ok:"),
+        "这一款根本没有身份，不许记成『已确认』: {conclusion}"
+    );
+
+    let fresh = machine_b.rpc("game.launch", json!({ "id": "my-copy", "selfcheck": true }));
+    assert!(
+        fresh["result"].get("needs_sync_decision").is_none(),
+        "答过『新建』之后不许再问: {fresh}"
     );
 }
