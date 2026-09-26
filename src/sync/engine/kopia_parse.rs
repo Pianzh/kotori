@@ -135,6 +135,23 @@ pub(super) fn identity_snapshots(text: &str) -> Result<Vec<(String, String)>, St
         .collect())
 }
 
+/// 某个身份（`game:<cloud_id>`）在云端**所有的**身份快照 id。
+///
+/// ⚠ 与 [`identity_snapshots`] 的差别只有一条，但很关键：那个每个身份只留**最新**一张
+/// （"读卡"要最新那张就够了），而**删词条**必须把旧卡一起删掉 —— 每上传一次就会补拍一张
+/// 身份快照，只删最新那张的话，旧卡照样带着 `game:` 标签躺在仓库里，而 `cloud_games` 正是
+/// 从标签认人的，于是"删掉词条"之后这一款在云端仍然列得出来（2026-09-26 CI 真机上红的
+/// 就是这个：删完还剩 1 款）。
+pub(super) fn identity_snapshot_ids(text: &str, cloud_id: &str) -> Result<Vec<String>, String> {
+    let all: Vec<Snapshot> =
+        serde_json::from_str(text).map_err(|e| format!("读不懂 kopia 的快照列表: {e}"))?;
+    Ok(all
+        .into_iter()
+        .filter(|snapshot| snapshot.is_identity() && snapshot.tag("game") == Some(cloud_id))
+        .map(|snapshot| snapshot.id)
+        .collect())
+}
+
 /// 解析 `snapshot list --json`，只留下**我们自己建的**那些，按版本名排序。
 ///
 /// 判据与 rclone 那条路同一套（[`super::super::is_snapshot`]）：描述不像我们写的
@@ -282,6 +299,28 @@ mod tests {
                 ("c2".to_string(), "c2".to_string()),
             ],
             "每个身份取最新那条；存档快照不算身份快照"
+        );
+    }
+
+    /// 删词条要的是**整族**身份快照：只删最新那张，旧卡还带着 `game:` 标签躺着，这一款在
+    /// 云端就仍然列得出来（2026-09-26 真机 CI 上的红就是这个）。
+    #[test]
+    fn every_identity_snapshot_of_one_game_is_found_not_just_the_newest() {
+        let json = r#"[
+              {"id":"old","description":"kotori-identity","tags":{"tag:game":"c1","tag:kind":"identity"},"startTime":"2026-09-15T10:00:00Z"},
+              {"id":"new","description":"kotori-identity","tags":{"tag:game":"c1","tag:kind":"identity"},"startTime":"2026-09-16T10:00:00Z"},
+              {"id":"other","description":"kotori-identity","tags":{"tag:game":"c2","tag:kind":"identity"},"startTime":"2026-09-14T10:00:00Z"},
+              {"id":"save","description":"20260916T120000000Z-abcd1234","tags":{"tag:game":"c1","tag:kind":"save"},"startTime":"2026-09-17T10:00:00Z"}
+            ]"#;
+        assert_eq!(
+            identity_snapshot_ids(json, "c1").unwrap(),
+            vec!["old".to_string(), "new".to_string()],
+            "同一个身份的所有旧卡都要删；别人的卡与存档快照不许碰"
+        );
+        assert_eq!(
+            identity_snapshot_ids(json, "c9").unwrap(),
+            Vec::<String>::new(),
+            "没有这一款就一个都不删"
         );
     }
 }

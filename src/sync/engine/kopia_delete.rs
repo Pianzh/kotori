@@ -41,21 +41,23 @@ impl Kopia {
         Ok(removed)
     }
 
-    /// 删掉这一款的**身份快照**（"词条"）。
+    /// 删掉这一款的**身份快照**（"词条"）—— **所有**那些，不只是最新一张。
     ///
     /// ⚠ 这里要的是 `cloud_id`（身份），不是落点：kopia 的身份快照就是按
     /// `game:<cloud_id>` + `kind=identity` 认的，没有"目录"这回事。
+    ///
+    /// ⚠ 而且必须删**整族**：每上传一次都会补拍一张身份快照（卡是要合并、要写回的），
+    /// `identity_snapshots` 那种"每个身份只留最新一张"是给**读卡**用的；拿它来删，旧卡会
+    /// 留在仓库里，"删掉词条"就变成了"这一款还在云端列着"（真机上红过）。
     pub(super) async fn remove_identity(&self, cloud_id: &str) -> Result<(), SyncError> {
         self.ensure_connected().await?;
         let listed = self
             .run(&args::snapshot_list_args(cloud_id), COMMAND_TIMEOUT)
             .await?;
-        let wanted = parse::identity_snapshots(&listed).map_err(SyncError::Command)?;
-        for (id, snapshot_id) in wanted {
-            if id == cloud_id {
-                self.run(&args::snapshot_delete_args(&snapshot_id), COMMAND_TIMEOUT)
-                    .await?;
-            }
+        let wanted = parse::identity_snapshot_ids(&listed, cloud_id).map_err(SyncError::Command)?;
+        for snapshot_id in wanted {
+            self.run(&args::snapshot_delete_args(&snapshot_id), COMMAND_TIMEOUT)
+                .await?;
         }
         Ok(())
     }
